@@ -37,7 +37,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from automation import agent_tools, gfx_replay_case, gfx_session  # noqa: E402
-from reverse_engineering import index_db  # noqa: E402
+from reverse_engineering import index_db, renderer_extract, research  # noqa: E402
+from tests.test_renderer_extract import _census_row, _valid_static_row  # noqa: E402
+from tests.test_research import (  # noqa: E402
+    FIXTURE as RESEARCH_FIXTURE, REV, SECOND as RESEARCH_SECOND, CorpusFixture,
+    _jsonl, _simple_static, _summary,
+)
 
 FIXTURE = Path(__file__).resolve().parent / "re_fixtures" / "export_mini"
 
@@ -2512,3 +2517,162 @@ class SubprocessDiagnosticTests(unittest.TestCase):
         self.assertFalse(value["ok"])
         self.assertEqual(value["outcome"]["diagnostic"], "failed")
         self.assertIn("no output", value["reason"])
+
+
+class ResearchToolTests(unittest.TestCase):
+    """eu4_research delegates to the sealed-snapshot research implementation."""
+
+    def setUp(self):
+        self._target = mock.patch(
+            "reverse_engineering.renderer_extract.load_target",
+            return_value={"sha256": "a"})
+        self._meta = mock.patch(
+            "reverse_engineering.renderer_extract.load_ghidra_meta",
+            return_value={"program_name": "eu4", "image_base": 1})
+        self._target.start()
+        self._meta.start()
+        self.fixture = CorpusFixture()
+        fixture_inv = json.loads(
+            (Path(__file__).resolve().parent / "re_fixtures" / "export_mini"
+             / "inventory" / "functions.jsonl").read_text().splitlines()[0])
+        self.second_inv, self.second_static, self.second_decomp = (
+            _simple_static(RESEARCH_SECOND, "aabbccdd"))
+        self.fixture.write_index(
+            [fixture_inv, self.second_inv],
+            [{"callsite_rva": "0x0000000000002001",
+              "caller_rva": RESEARCH_SECOND,
+              "callee_internal_rva": RESEARCH_FIXTURE,
+              "callee_external_symbol": None,
+              "resolution": "direct_internal"}])
+        self.fixture.write_callsites(
+            [_census_row("0x0000000000001005", RESEARCH_FIXTURE)])
+        self.ctx, self.plan = self.fixture.context(
+            [RESEARCH_FIXTURE, RESEARCH_SECOND])
+        static_text = _jsonl([_valid_static_row(RESEARCH_FIXTURE),
+                              self.second_static])
+        decomp_text = _jsonl([
+            {"entry_rva": RESEARCH_FIXTURE, "status": "success",
+             "pseudocode": "void exact();"},
+            self.second_decomp,
+        ])
+        receipt = renderer_extract.build_receipt(
+            static_bytes=static_text.encode(),
+            decomp_bytes=decomp_text.encode(),
+            batch_id="gfx-batch-00001",
+            rvas=[RESEARCH_FIXTURE, RESEARCH_SECOND],
+            plan=self.plan,
+            summary=_summary(),
+            meta={"program_name": "eu4", "image_base": 1,
+                  "executable_sha256": "a"},
+            ghidra_version="12.1.4",
+            binary_sha="a",
+        )
+        renderer_extract.batch_zip_path(
+            self.fixture.exp, "gfx-batch-00001").write_bytes(
+                renderer_extract.write_batch_zip(
+                    static_text, decomp_text, receipt))
+        self.loader_patch = mock.patch.object(
+            research, "load_production_context",
+            return_value=(self.ctx, None))
+        self.loader = self.loader_patch.start()
+
+    def tearDown(self):
+        self.loader_patch.stop()
+        self.fixture.close()
+        self._meta.stop()
+        self._target.stop()
+
+    def call(self, argv):
+        output = self.fixture.root / "agent-tool.json"
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = agent_tools.main(["--out", str(output), *argv])
+        return code, json.loads(output.read_text())
+
+    def test_status_resolve_function_and_xrefs_use_the_snapshot(self):
+        code, value = self.call(["eu4_research", "status"])
+        self.assertEqual(code, 0)
+        self.assertTrue(value["ok"])
+        self.assertEqual(value["tool"], "eu4_research")
+        self.assertEqual(value["result"]["schema"], "eu4.research.v1")
+        self.assertEqual(value["result"]["evidence"]["snapshot"], "valid")
+        self.assertEqual(value["result"]["provenance"]["baseline_revision"], REV)
+        self.loader.assert_called()
+
+        _code, value = self.call(
+            ["eu4_research", "resolve", "SShaderOpenGL::SetAll()"])
+        self.assertTrue(value["ok"])
+        self.assertEqual(value["result"]["identity"]["entry_rva"],
+                         RESEARCH_FIXTURE)
+        self.assertEqual(value["result"]["evidence"]["match"], "exact")
+
+        _code, value = self.call([
+            "eu4_research", "function", RESEARCH_FIXTURE, "--view", "static",
+            "--limit", "1"])
+        self.assertTrue(value["ok"])
+        self.assertEqual(value["result"]["identity"]["entry_rva"],
+                         RESEARCH_FIXTURE)
+        self.assertEqual(value["result"]["evidence"]["batch_id"],
+                         "gfx-batch-00001")
+        self.assertEqual(value["result"]["evidence"]["instructions"][0]
+                         ["instruction_rva"], RESEARCH_FIXTURE)
+
+        _code, value = self.call(["eu4_research", "xrefs", RESEARCH_FIXTURE])
+        self.assertTrue(value["ok"])
+        self.assertEqual(value["result"]["evidence"]["incoming"][0]["caller_rva"],
+                         RESEARCH_SECOND)
+        self.assertEqual(value["result"]["evidence"]["callsites"][0]
+                         ["callsite_rva"], "0x0000000000001005")
+
+    def test_function_pages_are_bounded(self):
+        _code, first = self.call([
+            "eu4_research", "function", RESEARCH_FIXTURE, "--view", "static",
+            "--limit", "1"])
+        self.assertTrue(first["result"]["truncated"])
+        self.assertEqual(len(first["result"]["evidence"]["instructions"]), 1)
+        offset = first["result"]["next_static_offset"]
+        _code, second = self.call([
+            "eu4_research", "function", RESEARCH_FIXTURE, "--view", "static",
+            "--limit", "1", "--static-offset", str(offset)])
+        self.assertEqual(second["result"]["evidence"]["instructions"][0]
+                         ["instruction_rva"], "0x0000000000001005")
+        self.assertFalse(second["result"]["truncated"])
+
+    def test_missing_or_invalid_corpus_is_not_an_empty_success(self):
+        with mock.patch.object(research, "load_production_context",
+                               return_value=(None, FileNotFoundError("missing"))):
+            _code, value = self.call(["eu4_research", "status"])
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "unavailable")
+        self.assertEqual(value["outcome"]["diagnostic"], "unavailable")
+        self.assertEqual(value["result"]["reason"], "missing_source")
+        with mock.patch.object(research, "load_production_context",
+                               return_value=(None, research.ReError("stale"))):
+            _code, value = self.call(["eu4_research", "function", RESEARCH_FIXTURE])
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "identity_error")
+        self.assertEqual(value["result"]["reason"], "identity")
+
+    def test_invalid_research_parameters_are_rejected(self):
+        _code, value = self.call(["eu4_research", "status", "--max-bytes", "10"])
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "error")
+        self.assertIn("max-bytes", value["reason"])
+        _code, value = self.call(["eu4_research", "function", RESEARCH_FIXTURE,
+                                  "--static-offset", "-1"])
+        self.assertFalse(value["ok"])
+        self.assertIn("offsets", value["reason"])
+        _code, value = self.call(["eu4_research", "xrefs"])
+        self.assertFalse(value["ok"])
+        self.assertIn("requires a target", value["reason"])
+
+    def test_research_is_read_only(self):
+        path = renderer_extract.batch_zip_path(
+            self.fixture.exp, "gfx-batch-00001")
+        index_before = self.fixture.snapshot()
+        package_before = path.read_bytes()
+        self.call(["eu4_research", "status"])
+        self.call(["eu4_research", "resolve", "SShaderOpenGL::SetAll()"])
+        self.call(["eu4_research", "function", RESEARCH_FIXTURE])
+        self.call(["eu4_research", "xrefs", RESEARCH_FIXTURE])
+        self.assertEqual(self.fixture.snapshot(), index_before)
+        self.assertEqual(path.read_bytes(), package_before)

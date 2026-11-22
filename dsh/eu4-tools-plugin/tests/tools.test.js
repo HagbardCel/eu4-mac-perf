@@ -24,7 +24,7 @@ function fakeContext() {
   }
 }
 
-test('mounts exactly the seven logical tools with typed schemas', () => {
+test('mounts exactly the eight logical tools with typed schemas', () => {
   const ctx = fakeContext()
   apply(ctx, { runner: async () => ({ ok: true }) })
   assert.equal(name, 'eu4-tools')
@@ -39,6 +39,16 @@ test('mounts exactly the seven logical tools with typed schemas', () => {
   const re = ctx.registered[0]
   assert.ok(re.parameters.properties.op.enum.includes('resolve'))
   assert.deepEqual(re.parameters.required, ['op'])
+  const research = ctx.registered.find((tool) => tool.name === 'eu4_research')
+  assert.deepEqual(research.parameters.properties.op.enum,
+    ['status', 'resolve', 'function', 'xrefs'])
+  assert.deepEqual(research.parameters.required, ['op'])
+  assert.deepEqual(Object.keys(research.parameters.properties).sort(), [
+    'baseline_revision', 'callsite_offset', 'decompile_offset',
+    'incoming_offset', 'limit', 'max_bytes', 'op', 'outgoing_offset',
+    'static_offset', 'target', 'view',
+  ])
+  assert.match(research.description, /sealed renderer snapshot/)
   const replay = ctx.registered.find((tool) => tool.name === 'eu4_replay')
   assert.deepEqual(replay.parameters.properties.op.enum,
     ['case', 'frame', 'independent', 'sequence', 'diagnose', 'verify'])
@@ -50,7 +60,12 @@ test('execute passes the typed object to the shared runner', async () => {
   const ctx = fakeContext()
   apply(ctx, { runner: async (tool, args) => { seen.push([tool, args]); return { ok: true } } })
   await ctx.registered[0].execute({ op: 'resolve', target: 'SShaderOpenGL', limit: 2 })
-  assert.deepEqual(seen, [['eu4_re_query', { op: 'resolve', target: 'SShaderOpenGL', limit: 2 }]])
+  await ctx.registered.find((tool) => tool.name === 'eu4_research')
+    .execute({ op: 'function', target: '0x15ecce2', view: 'static' })
+  assert.deepEqual(seen, [
+    ['eu4_re_query', { op: 'resolve', target: 'SShaderOpenGL', limit: 2 }],
+    ['eu4_research', { op: 'function', target: '0x15ecce2', view: 'static' }],
+  ])
 })
 
 test('runner errors become a structured envelope, not a crash', async () => {
@@ -65,6 +80,25 @@ test('runner errors become a structured envelope, not a crash', async () => {
 test('argument mapping covers each tool', () => {
   assert.deepEqual(buildArgs('eu4_re_query', { op: 'function', target: '0x2000' }),
     ['eu4_re_query', 'function', '0x2000'])
+  assert.deepEqual(buildArgs('eu4_research', {
+    op: 'function', target: '0x15ecce2', view: 'static', limit: 2,
+    static_offset: 4, decompile_offset: 8, baseline_revision: 'auto-v1',
+    max_bytes: 4096,
+  }), ['eu4_research', 'function', '0x15ecce2', '--view', 'static',
+    '--static-offset', '4', '--decompile-offset', '8', '--limit', '2',
+    '--baseline-revision', 'auto-v1', '--max-bytes', '4096'])
+  assert.deepEqual(buildArgs('eu4_research', {
+    op: 'xrefs', target: '0x15ecce2', incoming_offset: 1, outgoing_offset: 2,
+    callsite_offset: 3,
+  }), ['eu4_research', 'xrefs', '0x15ecce2', '--incoming-offset', '1',
+    '--outgoing-offset', '2', '--callsite-offset', '3'])
+  assert.deepEqual(buildArgs('eu4_research', { op: 'resolve', target: 'BuildGLSL', limit: 3 }),
+    ['eu4_research', 'resolve', 'BuildGLSL', '--limit', '3'])
+  assert.deepEqual(buildArgs('eu4_research', { op: 'status' }),
+    ['eu4_research', 'status'])
+  assert.throws(() => buildArgs('eu4_research', {}), /requires op/)
+  assert.throws(() => buildArgs('eu4_research', { op: 'shell' }), /requires op/)
+  assert.throws(() => buildArgs('eu4_research', { op: 'function' }), /requires a target/)
   assert.deepEqual(buildArgs('eu4_session', { op: 'inspect', run: '/r' }),
     ['eu4_session', 'inspect', '--run', '/r'])
   assert.deepEqual(buildArgs('eu4_session', { op: 'lease', executable: '/bin/true' }),
@@ -148,7 +182,8 @@ test('environment is allowlisted', () => {
 
 test('definitions are buildable with a no-op runner', () => {
   const tools = definitions(async () => ({ ok: true }))
-  assert.equal(tools.length, 7)
+  assert.equal(tools.length, 8)
+  assert.equal(tools.filter((tool) => tool.name === 'eu4_research').length, 1)
 })
 
 test('the interpreter is resolved to an absolute path and fails closed', () => {
@@ -175,6 +210,15 @@ test('an unusable interpreter becomes a structured tool error', async () => {
     if (previous === undefined) delete process.env.EU4_DSH_PYTHON
     else process.env.EU4_DSH_PYTHON = previous
   }
+})
+
+test('the configured interpreter is consumed at mount and fails closed', async () => {
+  const ctx = fakeContext()
+  apply(ctx, { python: '/no/such/python' })
+  const value = await ctx.registered[0].execute({ op: 'provenance' })
+  assert.equal(value.ok, false)
+  assert.equal(value.status, 'error')
+  assert.match(value.reason, /not executable/)
 })
 
 test('a missing interpreter rejects the bridge call', async () => {

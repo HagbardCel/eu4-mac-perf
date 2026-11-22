@@ -49,7 +49,7 @@ EU4_CAMPAIGN_STATE=<path> ./dsh/scripts/run-campaign.sh <sidecar>  # one-turn ca
 mounts this checkout's tools plugin in the shipped headless profile, runs
 exactly one model turn, preserves the run events, the persistent session export
 and its `dsh_efficiency` analysis, and fails unless the actual invocation
-records show a completed call to one of the seven native EU4 tools. It requires
+records show a completed call to one of the native EU4 tools. It requires
 `OPENCODE_GO_API_KEY` in the environment (the headless profile cannot read the
 stored credentials on 0.2.2-rc.1) and it does not schedule or continue goal
 rounds. A pilot conclusion is validated with

@@ -23,7 +23,7 @@
       ]
     }
   },
-  "run_root": ".local/dsh/m7-event3/run-60m-02",
+  "run_root": ".local/dsh/m7-event3/run-60m-03",
   "goal": {
     "require_checker_pass": true,
     "require_independent_review": false

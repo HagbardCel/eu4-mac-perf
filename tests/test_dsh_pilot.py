@@ -526,9 +526,9 @@ class NativeGateTests(unittest.TestCase):
     def test_native_tool_definition_is_the_existing_one(self):
         self.assertEqual(
             dsh_pilot._native_tool_names(),
-            frozenset({"eu4_re_query", "eu4_session", "eu4_capture",
-                       "eu4_diff_run", "eu4_diff_inspect", "eu4_replay",
-                       "eu4_case_inspect"}))
+            frozenset({"eu4_re_query", "eu4_research", "eu4_session",
+                       "eu4_capture", "eu4_diff_run", "eu4_diff_inspect",
+                       "eu4_replay", "eu4_case_inspect"}))
 
     def test_gate_cli_accepts_native_and_rejects_bash_only(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -232,16 +232,18 @@ Fixed identities:
 | Campaign | `campaigns/eu4-m7-event3/campaign.json` |
 | Sidecar | `dsh/campaigns/m7-event3.json` |
 | Candidate workspace | `.local/dsh/m7-event3/workspace` (preserve as-is) |
-| Run root | `.local/dsh/m7-event3/run-60m-02` (fresh anchor) |
-| Campaign state | `.local/m7/event3/state-operator-60m-02.json` (fresh file) |
+| Run root | `.local/dsh/m7-event3/run-60m-03` (fresh anchor) |
+| Campaign state | `.local/m7/event3/state-operator-60m-03.json` (fresh file) |
 | Trusted reference | `.local/m7/event20/trusted-copy/47590918` |
 
 The sidecar points at a fresh run root. The previous
-`.local/dsh/m7-event3/run-60m-01` campaign is complete: preserve its identity
-anchor, validation receipts, candidate modifications and research reports, and
-never reuse or delete them. The operator must stop and deactivate that previous
-campaign (state `.local/m7/event3/state-operator-60m-01.json`) before launching
-the replacement; the host-wide marker otherwise refuses a new campaign. Keep the
+`.local/dsh/m7-event3/run-60m-01` and `.local/dsh/m7-event3/run-60m-02`
+campaigns are historical: preserve their identity anchors, validation
+receipts, candidate modifications and research reports, and never reuse or
+delete them. After the old campaign has stopped, the operator must deactivate
+`state-operator-60m-02.json` before launching the replacement; the host-wide
+marker otherwise refuses a new campaign. The earlier
+`state-operator-60m-01.json` is already stopped and deactivated. Keep the
 candidate workspace untouched and do not reset or recreate it — the launcher
 creates the new anchor in the fresh run root.
 
@@ -251,8 +253,8 @@ Preflight (read-only) before launch:
 set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
 set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
 set -l TRUSTED $REPO/.local/m7/event20/trusted-copy/47590918
-set -l STATE $REPO/.local/m7/event3/state-operator-60m-02.json
-set -l RUN $REPO/.local/dsh/m7-event3/run-60m-02
+set -l STATE $REPO/.local/m7/event3/state-operator-60m-03.json
+set -l RUN $REPO/.local/dsh/m7-event3/run-60m-03
 cd $REPO
 
 # Both the campaign state and the sidecar's run root must be unused.
@@ -266,15 +268,14 @@ The preflight command must print `[]`.  The launcher runs the same check plus th
 candidate policy check and refuses `fixture_ineligible` before starting the
 agent.
 
-Launch (operator action).  If the previous campaign still holds the host-wide
-marker, stop and deactivate it first with its own state, then start the fresh
-campaign state:
+Launch (operator action).  After the previous campaign has stopped, deactivate
+its host-wide marker with its own state, then start the fresh campaign state:
 
 ```fish
-$PY -m automation.campaign_guard stop --state $REPO/.local/m7/event3/state-operator-60m-01.json --reason operator_stop
-$PY -m automation.campaign_guard deactivate --state $REPO/.local/m7/event3/state-operator-60m-01.json
+$PY -m automation.campaign_guard stop --state $REPO/.local/m7/event3/state-operator-60m-02.json --reason operator_stop
+$PY -m automation.campaign_guard deactivate --state $REPO/.local/m7/event3/state-operator-60m-02.json
 
-set -l STATE $REPO/.local/m7/event3/state-operator-60m-02.json
+set -l STATE $REPO/.local/m7/event3/state-operator-60m-03.json
 set -l SIDECAR $REPO/dsh/campaigns/m7-event3.json
 test -f $STATE; and echo "STATE EXISTS - pick a new suffix"; or echo fresh
 
@@ -284,6 +285,9 @@ env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=$PY EU4_CAMPAIGN_STATE=$STATE \
 ```
 
 Paste the printed `goal_text` block into a new `/goal`.
+
+Initiating reminder: start `/goal` with the entire launcher-generated goal text
+from the beginning; do not first submit that text as an ordinary chat message.
 
 Operator-specific reminders:
 

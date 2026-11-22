@@ -41,15 +41,29 @@ correlation results are not measured causal errors unless supporting evidence
 establishes causation.  A repeated failed hypothesis causes reassessment, not
 automatic termination.
 
+A perturbation that changes an output establishes sensitivity to that
+perturbation, not causal attribution for the original discrepancy.  For A/B
+pixel comparisons, inspect the actual differing coordinates, channels, signed
+errors and overlap—not merely pixel counts or image hashes.  Verify that both
+compared executions produced valid diagnostic evidence before drawing
+conclusions.
+
 The operator deadline is authoritative only through
 `python3 -m automation.campaign_guard status --state $EU4_CAMPAIGN_STATE`.
 Never report a deadline stop unless that status shows no remaining time or a
 campaign action is refused with `kind=deadline`; an unsupported correction path
 or a missing observation is reported as its actual cause.
 
-Keep a compact running record of hypotheses, interventions, outcomes and
-evidence paths in `progress.md` or another allowed `analysis/m7/` location.  Do
-not rewrite a lengthy report after every unsuccessful experiment; produce a
+Keep a compact running record in `progress.md` or another allowed `analysis/m7/`
+location containing: the divergent operation and affected output, relevant
+original-engine/captured evidence, relevant Metal implementation evidence, the
+leading unresolved explanation, the expected observation that would distinguish
+it, and the outcome of the chosen experiment. Do not run a new GPU experiment
+when the same question can be resolved by inspecting already available shader,
+state or source evidence, and do not repeat a rejected experiment unless new
+evidence materially changes the hypothesis. Preserve the distinction between
+falsifying an intervention and eliminating an entire causal mechanism. Do not
+rewrite a lengthy report after every unsuccessful experiment; produce a
 detailed report when a meaningful causal finding, a milestone or a genuine
 blocker is established.
 
@@ -83,13 +97,51 @@ record it and continue with the available authentic evidence.
 
 1. Inspect the existing sealed evidence and prior experiments relevant to the
    current first divergence. Record identities, the first confirmed divergence
-   and which earlier results remain valid for the unchanged inputs.
+   and which earlier results remain valid for the unchanged inputs. Before a
+   significant new GPU experiment, establish the evidence base:
+   - identify the first divergent operation and its original caller, program,
+     target resource and producer relationships from the authenticated event
+     stream;
+   - consult relevant original-engine knowledge with the native research tools
+     (`eu4_re_query` for fast indexed lookups, `eu4_research` for sealed
+     instructions and detailed decompilation) where the question is within the
+     corpus;
+   - inspect the actual captured GLSL, resource bindings, sampler/raster state,
+     geometry and available historical experimental evidence;
+   - compare those original inputs and semantics against the Metal replay;
+   - identify the smallest unresolved semantic or numerical difference that a
+     targeted experiment could discriminate.
+
+   Prefer the existing native DSH tools for supported operations: original-engine
+   research, captured-state/resource-graph inspection, historical evidence
+   discovery, differential diagnosis and replay. Use shell commands when an
+   operation is not supported by a native tool, including source editing,
+   compilation, focused tests and specialized analysis.
+
+   Label each relevant statement **Known original behavior** (runtime capture,
+   executable instructions or existing qualified evidence), **Known Metal
+   behavior** (implementation inspection or executed Metal evidence) or
+   **Unresolved difference** (not established by either source), and prefer
+   candidate-side experiments that separate unresolved differences. This is an
+   evidence-first workflow, not a mandatory large reverse-engineering exercise:
+   do not force Ghidra analysis when the disputed mechanism is texture-filtering
+   precision, floating-point implementation detail or another behavior the
+   original executable cannot resolve; do not query hundreds of unrelated
+   functions; do not launch Ghidra or EU4. If the corpus is unavailable, report
+   that limitation and proceed on other valid evidence when it is sufficient.
+   The original authenticated OpenGL pixels remain the sole authoritative
+   reference.
 2. Run the synthetic drawable-format observer and focused offline tests only
    when the current task and existing verification evidence require them. Do not
    launch EU4 if a required observer is incomplete or a relevant prefix test
    fails; a full preliminary battery is not required at every goal round.
-   Candidate-safe focused tests run entirely inside this worktree. Tests that
-   need additional Git worktrees, shared Git metadata writes or other
+   During this autonomous reconstruction campaign, the campaign-specific
+   verification policy takes precedence over generic full-suite instructions
+   inherited from the pinned candidate worktree. Temporary experiments, exact
+   rollbacks and individual goal rounds do not trigger the full offline gate.
+   Retained corrections require focused verification and the trusted independent
+   checker. Candidate-safe focused tests run entirely inside this worktree.
+   Tests that need additional Git worktrees, shared Git metadata writes or other
    unavailable operations belong in operator-side verification: report the
    inability to execute them in-session as an environment limitation, not a
    renderer failure, and do not rerun a known-failing test merely because it

@@ -26,3 +26,19 @@ If a material constraint is still unresolved and a faithful replacement would ha
 An official Apple page may be opened when the network is available. A failed fetch stays `Unresolved`. Do not copy Apple's pages or headers into the repository.
 
 This skill and `analysis/metal-api/` are present only in a checkout whose commit contains them. Where an input is valid for the original call and not directly valid for Metal, test that input. Otherwise derive the test from lifetime, synchronization, or state order. Do not invent an unsupported value just to have one.
+
+## Route routine research through the native tools
+
+Prefer the mounted DSH tools over composing equivalent shell commands:
+
+- original function semantics → `eu4_re_query` (fast indexed symbols,
+  relationships, ABI, layouts) or `eu4_research` (sealed instructions, detailed
+  decompilation, paginated static cross-references);
+- captured event resource graph → `eu4_capture` with `op=graph`;
+- existing differential evidence → `eu4_diff_inspect`;
+- previous session evidence → `eu4_session`;
+- replay/case inspection → `eu4_replay` / `eu4_case_inspect`.
+
+Use shell commands for work the native tools do not cover: editing source,
+compiling, focused tests and specialized analysis. Do not wrap routine shell
+commands in a new generic DSH tool.

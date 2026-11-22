@@ -5,6 +5,7 @@ import { delimiter, isAbsolute, join } from 'node:path'
 
 export const TOOL_NAMES = [
   'eu4_re_query',
+  'eu4_research',
   'eu4_session',
   'eu4_capture',
   'eu4_diff_run',
@@ -69,6 +70,30 @@ export function buildArgs(tool, args = {}) {
     if (value('target')) output.push(String(args.target))
     add('--index', 'index')
     add('--limit', 'limit')
+    add('--max-bytes', 'max_bytes')
+  } else if (tool === 'eu4_research') {
+    const op = String(args.op || '')
+    if (!['status', 'resolve', 'function', 'xrefs'].includes(op)) {
+      throw new Error(`eu4_research requires op (status, resolve, function, xrefs)`)
+    }
+    output.push(op)
+    if (op !== 'status') {
+      if (!value('target')) throw new Error(`eu4_research ${op} requires a target`)
+      output.push(String(args.target))
+    }
+    if (op === 'resolve') add('--limit', 'limit')
+    if (op === 'function') {
+      add('--view', 'view')
+      add('--static-offset', 'static_offset')
+      add('--decompile-offset', 'decompile_offset')
+      add('--limit', 'limit')
+    }
+    if (op === 'xrefs') {
+      add('--incoming-offset', 'incoming_offset')
+      add('--outgoing-offset', 'outgoing_offset')
+      add('--callsite-offset', 'callsite_offset')
+    }
+    add('--baseline-revision', 'baseline_revision')
     add('--max-bytes', 'max_bytes')
   } else if (tool === 'eu4_session') {
     output.push(String(args.op || 'list'))
