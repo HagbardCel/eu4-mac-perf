@@ -56,6 +56,48 @@ static GLuint make_texture(GLenum target) {
     return name;
 }
 
+static GLuint make_texture_internal(GLenum internal, GLenum format,
+                                    GLenum type) {
+    GLuint name = 0;
+    glGenTextures(1, &name);
+    glBindTexture(GL_TEXTURE_2D, name);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal, 4, 4, 0, format, type,
+                 NULL);
+    return name;
+}
+
+static int record_blob_name(const char *record, char *out, size_t size) {
+    const char *key = "\"color\":{\"file\":\"";
+    const char *start = strstr(record, key);
+    if (start == NULL) {
+        return -1;
+    }
+    start += strlen(key);
+    const char *end = strchr(start, '"');
+    if (end == NULL || (size_t)(end - start) >= size) {
+        return -1;
+    }
+    memcpy(out, start, (size_t)(end - start));
+    out[end - start] = 0;
+    return 0;
+}
+
+static int blob_equals(const char *directory, const char *name,
+                       const uint8_t *expected, size_t bytes) {
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/blobs/%s", directory, name);
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return 0;
+    }
+    uint8_t buffer[64];
+    size_t got = bytes <= sizeof(buffer) ? fread(buffer, 1, bytes, file) : 0;
+    fclose(file);
+    return got == bytes && memcmp(buffer, expected, bytes) == 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr, "usage: %s <dir>\n", argv[0]);
@@ -428,10 +470,289 @@ int main(int argc, char **argv) {
     if (!production_none || !production_depth || !production_both) {
         ok = 0;
     }
+    /* The shared observation primitive (default drawable, offscreen texture,
+       RGB8, SRGB8_ALPHA8, R32F) must preserve state and never consume a pending
+       engine error. */
+    int observation = 1;
+    char record[8192] = "";
+    char blob[256] = "";
+    while (glGetError() != GL_NO_ERROR) {
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDrawBuffer(GL_BACK);
+    glReadBuffer(GL_BACK);
+    glViewport(0, 0, 4, 4);
+    glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+    glPixelStorei(GL_PACK_ALIGNMENT, 8);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 33);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 2);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 3);
+    glPixelStorei(GL_PACK_SWAP_BYTES, GL_TRUE);
+    glPixelStorei(GL_PACK_LSB_FIRST, GL_TRUE);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pack_buffer);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, b);
+    glEnable(0xFFFF);
+    int sentinel = 0x0500;
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "pre_event", "initial", -1, record,
+            sizeof(record)) != 0) {
+        observation = 0;
+    }
+    if (strstr(record, "\"pixel_format\":\"BGRA8\"") == NULL ||
+        strstr(record, "\"alpha_applicable\":true") == NULL ||
+        strstr(record, "\"internal_format\":0") == NULL ||
+        strstr(record, "\"alpha_bits\":8") == NULL) {
+        observation = 0;
+    }
+    {
+        const uint8_t expected[4] = {191, 128, 64, 255};
+        if (record_blob_name(record, blob, sizeof(blob)) != 0 ||
+            !blob_equals(argv[1], blob, expected, sizeof(expected))) {
+            observation = 0;
+        }
+    }
+    int obs_error_count = 0;
+    int error_after = 0;
+    for (;;) {
+        GLenum error = glGetError();
+        if (error == GL_NO_ERROR) break;
+        if (obs_error_count == 0) error_after = (int)error;
+        obs_error_count++;
+    }
+    if (obs_error_count != 1 || error_after != sentinel) {
+        observation = 0;
+    }
+    GLint obs_draw_after = 0, obs_read_after = 0, obs_read_buffer_after = 0;
+    GLboolean obs_pack_swap = GL_FALSE, obs_pack_lsb = GL_FALSE;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &obs_draw_after);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &obs_read_after);
+    glGetIntegerv(GL_READ_BUFFER, &obs_read_buffer_after);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_bound);
+    glGetBooleanv(GL_PACK_SWAP_BYTES, &obs_pack_swap);
+    glGetBooleanv(GL_PACK_LSB_FIRST, &obs_pack_lsb);
+    GLint texture_binding = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture_binding);
+    if (obs_draw_after != 0 || obs_read_after != 0 || obs_read_buffer_after != GL_BACK ||
+        pack_alignment != 8 || pack_row != 33 || pack_skip_rows != 2 ||
+        pack_skip_pixels != 3 || pack_bound != (GLint)pack_buffer ||
+        obs_pack_swap != GL_TRUE || obs_pack_lsb != GL_TRUE ||
+        texture_binding != (GLint)b) {
+        observation = 0;
+    }
+
+    /* Offscreen RGBA8 texture, post-event copy/resolve source. */
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, c, 0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    while (glGetError() != GL_NO_ERROR) {
+    }
+    glEnable(0xFFFF);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", (int)c, record,
+            sizeof(record)) != 0) {
+        observation = 0;
+    }
+    if (strstr(record, "\"pixel_format\":\"RGBA8\"") == NULL ||
+        strstr(record, "\"alpha_applicable\":true") == NULL ||
+        strstr(record, "\"internal_format\":32856") == NULL) {
+        observation = 0;
+    }
+    {
+        const uint8_t expected[4] = {255, 0, 0, 255};
+        if (record_blob_name(record, blob, sizeof(blob)) != 0 ||
+            !blob_equals(argv[1], blob, expected, sizeof(expected))) {
+            observation = 0;
+        }
+    }
+    obs_error_count = 0;
+    error_after = 0;
+    for (;;) {
+        GLenum error = glGetError();
+        if (error == GL_NO_ERROR) break;
+        if (obs_error_count == 0) error_after = (int)error;
+        obs_error_count++;
+    }
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &obs_draw_after);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &obs_read_after);
+    glGetIntegerv(GL_READ_BUFFER, &obs_read_buffer_after);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture_binding);
+    if (obs_error_count != 1 || error_after != sentinel ||
+        obs_draw_after != (GLint)fbo || obs_read_after != (GLint)fbo ||
+        obs_read_buffer_after != GL_COLOR_ATTACHMENT0 ||
+        texture_binding != (GLint)b) {
+        observation = 0;
+    }
+
+    /* RGB8 has no stored alpha; the readback is BGRA8 and alpha is out of
+       scope. */
+    GLuint rgb8 = make_texture_internal(GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, rgb8, 0);
+    glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", (int)rgb8, record,
+            sizeof(record)) != 0 ||
+        strstr(record, "\"pixel_format\":\"BGRA8\"") == NULL ||
+        strstr(record, "\"alpha_applicable\":false") == NULL ||
+        strstr(record, "\"internal_format\":32849") == NULL) {
+        observation = 0;
+    }
+
+    /* SRGB8_ALPHA8 is a BGRA8 byte layout with a stored alpha channel. */
+    GLuint srgb = make_texture_internal(0x8C43, GL_RGBA, GL_UNSIGNED_BYTE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, srgb, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", (int)srgb, record,
+            sizeof(record)) != 0 ||
+        strstr(record, "\"pixel_format\":\"BGRA8\"") == NULL ||
+        strstr(record, "\"alpha_applicable\":true") == NULL ||
+        strstr(record, "\"internal_format\":35907") == NULL) {
+        observation = 0;
+    }
+
+    /* R32F is one exact 32-bit float per pixel with no alpha. */
+    GLuint r32f = make_texture_internal(0x822E, GL_RED, GL_FLOAT);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, r32f, 0);
+    glClearColor(0.5f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", (int)r32f, record,
+            sizeof(record)) != 0 ||
+        strstr(record, "\"pixel_format\":\"R32F\"") == NULL ||
+        strstr(record, "\"alpha_applicable\":false") == NULL ||
+        strstr(record, "\"internal_format\":33326") == NULL) {
+        observation = 0;
+    }
+
+    /* Unsupported attachment/readback configurations must fail closed before a
+       zero-initialized readback can be published. */
+    int negative = 1;
+    char negative_record[4096] = "";
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, c, 0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT1);
+    glReadBuffer(GL_COLOR_ATTACHMENT1);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", -1, negative_record,
+            sizeof(negative_record)) == 0) {
+        negative = 0;
+    }
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", -1, negative_record,
+            sizeof(negative_record)) == 0) {
+        negative = 0;
+    }
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, 0, 0);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", -1, negative_record,
+            sizeof(negative_record)) == 0) {
+        negative = 0;
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, c, 0);
+    GLuint cube = make_texture(GL_TEXTURE_CUBE_MAP);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, cube);
+    glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_RGBA8, 4, 4, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_CUBE_MAP_POSITIVE_X, cube, 0);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", -1, negative_record,
+            sizeof(negative_record)) == 0) {
+        negative = 0;
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, c, 0);
+    GLuint renderbuffer = 0;
+    glGenRenderbuffers(1, &renderbuffer);
+    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 4, 4);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                              GL_RENDERBUFFER, renderbuffer);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", -1, negative_record,
+            sizeof(negative_record)) == 0) {
+        negative = 0;
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, c, 0);
+    /* The manifest's default-drawable identity must be queried with
+       framebuffer zero selected even when an incomplete/timeout path leaves a
+       user FBO bound.  Querying GL_BACK_LEFT against the FBO would report
+       "absent" with a status of "ok". */
+    int manifest_ok = 1;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    while (glGetError() != GL_NO_ERROR) {
+    }
+    if (eu4_gfx_frame_trace_test_manifest(argv[1]) != 0) {
+        manifest_ok = 0;
+    }
+    GLint manifest_draw = 0, manifest_read = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &manifest_draw);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &manifest_read);
+    if (manifest_draw != (GLint)fbo || manifest_read != (GLint)fbo) {
+        manifest_ok = 0;
+    }
+    char manifest_path[1024];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/frame-trace.json",
+             argv[1]);
+    FILE *manifest = fopen(manifest_path, "rb");
+    if (manifest == NULL) {
+        manifest_ok = 0;
+    } else {
+        char manifest_text[65536];
+        size_t got = fread(manifest_text, 1, sizeof(manifest_text) - 1,
+                           manifest);
+        manifest_text[got] = 0;
+        fclose(manifest);
+        if (strstr(manifest_text, "\"default_drawable\":{\"status\":\"ok\"")
+                == NULL ||
+            strstr(manifest_text,
+                   "\"color_back_left\":{\"object_type\":\"framebuffer_default\"")
+                == NULL) {
+            manifest_ok = 0;
+        }
+    }
+    if (!manifest_ok) {
+        ok = 0;
+    }
+
     printf("trace_state=%d pending=0x%x after=0x%x reference=%d "
-           "checkpoint=%d depth=%d stencil=%d records=%d production=%d%d%d\n",
+           "checkpoint=%d depth=%d stencil=%d records=%d production=%d%d%d "
+           "observation=%d negative=%d manifest=%d\n",
            ok, pending, after, reference_ok, checkpoint_ok, depth_ok,
            stencil_ok, records_ok, production_none, production_depth,
-           production_both);
-    return ok ? 0 : 1;
+           production_both, observation, negative, manifest_ok);
+    return ok && observation && negative ? 0 : 1;
 }

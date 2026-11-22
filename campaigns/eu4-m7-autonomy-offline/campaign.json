@@ -1,0 +1,22 @@
+{
+  "id": "eu4-m7-autonomy-offline",
+  "objective": "objective.md",
+  "runtime": "dsh",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/dsh/m7-autonomy-offline/workspace",
+    "commit": "977330aed582d47d09df0777f2e00a1560ff1809"
+  },
+  "accept": ["python3", "accept.py"],
+  "max_rounds": 4,
+  "max_seconds": 1800,
+  "accept_timeout_seconds": 900,
+  "trusted_reference_root": ".local/m7/autonomy-offline/trusted/offline-b",
+  "fixture_frame": ".local/m7/autonomy-offline/trusted/offline-b/frame",
+  "fixture_scope": {
+    "start": 0,
+    "end": 2,
+    "source_events": [10, 15, 17],
+    "note": "derived offline subset; exact prefix 0..2"
+  }
+}

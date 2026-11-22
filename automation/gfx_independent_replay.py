@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import struct
 import os
 import re
 import shutil
@@ -179,6 +180,20 @@ def _shader_dir(frame_dir: Path, explicit: Path | str | None) -> Path:
     )
 
 
+def _opaque_alpha(payload: bytes) -> bytes:
+    """Canonicalize an alpha-less target's implicit alpha for comparison.
+
+    The original OpenGL RGB8 attachment has no alpha channel; a BGRA8 Metal
+    materialization carries an arbitrary alpha byte.  Alpha is not an
+    applicable channel for that checkpoint, so both sides are compared with
+    opaque alpha while every stored colour channel remains exact.
+    """
+    data = bytearray(payload)
+    for offset in range(3, len(data), 4):
+        data[offset] = 255
+    return bytes(data)
+
+
 def _swap_red_blue(payload: bytes) -> bytes:
     data = bytearray(payload)
     for offset in range(0, len(data) - 3, 4):
@@ -196,6 +211,89 @@ def _load_pixels(path: Path, width: int, height: int) -> bytes:
     return payload
 
 
+def _float_ulp_distance(left: int, right: int) -> int:
+    """Ordered IEEE-754 bit distance.
+
+    Subtracting the raw unsigned words makes every negative value look
+    extremely far from a positive one (and reverses the sign ordering).  Map
+    the bits onto the monotonic integer line first: negative values descend
+    from 0x80000000, non-negative values ascend from zero.
+    """
+    def ordered(bits: int) -> int:
+        if bits & 0x80000000:
+            return 0x80000000 - bits
+        return bits
+
+    return abs(ordered(left) - ordered(right))
+
+
+def compare_r32f(reference: bytes, candidate: bytes, width: int,
+                 height: int) -> dict:
+    """Exact bitwise comparison of two R32F payloads.
+
+    R32F is one 32-bit IEEE-754 value per pixel, not four colour channels.
+    Equality is exact bit identity; the reported error is the maximum ULP
+    distance so the result is not described as an RGBA channel error.
+    """
+    total = width * height
+    expected = total * 4
+    if len(reference) != expected or len(candidate) != expected:
+        raise ReplayError(
+            "r32f_payload",
+            f"R32F payload size {len(reference)}/{len(candidate)} != {expected}")
+    mismatched = 0
+    max_ulp = 0
+    first = None
+    min_x = min_y = None
+    max_x = max_y = None
+    for pixel in range(total):
+        offset = pixel * 4
+        left = struct.unpack_from("<I", reference, offset)[0]
+        right = struct.unpack_from("<I", candidate, offset)[0]
+        if left == right:
+            continue
+        mismatched += 1
+        distance = _float_ulp_distance(left, right)
+        if distance > max_ulp:
+            max_ulp = distance
+        x = pixel % width
+        y = pixel // width
+        if first is None:
+            first = {"x": x, "y": y, "offset": pixel}
+        min_x = x if min_x is None else min(min_x, x)
+        max_x = x if max_x is None else max(max_x, x)
+        min_y = y if min_y is None else min(min_y, y)
+        max_y = y if max_y is None else max(max_y, y)
+    return {
+        "format_scope": "R32F",
+        "pixels": total,
+        "mismatched_pixels": mismatched,
+        "mismatched_fraction": mismatched / total if total else 0.0,
+        "alpha_different_pixels": 0,
+        "max_channel_error": 0,
+        "max_ulp_error": max_ulp,
+        "mean_abs_error": [0, 0, 0, 0],
+        "mean_max_channel_error": 0.0,
+        "first_differing_pixel": first,
+        "differing_bounds": (
+            {"x": min_x, "y": min_y,
+             "width": max_x - min_x + 1,
+             "height": max_y - min_y + 1} if mismatched else None),
+        "regions": [],
+        "exact_bitwise": mismatched == 0,
+    }
+
+
+def _bounds_for_points(points, width: int, height: int):
+    if not points:
+        return None
+    xs = [point["x"] for point in points]
+    ys = [point["y"] for point in points]
+    return {"x": min(xs), "y": min(ys),
+            "width": max(xs) - min(xs) + 1,
+            "height": max(ys) - min(ys) + 1}
+
+
 def _normalize_format(value) -> str:
     if value is None:
         return ""
@@ -203,13 +301,20 @@ def _normalize_format(value) -> str:
         return {
             0x8058: "RGBA8", 0x8051: "RGB8", 0x8814: "RGBA32F",
             0x8815: "RGB32F", 0x881A: "RGBA16F", 0x881B: "RGB16F",
+            0x822E: "R32F",
             0x805B: "RGBA16", 0x8C43: "SRGB8_ALPHA8",
         }.get(value, str(value))
     return str(value).upper()
 
 
-def _checkpoint_key(item: dict) -> tuple[int, str]:
-    return (_as_int(item.get("event"), -1), str(item.get("target")))
+def _checkpoint_key(item: dict) -> tuple[int, str, str]:
+    """Checkpoint identity is (event, target, timing).
+
+    A pre-event observation and a post-event observation of the same target
+    are distinct scientific observations and must never overwrite each other.
+    """
+    timing = str(item.get("timing") or "pre_event")
+    return (_as_int(item.get("event"), -1), str(item.get("target")), timing)
 
 
 def _valid_producer_events(value) -> bool:
@@ -236,7 +341,9 @@ def _invalid_checkpoint(item: dict, graph: dict, reason: str,
                         *, requested: bool) -> dict:
     target = str(item.get("target"))
     event = item.get("event")
-    resource_id = "fb:0" if target == "0" else f"tex:{target}"
+    resource_id = str(item.get("resource") or "")
+    if not resource_id:
+        resource_id = "fb:0" if target == "0" else f"tex:{target}"
     resource = (graph.get("resources") or {}).get(resource_id) or {}
     return {
         "event": event,
@@ -255,6 +362,7 @@ def _invalid_checkpoint(item: dict, graph: dict, reason: str,
         "status": "invalid",
         "reason": reason,
         "requested": requested,
+        "timing": str(item.get("timing") or "pre_event"),
     }
 
 
@@ -310,6 +418,17 @@ def _checkpoint_capture_matches(left, right) -> bool:
     if left_key is None and right_key is None:
         return True
     return left_key is not None and left_key == right_key
+
+
+def _sealed_prefix_observation(graph: dict, event: int,
+                               target: str) -> dict | None:
+    for record in (graph.get("prefix") or {}).get("post_events") or []:
+        if not isinstance(record, dict):
+            continue
+        if (int(record.get("event", -1)) == event
+                and str(record.get("target_name")) == target):
+            return record
+    return None
 
 
 def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
@@ -371,14 +490,27 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
         key = _checkpoint_key(item)
         if key in requested:
             problems.append({"kind": "duplicate_request", "event": key[0],
-                             "target": key[1]})
+                             "target": key[1], "timing": key[2]})
             continue
         target = key[1]
-        expected_resource = "fb:0" if target == "0" else f"tex:{target}"
-        if str(item.get("resource") or expected_resource) != expected_resource:
+        resources = graph.get("resources") or {}
+        declared_resource = str(item.get("resource") or "")
+        if not declared_resource:
+            expected_resource = "fb:0" if target == "0" else f"tex:{target}"
+        elif target == "0":
+            expected_resource = "fb:0"
+        elif declared_resource == f"tex:{target}":
+            expected_resource = declared_resource
+        elif declared_resource.startswith("fb:") and \
+                declared_resource in resources:
+            # A renderbuffer-backed framebuffer has its own resource identity.
+            expected_resource = declared_resource
+        else:
+            expected_resource = f"tex:{target}"
+        if declared_resource and declared_resource != expected_resource:
             problems.append({
                 "kind": "substituted_request", "event": key[0],
-                "target": key[1],
+                "target": key[1], "timing": key[2],
                 "expected_resource": expected_resource,
                 "actual_resource": item.get("resource")})
             continue
@@ -386,7 +518,7 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
                 and not _valid_producer_events(item.get("producer_events"))):
             problems.append({
                 "kind": "malformed_request", "event": key[0],
-                "target": key[1],
+                "target": key[1], "timing": key[2],
                 "reason": "producer_events is not an integer array"})
             continue
         requested[key] = item
@@ -403,28 +535,34 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
     for key in returned:
         if key not in requested:
             problems.append({"kind": "unexpected_result", "event": key[0],
-                             "target": key[1]})
+                             "target": key[1], "timing": key[2]})
 
     results: list[dict] = []
     for key, wanted in requested.items():
-        event, target = key
+        event, target, timing = key
         rows = returned.get(key, [])
         if len(rows) == 0:
             problems.append({"kind": "missing_result", "event": event,
-                             "target": target})
+                             "target": target, "timing": timing})
             results.append(_invalid_checkpoint(
                 wanted, graph, "requested checkpoint missing from replay response",
                 requested=True))
             continue
         if len(rows) > 1:
             problems.append({"kind": "duplicate_result", "event": event,
-                             "target": target, "count": len(rows)})
+                             "target": target, "timing": timing,
+                             "count": len(rows)})
             results.append(_invalid_checkpoint(
                 wanted, graph, "duplicate checkpoint results in replay response",
                 requested=True))
             continue
         item = rows[0]
-        expected_resource = "fb:0" if target == "0" else f"tex:{target}"
+        resources = graph.get("resources") or {}
+        declared_resource = str(wanted.get("resource") or "")
+        if declared_resource:
+            expected_resource = declared_resource
+        else:
+            expected_resource = "fb:0" if target == "0" else f"tex:{target}"
         if item.get("target") is not None and str(item.get("target")) != target:
             problems.append({"kind": "substituted_result", "event": event,
                              "target": target,
@@ -534,11 +672,26 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
         if expected_reference_sha and reference_sha != expected_reference_sha:
             fail("captured reference sha256 does not match the request")
             continue
-        resource_id = "fb:0" if target == "0" else f"tex:{target}"
+        resource_id = expected_resource
         resource = (graph.get("resources") or {}).get(resource_id) or {}
         captured_format = _normalize_format(resource.get("format"))
         reported_format = _normalize_format(item.get("format"))
-        if captured_format:
+        reference_format = _normalize_format(
+            wanted.get("reference_pixel_format"))
+        if reference_format:
+            # Exact-prefix entries compare the bytes the original GL readback
+            # produced with the bytes the Metal target materialized.  No
+            # channel-order normalization is permitted: the declared pixel
+            # formats must agree exactly.
+            reported_bytes = _normalize_format(item.get("pixel_format"))
+            if reported_bytes != reference_format:
+                fail(
+                    f"prefix candidate pixel format {reported_bytes or '<missing>'} "
+                    f"does not match the reference format {reference_format}")
+                continue
+            channel_swap = False
+            internal = reference_format
+        elif captured_format:
             if not reported_format:
                 fail("checkpoint is missing its reported format")
                 continue
@@ -565,8 +718,77 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             channel_swap = False
             internal = reported_format
         candidate = _swap_red_blue(metal) if channel_swap else metal
-        statistics = m6_compare.compare_images(
-            reference, candidate, width, height)
+        channels = wanted.get("compared_channels")
+        alpha_declared = wanted.get("alpha_applicable")
+        sealed_scope = None
+        if timing == "post_event":
+            # The sealed observation, not the candidate request, is the
+            # authority on the byte layout and applicable channels.  A request
+            # that narrows the scope to hide a channel is invalid evidence.
+            observation = _sealed_prefix_observation(graph, event, target)
+            if observation is None:
+                fail("post-event checkpoint has no sealed observation")
+                continue
+            sealed_scope = gfx_frame_graph.format_scope(observation)
+            if sealed_scope["problems"]:
+                fail(sealed_scope["problems"][0])
+                continue
+            sealed_format = sealed_scope["pixel_format"]
+            if reference_format and reference_format != sealed_format:
+                fail(f"reference pixel format {reference_format} disagrees "
+                     f"with the sealed attachment layout {sealed_format}")
+                continue
+            reported_bytes = _normalize_format(item.get("pixel_format"))
+            if reported_bytes != sealed_format:
+                fail(f"candidate pixel format {reported_bytes or '<missing>'} "
+                     f"does not match the sealed layout {sealed_format}")
+                continue
+            if channels not in (None, sealed_scope["compared_channels"]):
+                fail("requested comparison channels disagree with the sealed "
+                     "attachment identity")
+                continue
+            if (alpha_declared is not None
+                    and (alpha_declared is not False)
+                    != sealed_scope["alpha_applicable"]):
+                fail("alpha applicability contradicts the sealed attachment "
+                     "identity")
+                continue
+            channels = sealed_scope["compared_channels"]
+            alpha_applicable = sealed_scope["alpha_applicable"]
+            colour = observation.get("color") or {}
+            if (colour.get("sha256")
+                    and expected_reference_sha
+                    and str(colour.get("sha256")) != expected_reference_sha):
+                fail("sealed observation blob digest disagrees with the "
+                     "request")
+                continue
+            if (observation.get("width") not in (None, width)
+                    or observation.get("height") not in (None, height)):
+                fail("sealed observation dimensions disagree with the result")
+                continue
+        else:
+            if channels is None:
+                if reference_format == "R32F":
+                    channels = "R32F"
+                elif reference_format and captured_format == "RGB8":
+                    channels = "RGB"
+                else:
+                    channels = "RGBA"
+            if alpha_declared is None:
+                alpha_applicable = channels != "RGB" and channels != "R32F"
+            else:
+                alpha_applicable = alpha_declared is not False
+        if alpha_applicable != (channels == "RGBA"):
+            fail("alpha applicability contradicts the compared channel scope")
+            continue
+        if channels == "R32F":
+            statistics = compare_r32f(reference, candidate, width, height)
+        else:
+            if not alpha_applicable:
+                reference = _opaque_alpha(reference)
+                candidate = _opaque_alpha(candidate)
+            statistics = m6_compare.compare_images(
+                reference, candidate, width, height)
         entry = {
             "event": event,
             "target": target,
@@ -595,7 +817,17 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             "worst_regions": statistics["regions"][:4],
             "metal_sha256": _sha(metal_path),
             "reference_sha256": reference_sha,
+            "timing": timing,
+            "alpha_applicable": alpha_applicable,
+            "compared_channels": channels,
+            "format_scope": channels,
+            "reference_pixel_format": reference_format or None,
+            "candidate_pixel_format": _normalize_format(item.get("pixel_format"))
+            or None,
         }
+        for optional in ("max_ulp_error", "exact_bitwise", "format_scope"):
+            if optional in statistics:
+                entry["statistics"][optional] = statistics[optional]
         if statistics["mismatched_pixels"] == 0:
             entry["status"] = "match"
         elif entry["authoritative"]:
@@ -2247,7 +2479,8 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
         receipt = None
     if receipt is not None:
         bindings.append("shader-receipt")
-        if receipt.get("schema") != "m7-shadow-shader-receipt/v1":
+        if receipt.get("schema") not in (
+                "gfx-shader-receipt/v1", "m7-shadow-shader-receipt/v1"):
             problems.append(_checkpoint_problem(
                 "receipt_schema",
                 "shader receipt schema is invalid",

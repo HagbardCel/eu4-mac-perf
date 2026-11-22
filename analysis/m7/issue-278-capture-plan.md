@@ -4,6 +4,28 @@ Date: 21 November 2026 (Europe/Berlin). Issue: #278 (M7 scientific
 continuation). Status: **plan only; no EU4 launch is authorized by this
 document.**
 
+## Implementation status (21 November 2026)
+
+- The synthetic observer is implemented as `tests/gfx_drawable_observe_host.m`
+  with the regression `tests/test_m7_drawable_observe.py`. It created a legacy
+  CGL context on this host and recorded: colour/alpha/depth/stencil 32/8/32/8,
+  zero sample buffers/samples, accelerated, double buffered, legacy profile,
+  colour 8/8/8/8 unsigned normalized, depth 32, stencil 8, default-window path.
+- The live capture records the same fields in the sealed manifest under
+  `gl.cgl` and `gl.default_drawable`, without substituting the requested CGL
+  attributes for the effective values. The stage-3 pilot seal
+  (`47590918-…`, frame 1) records the live identity: CGL 32/8/32/8, no MSAA,
+  accelerated, double buffered, legacy, colour 8/8/8/8 unsigned normalized,
+  depth 32, stencil 8, `default-window`, draw/read buffer GL_BACK.
+- A reconstructed control can now assert the same attachment identity; the
+  control itself was not re-run and is not required for the direct
+  EU4-versus-Metal comparison. A reviewed target assertion and authority
+  re-pin remain outstanding before any causal claim relies on it.
+
+The live observations are in
+`.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/frame-trace.json`
+and summarized in `analysis/m7/m7-exact-prefix-report.md`.
+
 The 90825686 seal proves captured-state completeness (samples, bit depths,
 extent, pre-draw colour/depth seeds) but not that an offscreen RGBA8 FBO is the
 live window drawable. The corrected GL-control gate therefore reports

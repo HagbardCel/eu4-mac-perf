@@ -38,6 +38,7 @@ extern int eu4_gfx_frame_observe_emit(const uint8_t *, uint32_t, uint32_t,
 #include <CommonCrypto/CommonDigest.h>
 #include <OpenGL/gl.h>
 #include <OpenGL/glext.h>
+#include <OpenGL/OpenGL.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -91,6 +92,15 @@ static void load_sampler_queries(void) {
 #define FTRACE_MAX_CHECKPOINT_BYTES (256u * 1024u * 1024u)
 #define FTRACE_DEFAULT_CHECKPOINT_TOTAL_BYTES (128ull * 1024ull * 1024ull)
 #define FTRACE_CHECKPOINT_MAX_NS (10ull * 1000ull * 1000ull * 1000ull)
+/* Opt-in exact-prefix coverage: one post-event observation per executed
+   operation from event 0 through the selected end event, plus the initial
+   pre-event-0 framebuffer state.  Every observation is a full BGRA readback
+   with its own target/resource identity and an aggregate byte/time budget. */
+#define FTRACE_MAX_PREFIX_EVENTS 4096
+#define FTRACE_PREFIX_HARD_MAX_BYTES (768ull * 1024ull * 1024ull)
+#define FTRACE_PREFIX_DEFAULT_MAX_BYTES (384ull * 1024ull * 1024ull)
+#define FTRACE_PREFIX_MAX_NS (10ull * 1000ull * 1000ull * 1000ull)
+#define FTRACE_PREFIX_LINE_MAX 4096
 #define FTRACE_NAME 96
 
 #define GL_TEXTURE_MAX_ANISOTROPY 0x84FE
@@ -106,13 +116,40 @@ static void load_sampler_queries(void) {
 #define GL_COMPRESSED_DXT5 0x83F3
 #define GL_RGBA32F_VALUE 0x8814
 #define GL_RGB32F_VALUE 0x8815
+#define GL_R32F_VALUE 0x822E
+#ifndef GL_RED
+#define GL_RED 0x1903
+#endif
 #define GL_RGBA16F_VALUE 0x881A
 #define GL_RGB16F_VALUE 0x881B
 #define GL_RGBA16_VALUE 0x805B
 #define GL_SRGB8_ALPHA8_VALUE 0x8C43
-#define GL_DEPTH32F_STENCIL8_VALUE 0x8CAC
+#define GL_DEPTH32F_STENCIL8_VALUE 0x8CAD
+#define GL_DEPTH24_STENCIL8_VALUE 0x88F0
+#define GL_DEPTH_COMPONENT16_VALUE 0x81A5
+#define GL_DEPTH_COMPONENT24_VALUE 0x81A6
+#define GL_DEPTH_COMPONENT32F_VALUE 0x8DAB
+#define GL_STENCIL_INDEX8_VALUE 0x8D48
 #define GL_SAMPLER_2D_RECT_VALUE 0x8B63
 #define GL_SAMPLER_BINDING_VALUE 0x8919
+#ifndef GL_SIGNED_NORMALIZED
+#define GL_SIGNED_NORMALIZED 0x8F9D
+#endif
+#ifndef GL_UNSIGNED_NORMALIZED
+#define GL_UNSIGNED_NORMALIZED 0x8C17
+#endif
+#ifndef GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE
+#define GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE 0x8216
+#endif
+#ifndef GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE
+#define GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE 0x8217
+#endif
+#ifndef GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER 0x8CD4
+#endif
+#ifndef GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE 0x8CD3
+#endif
 
 static struct {
     int configured;
@@ -215,6 +252,7 @@ static struct {
     char gl_version[256];
     int last_capture_target_fb;
     int test_target_fb_override;
+    int test_target_internal_override;
     int gl_drawable_valid;
     int gl_drawable_binding;
     int gl_samples;
@@ -260,6 +298,31 @@ static struct {
     int capacity_exceeded;
     char capacity_limit[32];
     char capacity_reason[64];
+
+    /* Opt-in exact-prefix coverage.  Disabled by default; an empty set
+       performs no additional GPU readback and writes no prefix file. */
+    int prefix_enabled;
+    int prefix_end;
+    int prefix_sparse;
+    int prefix_event_count;
+    int prefix_events[FTRACE_MAX_PREFIX_EVENTS];
+    int prefix_depth_stencil;
+    int prefix_count;
+    int prefix_initial;
+    int prefix_next_event;
+    uint64_t prefix_bytes;
+    uint64_t prefix_max_bytes;
+    uint64_t prefix_readback_ns;
+    uint64_t prefix_max_ns;
+    int prefix_failed;
+    char prefix_file[FTRACE_NAME];
+    char prefix_sha[65];
+    uint64_t prefix_file_bytes;
+    FILE *prefix_observations;
+    int prefix_copy_pending_event;
+    int prefix_copy_pending_texture;
+    int prefix_clear_pending_event;
+    int prefix_clear_flags;
 
     /* Bounded continuous capture.  The single-frame path leaves every field
        below zero/empty and keeps its one-shot gate unchanged. */
@@ -687,6 +750,12 @@ static int capture_reference(void);
 static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
                               uint8_t **out_pixels,
                               ftrace_drawable_state *out_state);
+static int read_observation_pixels(uint32_t framebuffer, GLenum read_buffer,
+                                   uint32_t texture, uint32_t width,
+                                   uint32_t height, GLenum format,
+                                   GLenum type, size_t bytes_per_pixel,
+                                   uint8_t **out_pixels);
+static int framebuffer_attachment_identity_supported(void);
 static void sha256_hex(const void *data, size_t size, char out[65]);
 static int write_atomic(const char *path, const void *data, size_t size);
 static int write_frame_manifest(int complete, const char *reason);
@@ -695,6 +764,10 @@ static int capture_timed_out_locked(void);
 static void continuous_write_campaign(const char *status,
                                       const char *reason);
 static int maybe_capture_default_checkpoint_locked(void);
+static void prefix_reset_locked(void);
+static int prefix_emit_locked(int event, const char *timing, const char *kind);
+static int prefix_emit_texture_locked(int event, const char *timing,
+                                      const char *kind, int texture_name);
 static int capture_default_checkpoint_pixels_locked(
     int slot, const uint8_t *pixels, size_t pixels_bytes,
     const uint8_t *depth, size_t depth_bytes,
@@ -755,6 +828,8 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
     }
     pthread_mutex_lock(&g_lock);
     int accepted = 0;
+    g.prefix_copy_pending_event = -1;
+    g.prefix_copy_pending_texture = -1;
     if (g.timeline_path[0] != 0 && !g.capture_failed) {
         uint64_t sequence = ++g.timeline_seq;
         timeline_write(
@@ -914,6 +989,11 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         g.copy_events++;
         accepted = 1;
         checkpoint_clear_pending_locked();
+        g.prefix_copy_pending_event =
+            g.prefix_enabled && g.event_count - 1 <= g.prefix_end
+                ? g.event_count - 1 : -1;
+        g.prefix_copy_pending_texture =
+            g.prefix_copy_pending_event >= 0 ? event->destination_texture : -1;
     }
     pthread_mutex_unlock(&g_lock);
     return accepted;
@@ -1162,6 +1242,13 @@ static int put_blob(const void *data, size_t size, const char *prefix,
     uint64_t blob_cap = g.continuous
         ? (4ull * 1024ull * 1024ull * 1024ull)
         : (uint64_t)FTRACE_MAX_BLOB_BYTES;
+    if (g.prefix_enabled) {
+        /* The exact-prefix payload is an explicit, separately budgeted set of
+           full-frame readbacks; it must not be silently truncated by the
+           ordinary per-frame artifact cap.  The prefix budget and the ordinary
+           frame artifacts are both still bounded. */
+        blob_cap += g.prefix_max_bytes;
+    }
     if (size > blob_cap || g.blob_bytes > blob_cap - size) {
         fail_capture_locked("artifact_size_limit");
         return -1;
@@ -1291,6 +1378,11 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     g.checkpoint_pending = -1;
     g.checkpoint_max_count = FTRACE_DEFAULT_MAX_CHECKPOINTS;
     g.checkpoint_max_bytes = FTRACE_DEFAULT_CHECKPOINT_TOTAL_BYTES;
+    g.prefix_max_bytes = FTRACE_PREFIX_DEFAULT_MAX_BYTES;
+    g.prefix_max_ns = FTRACE_PREFIX_MAX_NS;
+    g.prefix_copy_pending_event = -1;
+    g.prefix_copy_pending_texture = -1;
+    g.prefix_clear_pending_event = -1;
     const char *dir = getenv("EU4_GFX_FRAME_TRACE_DIR");
     const char *boundary_fb = getenv("EU4_GFX_FRAME_TRACE_BOUNDARY_FB");
     const char *boundary = getenv("EU4_GFX_FRAME_TRACE_BOUNDARY");
@@ -1519,6 +1611,91 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
         if (g.checkpoint_count == 0) {
             return -1;
         }
+    }
+    const char *prefix_end = getenv("EU4_GFX_FRAME_TRACE_PREFIX_END");
+    const char *observe_events =
+        getenv("EU4_GFX_FRAME_TRACE_OBSERVE_EVENTS");
+    if (prefix_end != NULL && prefix_end[0] != 0 &&
+        observe_events != NULL && observe_events[0] != 0) {
+        return -1;
+    }
+    if (prefix_end != NULL && prefix_end[0] != 0) {
+        uint64_t value = 0;
+        if (parse_u64(prefix_end, &value) != 0 ||
+            value >= (uint64_t)FTRACE_MAX_PREFIX_EVENTS) {
+            return -1;
+        }
+        if (g.max_draws == 0 || value >= (uint64_t)g.max_draws) {
+            /* Prefix events are operation indices; the frame event budget
+               must cover the complete prefix. */
+            return -1;
+        }
+        g.prefix_enabled = 1;
+        g.prefix_end = (int)value;
+    } else if (observe_events != NULL && observe_events[0] != 0) {
+        size_t selection_length = strlen(observe_events);
+        if (selection_length >= 4096 || observe_events[0] == ',' ||
+            observe_events[selection_length - 1] == ',' ||
+            strstr(observe_events, ",,") != NULL) {
+            return -1;
+        }
+        char selection_copy[4096];
+        snprintf(selection_copy, sizeof(selection_copy), "%s",
+                 observe_events);
+        char *save = NULL;
+        for (char *token = strtok_r(selection_copy, ",", &save); token != NULL;
+             token = strtok_r(NULL, ",", &save)) {
+            uint64_t value = 0;
+            if (parse_u64(token, &value) != 0 || value > (uint64_t)INT_MAX) {
+                return -1;
+            }
+            if (value >= (uint64_t)FTRACE_MAX_PREFIX_EVENTS ||
+                value >= (uint64_t)g.max_draws) {
+                return -1;
+            }
+            if (g.prefix_event_count >= FTRACE_MAX_PREFIX_EVENTS) {
+                return -1;
+            }
+            if (g.prefix_event_count > 0 &&
+                value <= (uint64_t)
+                    g.prefix_events[g.prefix_event_count - 1]) {
+                return -1;
+            }
+            g.prefix_events[g.prefix_event_count++] = (int)value;
+        }
+        if (g.prefix_event_count == 0) {
+            return -1;
+        }
+        g.prefix_enabled = 1;
+        g.prefix_sparse = 1;
+        g.prefix_end = g.prefix_events[g.prefix_event_count - 1];
+    }
+    if (g.prefix_enabled) {
+        g.prefix_max_bytes = FTRACE_PREFIX_DEFAULT_MAX_BYTES;
+        g.prefix_max_ns = FTRACE_PREFIX_MAX_NS;
+        const char *prefix_bytes =
+            getenv("EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES");
+        if (prefix_bytes != NULL && prefix_bytes[0] != 0) {
+            uint64_t bytes = 0;
+            if (parse_u64(prefix_bytes, &bytes) != 0 || bytes == 0 ||
+                bytes > FTRACE_PREFIX_HARD_MAX_BYTES) {
+                return -1;
+            }
+            g.prefix_max_bytes = bytes;
+        }
+        const char *prefix_ns = getenv("EU4_GFX_FRAME_TRACE_PREFIX_MAX_NS");
+        if (prefix_ns != NULL && prefix_ns[0] != 0) {
+            uint64_t ns = 0;
+            if (parse_u64(prefix_ns, &ns) != 0 || ns == 0 ||
+                ns > FTRACE_PREFIX_MAX_NS) {
+                return -1;
+            }
+            g.prefix_max_ns = ns;
+        }
+        const char *depth_stencil =
+            getenv("EU4_GFX_FRAME_TRACE_OBSERVE_DEPTH_STENCIL");
+        g.prefix_depth_stencil =
+            depth_stencil != NULL && strcmp(depth_stencil, "1") == 0;
     }
     if (timeout_ms != NULL) {
         uint64_t value = 0;
@@ -1813,6 +1990,7 @@ static const char *format_name(GLenum format) {
         case GL_RGBA32F_VALUE: return "RGBA32F";
         case GL_RGBA16F_VALUE: return "RGBA16F";
         case GL_RGB32F_VALUE: return "RGB32F";
+        case GL_R32F_VALUE: return "R32F";
         case GL_RGB16F_VALUE: return "RGB16F";
         case GL_RGBA16_VALUE: return "RGBA16";
         case GL_SRGB8_ALPHA8_VALUE: return "SRGB8_ALPHA8";
@@ -2736,48 +2914,12 @@ static int capture_target_pixels(const char *prefix, const char *member,
         return -1;
     }
     size_t bytes = (size_t)width * (size_t)height * 4;
-    uint8_t *pixels = (uint8_t *)malloc(bytes);
-    if (pixels == NULL) {
-        return -1;
-    }
-    GLint read_framebuffer = 0, read_buffer = 0, pack_alignment = 0;
-    GLint pack_row = 0, pack_skip_rows = 0, pack_skip_pixels = 0, pack_buffer = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
-    glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
-    glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row);
-    glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
-    glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
-    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)framebuffer);
-    if (framebuffer != 0) {
-        glReadBuffer(GL_COLOR_ATTACHMENT0);
-    }
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-    if (pack_buffer != 0) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    }
-    while (glGetError() != GL_NO_ERROR) {
-    }
-    glFinish();
-    glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
-                 pixels);
-    GLenum gl_error = glGetError();
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_framebuffer);
-    if (framebuffer != 0) {
-        glReadBuffer((GLenum)read_buffer);
-    }
-    glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
-    glPixelStorei(GL_PACK_ROW_LENGTH, pack_row);
-    glPixelStorei(GL_PACK_SKIP_ROWS, pack_skip_rows);
-    glPixelStorei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
-    if (pack_buffer != 0) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
-    }
-    if (gl_error != GL_NO_ERROR) {
+    uint8_t *pixels = NULL;
+    if (read_observation_pixels((uint32_t)framebuffer,
+                                framebuffer == 0 ? GL_BACK
+                                                 : GL_COLOR_ATTACHMENT0,
+                                0, (uint32_t)width, (uint32_t)height, GL_BGRA,
+                                GL_UNSIGNED_INT_8_8_8_8_REV, 4, &pixels) != 0) {
         free(pixels);
         return -1;
     }
@@ -2803,6 +2945,1028 @@ static int capture_target_pixels(const char *prefix, const char *member,
 
 static int capture_seed(json_out *out, int *out_width, int *out_height) {
     return capture_target_pixels("seed", "seed", out, out_width, out_height);
+}
+
+
+/* ------------------------------------------------------------------------- */
+/* Opt-in exact-prefix coverage                                               */
+/* ------------------------------------------------------------------------- */
+
+typedef struct {
+    int framebuffer;
+    int width;
+    int height;
+    int color_type;
+    int color_name;
+    int color_level;
+    int internal_format;
+    int depth_present;
+    int stencil_present;
+    int depth_bits;
+    int stencil_bits;
+    int color_component_type;
+    int color_red_bits;
+    int color_green_bits;
+    int color_blue_bits;
+    int color_alpha_bits;
+    int unsupported_format;
+    int alpha_applicable;
+    GLenum read_type;
+    int colour_bpp;
+    int direct_texture;
+    GLenum read_format;
+    const char *pixel_format;
+} prefix_target_state;
+
+static int prefix_complete_locked(void) {
+    if (g.prefix_failed) {
+        return 0;
+    }
+    if (g.prefix_sparse) {
+        return g.prefix_event_count > 0 &&
+               g.prefix_count == g.prefix_event_count;
+    }
+    return g.prefix_initial && g.prefix_next_event == g.prefix_end + 1;
+}
+
+static void prefix_reset_locked(void) {
+    if (g.prefix_observations != NULL) {
+        fclose(g.prefix_observations);
+        g.prefix_observations = NULL;
+    }
+    g.prefix_count = 0;
+    g.prefix_initial = 0;
+    g.prefix_next_event = 0;
+    g.prefix_bytes = 0;
+    g.prefix_readback_ns = 0;
+    g.prefix_failed = 0;
+    g.prefix_file[0] = 0;
+    g.prefix_sha[0] = 0;
+    g.prefix_file_bytes = 0;
+    g.prefix_copy_pending_event = -1;
+    g.prefix_copy_pending_texture = -1;
+    g.prefix_clear_pending_event = -1;
+}
+
+typedef struct {
+    int internal_format;
+    GLenum read_format;
+    GLenum read_type;
+    int colour_bpp;
+    const char *pixel_format;
+    int alpha_applicable;
+    int red_bits;
+    int green_bits;
+    int blue_bits;
+    int alpha_bits;
+    int component_type;
+    int supported;
+} observation_format_identity;
+
+/* The one mapping from an attachment's internal format to its exact readback
+   byte layout and comparison scope.  Unknown formats are unsupported rather
+   than normalized into a nearby one. */
+static int observation_format_identity_for(int internal_format,
+                                           observation_format_identity *out) {
+    memset(out, 0, sizeof(*out));
+    out->internal_format = internal_format;
+    out->component_type = GL_UNSIGNED_NORMALIZED;
+    switch (internal_format) {
+        case GL_RGB8:
+            out->read_format = GL_BGRA;
+            out->read_type = GL_UNSIGNED_BYTE;
+            out->colour_bpp = 4;
+            out->pixel_format = "BGRA8";
+            out->alpha_applicable = 0;
+            out->red_bits = 8;
+            out->green_bits = 8;
+            out->blue_bits = 8;
+            out->alpha_bits = 0;
+            out->supported = 1;
+            return 1;
+        case GL_RGBA8:
+            out->read_format = GL_RGBA;
+            out->read_type = GL_UNSIGNED_BYTE;
+            out->colour_bpp = 4;
+            out->pixel_format = "RGBA8";
+            out->alpha_applicable = 1;
+            out->red_bits = 8;
+            out->green_bits = 8;
+            out->blue_bits = 8;
+            out->alpha_bits = 8;
+            out->supported = 1;
+            return 1;
+        case GL_SRGB8_ALPHA8_VALUE:
+            /* The Metal target is materialized as BGRA8Unorm, so the byte
+               layout is BGRA8; the stored alpha channel still applies. */
+            out->read_format = GL_BGRA;
+            out->read_type = GL_UNSIGNED_BYTE;
+            out->colour_bpp = 4;
+            out->pixel_format = "BGRA8";
+            out->alpha_applicable = 1;
+            out->red_bits = 8;
+            out->green_bits = 8;
+            out->blue_bits = 8;
+            out->alpha_bits = 8;
+            out->supported = 1;
+            return 1;
+        case GL_R32F_VALUE:
+            out->read_format = GL_RED;
+            out->read_type = GL_FLOAT;
+            out->colour_bpp = 4;
+            out->pixel_format = "R32F";
+            out->alpha_applicable = 0;
+            out->red_bits = 32;
+            out->component_type = GL_FLOAT;
+            out->supported = 1;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int depth_stencil_bits_for(int internal_format, int *depth_bits,
+                                  int *stencil_bits) {
+    *depth_bits = 0;
+    *stencil_bits = 0;
+    switch (internal_format) {
+        case GL_DEPTH_COMPONENT16_VALUE:
+            *depth_bits = 16;
+            return 1;
+        case GL_DEPTH_COMPONENT24_VALUE:
+            *depth_bits = 24;
+            return 1;
+        case GL_DEPTH_COMPONENT32F_VALUE:
+            *depth_bits = 32;
+            return 1;
+        case GL_DEPTH24_STENCIL8_VALUE:
+            *depth_bits = 24;
+            *stencil_bits = 8;
+            return 1;
+        case GL_DEPTH32F_STENCIL8_VALUE:
+            *depth_bits = 32;
+            *stencil_bits = 8;
+            return 1;
+        case GL_STENCIL_INDEX8_VALUE:
+            *stencil_bits = 8;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+typedef struct {
+    int present;
+    int type;
+    int name;
+    int level;
+    int internal_format;
+    int width;
+    int height;
+    int sizes_known;
+    int red_bits;
+    int green_bits;
+    int blue_bits;
+    int alpha_bits;
+} observation_attachment;
+
+/* Query one framebuffer attachment's effective identity.  Texture and
+   renderbuffer bindings are restored before returning; no GL error is read. */
+static void query_attachment_identity(GLenum attachment,
+                                      observation_attachment *out) {
+    memset(out, 0, sizeof(*out));
+    GLint type = 0, name = 0, level = 0;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, attachment,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
+    if (type == 0 || type == GL_NONE) {
+        return;
+    }
+    out->present = 1;
+    out->type = (int)type;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, attachment,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &name);
+    out->name = (int)name;
+    if (type == GL_TEXTURE) {
+        glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, attachment,
+            GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &level);
+        out->level = (int)level;
+        GLint previous = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)name);
+        GLint width = 0, height = 0, internal = 0, red = 0, green = 0,
+              blue = 0, alpha = 0;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH,
+                                 &width);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT,
+                                 &height);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level,
+                                 GL_TEXTURE_INTERNAL_FORMAT, &internal);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_RED_SIZE,
+                                 &red);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_GREEN_SIZE,
+                                 &green);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_BLUE_SIZE,
+                                 &blue);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_ALPHA_SIZE,
+                                 &alpha);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
+        out->width = (int)width;
+        out->height = (int)height;
+        out->internal_format = (int)internal;
+        out->sizes_known = 1;
+        out->red_bits = (int)red;
+        out->green_bits = (int)green;
+        out->blue_bits = (int)blue;
+        out->alpha_bits = (int)alpha;
+    } else if (type == GL_RENDERBUFFER) {
+        GLint previous = 0;
+        glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
+        glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)name);
+        GLint width = 0, height = 0, internal = 0;
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH,
+                                     &width);
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT,
+                                     &height);
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER,
+                                     GL_RENDERBUFFER_INTERNAL_FORMAT,
+                                     &internal);
+        glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)previous);
+        out->width = (int)width;
+        out->height = (int)height;
+        out->internal_format = (int)internal;
+        observation_format_identity identity;
+        if (observation_format_identity_for(out->internal_format, &identity)) {
+            out->sizes_known = 1;
+            out->red_bits = identity.red_bits;
+            out->green_bits = identity.green_bits;
+            out->blue_bits = identity.blue_bits;
+            out->alpha_bits = identity.alpha_bits;
+        }
+    }
+}
+
+static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
+    memset(out, 0, sizeof(*out));
+    out->framebuffer = -1;
+    observation_format_identity identity;
+    int red = 0, green = 0, blue = 0, alpha = 0;
+    int sizes_known = 0;
+    int internal_format = 0;
+    if (direct_texture >= 0) {
+        out->direct_texture = 1;
+        out->color_type = GL_TEXTURE;
+        out->color_name = direct_texture;
+        out->color_level = 0;
+        out->width = 4;
+        out->height = 4;
+        if (g.test_only) {
+            internal_format = g.test_target_internal_override >= 0
+                                  ? g.test_target_internal_override : GL_RGBA8;
+            if (observation_format_identity_for(internal_format, &identity)) {
+                sizes_known = 1;
+                red = identity.red_bits;
+                green = identity.green_bits;
+                blue = identity.blue_bits;
+                alpha = identity.alpha_bits;
+            }
+        } else {
+            GLint previous = 0;
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
+            glBindTexture(GL_TEXTURE_2D, (GLuint)direct_texture);
+            GLint width = 0, height = 0, iformat = 0, r = 0, g = 0, b = 0,
+                  a = 0;
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,
+                                     &width);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT,
+                                     &height);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0,
+                                     GL_TEXTURE_INTERNAL_FORMAT, &iformat);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_RED_SIZE,
+                                     &r);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_GREEN_SIZE,
+                                     &g);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_BLUE_SIZE,
+                                     &b);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_ALPHA_SIZE,
+                                     &a);
+            glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
+            out->width = (int)width;
+            out->height = (int)height;
+            internal_format = (int)iformat;
+            sizes_known = 1;
+            red = (int)r;
+            green = (int)g;
+            blue = (int)b;
+            alpha = (int)a;
+        }
+    } else if (g.test_only) {
+        out->framebuffer = g.test_target_fb_override >= 0
+                               ? g.test_target_fb_override : 0;
+        out->width = 4;
+        out->height = 4;
+        out->color_type = out->framebuffer == 0 ? 0 : GL_TEXTURE;
+        out->color_name = out->framebuffer;
+        out->color_level = 0;
+        if (out->framebuffer == 0) {
+            internal_format = 0;
+            red = green = blue = alpha = 8;
+            sizes_known = 1;
+        } else {
+            internal_format = g.test_target_internal_override >= 0
+                                  ? g.test_target_internal_override : GL_RGBA8;
+            if (observation_format_identity_for(internal_format, &identity)) {
+                sizes_known = 1;
+                red = identity.red_bits;
+                green = identity.green_bits;
+                blue = identity.blue_bits;
+                alpha = identity.alpha_bits;
+            }
+        }
+        out->depth_present = 1;
+        out->stencil_present = 1;
+        out->depth_bits = 24;
+        out->stencil_bits = 8;
+    } else {
+        GLint framebuffer = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
+        out->framebuffer = (int)framebuffer;
+        if (framebuffer == 0) {
+            GLint draw_buffer = 0, samples = 0;
+            glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
+            glGetIntegerv(GL_SAMPLES, &samples);
+            if (draw_buffer != GL_BACK || samples > 0) {
+                /* Only the single-sample back buffer has a defined readback
+                   contract here. */
+                fail_capture_locked("prefix_unsupported_target");
+                return -1;
+            }
+            uint32_t drawable_width = 0, drawable_height = 0;
+            if (eu4_gfx_gl_drawable_extent(&drawable_width, &drawable_height) == 0 &&
+                drawable_width > 0 && drawable_height > 0) {
+                out->width = (int)drawable_width;
+                out->height = (int)drawable_height;
+            } else {
+                GLint viewport[4] = {0, 0, 0, 0};
+                glGetIntegerv(GL_VIEWPORT, viewport);
+                out->width = viewport[2];
+                out->height = viewport[3];
+            }
+            GLint bits = 0;
+            glGetIntegerv(GL_RED_BITS, &red);
+            glGetIntegerv(GL_GREEN_BITS, &green);
+            glGetIntegerv(GL_BLUE_BITS, &blue);
+            glGetIntegerv(GL_ALPHA_BITS, &alpha);
+            sizes_known = 1;
+            internal_format = 0;
+            glGetIntegerv(GL_DEPTH_BITS, &bits);
+            out->depth_bits = (int)bits;
+            glGetIntegerv(GL_STENCIL_BITS, &bits);
+            out->stencil_bits = (int)bits;
+            out->depth_present = out->depth_bits > 0;
+            out->stencil_present = out->stencil_bits > 0;
+        } else {
+            GLint draw_buffer = 0, samples = 0;
+            glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
+            glGetIntegerv(GL_SAMPLES, &samples);
+            if (draw_buffer != GL_COLOR_ATTACHMENT0 || samples > 0 ||
+                glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) !=
+                    GL_FRAMEBUFFER_COMPLETE) {
+                fail_capture_locked("prefix_unsupported_target");
+                return -1;
+            }
+            observation_attachment colour;
+            query_attachment_identity(GL_COLOR_ATTACHMENT0, &colour);
+            if (!colour.present ||
+                (colour.type != GL_TEXTURE && colour.type != GL_RENDERBUFFER)) {
+                fail_capture_locked("prefix_unsupported_target");
+                return -1;
+            }
+            if (colour.type == GL_RENDERBUFFER) {
+                /* The replay target registry is texture-keyed; a renderbuffer
+                   colour attachment cannot be given a distinct Metal target
+                   identity here.  Record it as unsupported rather than alias a
+                   texture that happens to share its numeric GL name. */
+                memset(out, 0, sizeof(*out));
+                out->framebuffer = (int)framebuffer;
+                out->color_type = GL_RENDERBUFFER;
+                out->color_name = colour.name;
+                out->width = colour.width;
+                out->height = colour.height;
+                out->unsupported_format = 1;
+                out->pixel_format = NULL;
+                if (out->width <= 0 || out->height <= 0) {
+                    fail_capture_locked("prefix_dimensions");
+                    return -1;
+                }
+                return 0;
+            }
+            if (!framebuffer_attachment_identity_supported()) {
+                fail_capture_locked("prefix_unsupported_target");
+                return -1;
+            }
+            GLint cube_face = 0, layer = 0;
+            glGetFramebufferAttachmentParameteriv(
+                GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE, &cube_face);
+            glGetFramebufferAttachmentParameteriv(
+                GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER, &layer);
+            if (cube_face != 0 || layer != 0) {
+                /* Only a plain 2D texture attachment has the recorded byte
+                   layout; cube/array/3D faces need a different readback. */
+                fail_capture_locked("prefix_unsupported_target");
+                return -1;
+            }
+            out->color_type = colour.type;
+            out->color_name = colour.name;
+            out->color_level = colour.level;
+            out->width = colour.width;
+            out->height = colour.height;
+            internal_format = colour.internal_format;
+            sizes_known = colour.sizes_known;
+            red = colour.red_bits;
+            green = colour.green_bits;
+            blue = colour.blue_bits;
+            alpha = colour.alpha_bits;
+            observation_attachment depth_attachment;
+            observation_attachment stencil_attachment;
+            query_attachment_identity(GL_DEPTH_ATTACHMENT, &depth_attachment);
+            query_attachment_identity(GL_STENCIL_ATTACHMENT,
+                                      &stencil_attachment);
+            int depth_bits = 0, stencil_bits = 0;
+            if (depth_attachment.present &&
+                depth_stencil_bits_for(depth_attachment.internal_format,
+                                       &depth_bits, &stencil_bits)) {
+                out->depth_bits = depth_bits;
+                if (stencil_bits > 0) {
+                    out->stencil_bits = stencil_bits;
+                }
+            }
+            if (stencil_attachment.present) {
+                int extra_depth = 0, extra_stencil = 0;
+                if (depth_stencil_bits_for(stencil_attachment.internal_format,
+                                           &extra_depth, &extra_stencil) &&
+                    extra_stencil > 0) {
+                    out->stencil_bits = extra_stencil;
+                } else if (depth_attachment.present &&
+                           stencil_attachment.name == depth_attachment.name) {
+                    out->stencil_bits = 8;
+                }
+            }
+            out->depth_present =
+                depth_attachment.present || out->depth_bits > 0;
+            out->stencil_present =
+                stencil_attachment.present || out->stencil_bits > 0;
+        }
+    }
+    if (out->framebuffer == 0 && direct_texture < 0) {
+        if (red != 8 || green != 8 || blue != 8 ||
+            (alpha != 0 && alpha != 8)) {
+            out->unsupported_format = 1;
+            out->pixel_format = NULL;
+        } else {
+            out->internal_format = 0;
+            out->read_format = GL_BGRA;
+            out->read_type = GL_UNSIGNED_BYTE;
+            out->colour_bpp = 4;
+            out->pixel_format = "BGRA8";
+            out->alpha_applicable = alpha == 8;
+            out->color_component_type = GL_UNSIGNED_NORMALIZED;
+            out->color_red_bits = red;
+            out->color_green_bits = green;
+            out->color_blue_bits = blue;
+            out->color_alpha_bits = alpha;
+        }
+    } else if (!observation_format_identity_for(internal_format, &identity) ||
+               (sizes_known &&
+                (red != identity.red_bits || green != identity.green_bits ||
+                 blue != identity.blue_bits || alpha != identity.alpha_bits))) {
+        out->unsupported_format = 1;
+        out->pixel_format = NULL;
+    } else {
+        out->internal_format = identity.internal_format;
+        out->read_format = identity.read_format;
+        out->read_type = identity.read_type;
+        out->colour_bpp = identity.colour_bpp;
+        out->pixel_format = identity.pixel_format;
+        out->alpha_applicable = identity.alpha_applicable;
+        out->color_component_type = identity.component_type;
+        out->color_red_bits = identity.red_bits;
+        out->color_green_bits = identity.green_bits;
+        out->color_blue_bits = identity.blue_bits;
+        out->color_alpha_bits = identity.alpha_bits;
+    }
+    if (out->width <= 0 || out->height <= 0 || out->width > 8192 ||
+        out->height > 8192) {
+        fail_capture_locked("prefix_dimensions");
+        return -1;
+    }
+    return 0;
+}
+
+static int prefix_read_colour_locked(const prefix_target_state *target,
+                                     int event, uint8_t **out_pixels,
+                                     size_t *out_bytes) {
+    *out_pixels = NULL;
+    *out_bytes = 0;
+    size_t bytes = (size_t)target->width * (size_t)target->height *
+                   (size_t)target->colour_bpp;
+    if (g.test_only) {
+        uint8_t *pixels = (uint8_t *)malloc(bytes ? bytes : 1);
+        if (pixels == NULL) {
+            fail_capture_locked("prefix_read");
+            return -1;
+        }
+        for (size_t i = 0; i < bytes; i++) {
+            pixels[i] = (uint8_t)(i * 37u + 11u + (size_t)event * 7u);
+        }
+        *out_pixels = pixels;
+        *out_bytes = bytes;
+        return 0;
+    }
+    if (target->unsupported_format || target->pixel_format == NULL) {
+        fail_capture_locked("prefix_unsupported_format");
+        return -1;
+    }
+    if (!target->direct_texture && target->framebuffer != 0) {
+        GLint previous = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)target->framebuffer);
+        GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            fail_capture_locked("prefix_unsupported_target");
+            return -1;
+        }
+    }
+    uint32_t texture = target->direct_texture
+                           ? (uint32_t)target->color_name : 0;
+    uint32_t framebuffer = target->direct_texture
+                               ? 0 : (uint32_t)target->framebuffer;
+    GLenum read_buffer = target->framebuffer == 0
+                             ? GL_BACK : GL_COLOR_ATTACHMENT0;
+    uint8_t *pixels = NULL;
+    if (read_observation_pixels(framebuffer, read_buffer, texture,
+                                (uint32_t)target->width,
+                                (uint32_t)target->height, target->read_format,
+                                target->read_type, (size_t)target->colour_bpp,
+                                &pixels) != 0) {
+        free(pixels);
+        fail_capture_locked("prefix_read");
+        return -1;
+    }
+    *out_pixels = pixels;
+    *out_bytes = bytes;
+    return 0;
+}
+
+static int prefix_read_attachment_locked(const prefix_target_state *target,
+                                         GLenum format, GLenum type,
+                                         size_t bytes_per_pixel,
+                                         uint8_t **out_pixels,
+                                         size_t *out_bytes, size_t *out_capacity) {
+    *out_pixels = NULL;
+    *out_bytes = 0;
+    if (out_capacity != NULL) {
+        *out_capacity = 0;
+    }
+    if (target->direct_texture || target->framebuffer < 0) {
+        return -1;
+    }
+    size_t bytes = (size_t)target->width * (size_t)target->height *
+                   bytes_per_pixel;
+    if (g.test_only) {
+        uint8_t *pixels = (uint8_t *)calloc(bytes ? bytes : 1, 1);
+        if (pixels == NULL) {
+            fail_capture_locked("prefix_read");
+            return -1;
+        }
+        if (format == GL_DEPTH_COMPONENT && type == GL_FLOAT) {
+            float *values = (float *)pixels;
+            for (size_t i = 0; i < (size_t)target->width * target->height; i++) {
+                values[i] = 0.5f;
+            }
+        } else {
+            memset(pixels, 0x5A, bytes);
+        }
+        *out_pixels = pixels;
+        *out_bytes = bytes;
+        if (out_capacity != NULL) {
+            *out_capacity = bytes;
+        }
+        return 0;
+    }
+    uint8_t *pixels = NULL;
+    GLenum read_buffer = target->framebuffer == 0
+                             ? GL_BACK : GL_COLOR_ATTACHMENT0;
+    if (read_observation_pixels((uint32_t)target->framebuffer, read_buffer, 0,
+                                (uint32_t)target->width,
+                                (uint32_t)target->height, format, type,
+                                bytes_per_pixel, &pixels) != 0) {
+        free(pixels);
+        fail_capture_locked("prefix_read");
+        return -1;
+    }
+    *out_pixels = pixels;
+    *out_bytes = bytes;
+    if (out_capacity != NULL) {
+        *out_capacity = bytes;
+    }
+    return 0;
+}
+
+static int prefix_emit_target_locked(int event, const char *timing,
+                                     const char *kind, int direct_texture) {
+    if (!g.prefix_enabled) {
+        return 0;
+    }
+    if (g.prefix_failed) {
+        return -1;
+    }
+    if (g.prefix_observations == NULL) {
+        fail_capture_locked("prefix_not_open");
+        return -1;
+    }
+    if (event < 0 || event > g.prefix_end) {
+        return 0;
+    }
+    int post = strcmp(timing, "post_event") == 0;
+    if (g.prefix_sparse) {
+        if (!post) {
+            /* A selected range has no proven initial-state anchor. */
+            fail_capture_locked("prefix_initial_invalid");
+            return -1;
+        }
+        int selected = 0;
+        for (int index = 0; index < g.prefix_event_count; index++) {
+            if (g.prefix_events[index] == event) {
+                selected = 1;
+                break;
+            }
+        }
+        if (!selected) {
+            return 0;
+        }
+        if (g.prefix_count >= g.prefix_event_count ||
+            g.prefix_events[g.prefix_count] != event) {
+            /* Selected events execute in order; a repeated or skipped entry
+               would make the selection ambiguous. */
+            fail_capture_locked("prefix_gap");
+            return -1;
+        }
+    } else if (post) {
+        if (event != g.prefix_next_event) {
+            fail_capture_locked("prefix_gap");
+            return -1;
+        }
+    } else if (strcmp(timing, "pre_event") == 0) {
+        if (event != 0 || g.prefix_initial) {
+            fail_capture_locked("prefix_initial_invalid");
+            return -1;
+        }
+    } else {
+        fail_capture_locked("prefix_timing");
+        return -1;
+    }
+    prefix_target_state target;
+    if (prefix_target_locked(&target, direct_texture) != 0) {
+        return -1;
+    }
+    int unsupported_colour = target.unsupported_format;
+    if (unsupported_colour &&
+        (direct_texture >= 0 || strcmp(kind, "clear") != 0)) {
+        /* A draw or copy into an unsupported colour format cannot be
+           accounted for; only an isolated auxiliary clear may be recorded as
+           an explicit exclusion. */
+        fail_capture_locked("prefix_unsupported_format");
+        return -1;
+    }
+    int depth_required = 0;
+    int stencil_required = 0;
+    if (!g.prefix_depth_stencil) {
+        /* Colour equality is the asserted verdict; depth/stencil snapshots are
+           an explicitly enabled diagnostic and are not captured by default. */
+    } else if (strcmp(kind, "draw") == 0) {
+        if (!g.test_only) {
+            GLboolean depth_mask = GL_TRUE;
+            GLint depth_test = 0, stencil_test = 0;
+            glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
+            glGetIntegerv(GL_DEPTH_TEST, &depth_test);
+            glGetIntegerv(GL_STENCIL_TEST, &stencil_test);
+            depth_required = depth_mask != 0 || depth_test != 0;
+            stencil_required = stencil_test != 0;
+        }
+    } else if (strcmp(kind, "clear") == 0) {
+        depth_required = (g.prefix_clear_flags & 2) != 0;
+        stencil_required = (g.prefix_clear_flags & 4) != 0;
+        if (g.test_only) {
+            depth_required = 0;
+            stencil_required = 0;
+        }
+    }
+    /* A target without a depth (or stencil) attachment cannot read or write
+       that buffer, so the absence is a recorded fact rather than a missing
+       observation.  Every other unsupported state still fails closed. */
+    int depth_attachment_present = target.depth_present;
+    int stencil_attachment_present = target.stencil_present;
+    if (depth_required && !depth_attachment_present) {
+        depth_required = 0;
+    }
+    if (stencil_required && !stencil_attachment_present) {
+        stencil_required = 0;
+    }
+    uint64_t colour_bytes = unsupported_colour
+                                ? 0
+                                : (uint64_t)target.width *
+                                      (uint64_t)target.height * 4ull;
+    uint64_t depth_bytes = depth_required
+                               ? (uint64_t)target.width *
+                                     (uint64_t)target.height * 4ull
+                               : 0;
+    uint64_t stencil_bytes = stencil_required
+                                 ? (uint64_t)target.width * (uint64_t)target.height
+                                 : 0;
+    uint64_t projected = colour_bytes + depth_bytes + stencil_bytes;
+    if ((projected == 0 && !unsupported_colour) ||
+        g.prefix_bytes > g.prefix_max_bytes ||
+        projected > g.prefix_max_bytes - g.prefix_bytes) {
+        fail_capture_locked("prefix_budget");
+        return -1;
+    }
+    uint64_t started = now_ns();
+    uint8_t *colour = NULL;
+    size_t actual_colour = 0;
+    uint8_t *depth = NULL;
+    size_t actual_depth = 0;
+    uint8_t *stencil = NULL;
+    size_t actual_stencil = 0;
+    if (!unsupported_colour) {
+        if (prefix_read_colour_locked(&target, event, &colour,
+                                      &actual_colour) != 0 ||
+            actual_colour != (size_t)colour_bytes) {
+            free(colour);
+            return -1;
+        }
+    }
+    if (depth_required) {
+        if (prefix_read_attachment_locked(&target, GL_DEPTH_COMPONENT, GL_FLOAT,
+                                          sizeof(float), &depth, &actual_depth,
+                                          NULL) != 0 ||
+            actual_depth != (size_t)depth_bytes) {
+            free(colour);
+            free(depth);
+            return -1;
+        }
+    }
+    if (stencil_required) {
+        if (prefix_read_attachment_locked(&target, GL_STENCIL_INDEX,
+                                          GL_UNSIGNED_BYTE, sizeof(uint8_t),
+                                          &stencil, &actual_stencil,
+                                          NULL) != 0 ||
+            actual_stencil != (size_t)stencil_bytes) {
+            free(colour);
+            free(depth);
+            free(stencil);
+            return -1;
+        }
+    }
+    char colour_file[FTRACE_NAME] = "";
+    char colour_sha[65] = "";
+    if (!unsupported_colour &&
+        put_blob(colour, actual_colour, "prefix-color", colour_file,
+                 colour_sha) != 0) {
+        free(colour);
+        free(depth);
+        free(stencil);
+        return -1;
+    }
+    char depth_file[FTRACE_NAME] = "";
+    char depth_sha[65] = "";
+    char stencil_file[FTRACE_NAME] = "";
+    char stencil_sha[65] = "";
+    if (depth != NULL && actual_depth > 0) {
+        if (put_blob(depth, actual_depth, "prefix-depth", depth_file,
+                     depth_sha) != 0) {
+            free(colour);
+            free(depth);
+            free(stencil);
+            return -1;
+        }
+    }
+    if (stencil != NULL && actual_stencil > 0) {
+        if (put_blob(stencil, actual_stencil, "prefix-stencil", stencil_file,
+                     stencil_sha) != 0) {
+            free(colour);
+            free(depth);
+            free(stencil);
+            return -1;
+        }
+    }
+    char *target_json = NULL;
+    if (direct_texture >= 0) {
+        target_json = (char *)malloc(512);
+        if (target_json != NULL) {
+            snprintf(target_json, 512,
+                     "\"target\":{\"framebuffer\":-1,"
+                     "\"draw_buffer\":\"0x0\",\"read_buffer\":\"0x0\","
+                     "\"viewport\":[0,0,%d,%d],"
+                     "\"color_attachment\":{\"type\":\"texture\","
+                     "\"name\":%d,\"level\":0,"
+                     "\"internal_format\":\"%s\","
+                     "\"width\":%d,\"height\":%d}}",
+                     target.width, target.height, direct_texture,
+                     target.pixel_format, target.width, target.height);
+        }
+    } else if (g.test_only) {
+        /* The offline writer host has no GL context.  Emit the same target
+           shape without querying the driver. */
+        target_json = (char *)malloc(512);
+        if (target_json != NULL) {
+            if (target.framebuffer == 0) {
+                snprintf(target_json, 512,
+                         "\"target\":{\"framebuffer\":0,"
+                         "\"draw_buffer\":\"0x405\","
+                         "\"read_buffer\":\"0x405\","
+                         "\"viewport\":[0,0,%d,%d]}",
+                         target.width, target.height);
+            } else {
+                snprintf(target_json, 512,
+                         "\"target\":{\"framebuffer\":%d,"
+                         "\"draw_buffer\":\"0x8ce0\","
+                         "\"read_buffer\":\"0x8ce0\","
+                         "\"viewport\":[0,0,%d,%d],"
+                         "\"color_attachment\":{\"type\":\"texture\","
+                         "\"name\":%d,\"level\":0,"
+                         "\"internal_format\":\"RGBA8\","
+                         "\"width\":%d,\"height\":%d}}",
+                         target.framebuffer, target.width, target.height,
+                         target.color_name, target.width, target.height);
+            }
+        }
+    } else {
+        size_t target_size = 0;
+        FILE *target_stream = open_memstream(&target_json, &target_size);
+        if (target_stream != NULL) {
+            json_out target_out = {target_stream, 0};
+            capture_target(&target_out, NULL, NULL);
+            fclose(target_stream);
+            if (target_out.failed) {
+                free(target_json);
+                target_json = NULL;
+            }
+        }
+    }
+    if (target_json == NULL) {
+        free(colour);
+        free(depth);
+        free(stencil);
+        fail_capture_locked("prefix_record");
+        return -1;
+    }
+    char resource[64];
+    char target_name[64];
+    if (direct_texture >= 0) {
+        snprintf(resource, sizeof(resource), "tex:%d", direct_texture);
+        snprintf(target_name, sizeof(target_name), "%d", direct_texture);
+    } else if (target.framebuffer == 0) {
+        snprintf(resource, sizeof(resource), "fb:0");
+        snprintf(target_name, sizeof(target_name), "0");
+    } else if (target.color_type == GL_RENDERBUFFER) {
+        /* Renderbuffers and textures occupy different name spaces.  A
+           renderbuffer attachment is identified by its framebuffer, never by
+           a texture name that happens to share the numeric value. */
+        snprintf(resource, sizeof(resource), "fb:%d", target.framebuffer);
+        snprintf(target_name, sizeof(target_name), "%d", target.framebuffer);
+    } else {
+        snprintf(resource, sizeof(resource), "tex:%d", target.color_name);
+        snprintf(target_name, sizeof(target_name), "%d", target.color_name);
+    }
+    char depth_json[512];
+    if (depth != NULL) {
+        snprintf(depth_json, sizeof(depth_json),
+                 "\"depth\":{\"status\":\"captured\",\"file\":\"%s\","
+                 "\"sha256\":\"%s\",\"bytes\":%zu,\"format\":\"f32\","
+                 "\"width\":%d,\"height\":%d},",
+                 depth_file, depth_sha, actual_depth, target.width,
+                 target.height);
+    } else if (!depth_attachment_present) {
+        snprintf(depth_json, sizeof(depth_json),
+                 "\"depth\":{\"status\":\"not_present\"},");
+    } else {
+        snprintf(depth_json, sizeof(depth_json),
+                 "\"depth\":{\"status\":\"not_used\"},");
+    }
+    char stencil_json[512];
+    if (stencil != NULL) {
+        snprintf(stencil_json, sizeof(stencil_json),
+                 "\"stencil\":{\"status\":\"captured\",\"file\":\"%s\","
+                 "\"sha256\":\"%s\",\"bytes\":%zu,\"format\":\"u8\","
+                 "\"width\":%d,\"height\":%d}",
+                 stencil_file, stencil_sha, actual_stencil, target.width,
+                 target.height);
+    } else if (!stencil_attachment_present) {
+        snprintf(stencil_json, sizeof(stencil_json),
+                 "\"stencil\":{\"status\":\"not_present\"}");
+    } else {
+        snprintf(stencil_json, sizeof(stencil_json),
+                 "\"stencil\":{\"status\":\"not_used\"}");
+    }
+    char colour_json[512];
+    if (unsupported_colour) {
+        snprintf(colour_json, sizeof(colour_json),
+                 "\"color\":{\"status\":\"unsupported_format\","
+                 "\"reason\":\"not a comparable BGRA colour format\","
+                 "\"internal_format\":%d}",
+                 target.internal_format);
+    } else {
+        snprintf(colour_json, sizeof(colour_json),
+                 "\"color\":{\"file\":\"%s\",\"sha256\":\"%s\","
+                 "\"bytes\":%zu,\"pixel_format\":\"%s\"}",
+                 colour_file, colour_sha, actual_colour, target.pixel_format);
+    }
+    char pixel_format_json[64];
+    if (unsupported_colour || target.pixel_format == NULL) {
+        snprintf(pixel_format_json, sizeof(pixel_format_json), "null");
+    } else {
+        snprintf(pixel_format_json, sizeof(pixel_format_json), "\"%s\"",
+                 target.pixel_format);
+    }
+    char line[FTRACE_PREFIX_LINE_MAX];
+    int length = snprintf(
+        line, sizeof(line),
+        "{\"schema\":\"gfx-observation/v1\",\"event\":%d,"
+        "\"timing\":\"%s\",\"kind\":\"%s\",%s,"
+        "\"resource\":\"%s\",\"target_name\":\"%s\","
+        "\"pixel_format\":%s,\"alpha_applicable\":%s,"
+        "\"origin\":\"lower_left\","
+        "\"width\":%d,\"height\":%d,\"row_stride\":%d,"
+        "\"target_identity\":{\"internal_format\":%d,"
+        "\"component_type\":%d,\"red_bits\":%d,\"green_bits\":%d,"
+        "\"blue_bits\":%d,\"alpha_bits\":%d,"
+        "\"depth_present\":%s,\"stencil_present\":%s},"
+        "%s,%s%s,"
+        "\"readback_ns\":%llu,\"pid\":%d,"
+        "\"session_id\":\"%s\",\"capture_frame_id\":%llu,"
+        "\"budget\":{\"used_bytes\":%llu,\"max_bytes\":%llu,"
+        "\"used_ns\":%llu,\"max_ns\":%llu}}",
+        event, timing, kind, target_json, resource, target_name,
+        pixel_format_json,
+        unsupported_colour ? "false"
+                           : (target.alpha_applicable ? "true" : "false"),
+        target.width, target.height, target.width * target.colour_bpp,
+        target.internal_format, target.color_component_type,
+        target.color_red_bits, target.color_green_bits,
+        target.color_blue_bits, target.color_alpha_bits,
+        target.depth_present ? "true" : "false",
+        target.stencil_present ? "true" : "false",
+        colour_json, depth_json, stencil_json,
+        (unsigned long long)(now_ns() - started),
+        (int)getpid(), g.session_id,
+        (unsigned long long)g.capture_id,
+        (unsigned long long)(g.prefix_bytes + projected),
+        (unsigned long long)g.prefix_max_bytes,
+        (unsigned long long)(g.prefix_readback_ns + (now_ns() - started)),
+        (unsigned long long)g.prefix_max_ns);
+    free(target_json);
+    free(colour);
+    free(depth);
+    free(stencil);
+    if (length <= 0 || (size_t)length >= sizeof(line)) {
+        fail_capture_locked("prefix_record");
+        return -1;
+    }
+    if (fprintf(g.prefix_observations, "%s\n", line) < 0) {
+        fail_capture_locked("prefix_write");
+        return -1;
+    }
+    g.prefix_bytes += projected;
+    g.prefix_readback_ns += now_ns() - started;
+    if (g.prefix_readback_ns > g.prefix_max_ns) {
+        fail_capture_locked("prefix_time");
+        return -1;
+    }
+    if (post) {
+        g.prefix_count++;
+        if (!g.prefix_sparse) {
+            g.prefix_next_event = event + 1;
+        }
+    } else {
+        g.prefix_initial = 1;
+    }
+    return 0;
+}
+
+static int prefix_emit_locked(int event, const char *timing,
+                              const char *kind) {
+    return prefix_emit_target_locked(event, timing, kind, -1);
+}
+
+static int prefix_emit_texture_locked(int event, const char *timing,
+                                      const char *kind, int texture_name) {
+    return prefix_emit_target_locked(event, timing, kind, texture_name);
 }
 
 static void capture_draw_state(json_out *out, int indexed, GLint mode, int first,
@@ -3183,6 +4347,218 @@ static int file_sha256(const char *path, char out[65]) {
     return 0;
 }
 
+/* Records the live default drawable's effective pixel format (issue #278).
+   A value the driver cannot expose is emitted as "unavailable:<reason>"; the
+   requested CGL attribute is never substituted for the effective one. */
+static void write_cgl_drawable_state(FILE *file) {
+    CGLContextObj context = CGLGetCurrentContext();
+    if (context == NULL) {
+        fputs("\"cgl\":{\"status\":\"unavailable:no_current_context\"},"
+              "\"default_drawable\":{\"status\":\"unavailable:no_context\"},",
+              file);
+        return;
+    }
+    CGLPixelFormatObj format = CGLGetPixelFormat(context);
+    if (format == NULL) {
+        fputs("\"cgl\":{\"status\":\"unavailable:no_pixel_format\"},"
+              "\"default_drawable\":{\"status\":\"unavailable:no_context\"},",
+              file);
+        return;
+    }
+    fputs("\"cgl\":{\"status\":\"ok\",", file);
+    const struct {
+        CGLPixelFormatAttribute attribute;
+        const char *name;
+    } values[] = {
+        {kCGLPFAColorSize, "color_size"},
+        {kCGLPFAAlphaSize, "alpha_size"},
+        {kCGLPFADepthSize, "depth_size"},
+        {kCGLPFAStencilSize, "stencil_size"},
+        {kCGLPFASampleBuffers, "sample_buffers"},
+        {kCGLPFASamples, "samples"},
+        {kCGLPFAAccelerated, "accelerated"},
+        {kCGLPFADoubleBuffer, "double_buffer"},
+        {kCGLPFAStereo, "stereo"},
+        {kCGLPFARendererID, "renderer_id"},
+    };
+    for (size_t index = 0; index < sizeof(values) / sizeof(values[0]); index++) {
+        GLint value = 0;
+        CGLError error = CGLDescribePixelFormat(format, 0, values[index].attribute,
+                                                &value);
+        if (error == kCGLNoError) {
+            fprintf(file, "\"%s\":%d,", values[index].name, (int)value);
+        } else {
+            fprintf(file, "\"%s\":\"unavailable:cgl_error_%d\",",
+                    values[index].name, (int)error);
+        }
+    }
+    GLint profile = 0;
+    CGLError profile_error = CGLDescribePixelFormat(
+        format, 0, kCGLPFAOpenGLProfile, &profile);
+    if (profile_error != kCGLNoError) {
+        fputs("\"profile\":\"unavailable:cgl_error\"", file);
+    } else if (profile == kCGLOGLPVersion_3_2_Core) {
+        fputs("\"profile\":\"3.2_core\"", file);
+    } else if (profile == kCGLOGLPVersion_Legacy) {
+        fputs("\"profile\":\"legacy\"", file);
+    } else {
+        fprintf(file, "\"profile\":\"0x%x\"", (unsigned)profile);
+    }
+    /* The default drawable's attachments are only valid while framebuffer
+       zero is selected.  A timeout or incomplete-capture path can leave a
+       user FBO bound, so record the current bindings, query the default
+       framebuffer explicitly, and restore both targets afterwards. */
+    GLint binding = 0, previous_read_binding = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &binding);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_binding);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    GLenum default_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (default_status != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(file,
+                "},\"default_drawable\":{\"status\":"
+                "\"unavailable:incomplete_0x%x\"},",
+                (unsigned)default_status);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)binding);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_binding);
+        return;
+    }
+    fputs("},\"default_drawable\":{\"status\":\"ok\",", file);
+    GLint samples = 0, sample_buffers = 0;
+    GLint draw_buffer = 0, read_buffer = 0;
+    glGetIntegerv(GL_SAMPLES, &samples);
+    glGetIntegerv(GL_SAMPLE_BUFFERS, &sample_buffers);
+    glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
+    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
+    fprintf(file,
+            "\"draw_framebuffer_binding\":%d,\"samples\":%d,"
+            "\"sample_buffers\":%d,\"draw_buffer\":\"0x%x\","
+            "\"read_buffer\":\"0x%x\",\"render_target_path\":\"%s\",",
+            (int)binding, (int)samples, (int)sample_buffers,
+            (unsigned)draw_buffer, (unsigned)read_buffer,
+            binding == 0 ? "default-window" : "fbo");
+    const struct {
+        GLenum attachment;
+        const char *name;
+    } attachments[] = {
+        {GL_BACK_LEFT, "color_back_left"},
+        {GL_DEPTH, "depth"},
+        {GL_STENCIL, "stencil"},
+    };
+    int identity_supported = framebuffer_attachment_identity_supported();
+    for (size_t index = 0;
+         index < sizeof(attachments) / sizeof(attachments[0]); index++) {
+        GLint type = 0;
+        glGetFramebufferAttachmentParameteriv(
+            GL_FRAMEBUFFER, attachments[index].attachment,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
+        fprintf(file, "\"%s\":{\"object_type\":", attachments[index].name);
+        if (type == GL_NONE) {
+            fputs("\"absent\"", file);
+        } else if (type == GL_FRAMEBUFFER_DEFAULT) {
+            fputs("\"framebuffer_default\"", file);
+        } else if (type == GL_TEXTURE) {
+            fputs("\"texture\"", file);
+        } else if (type == GL_RENDERBUFFER) {
+            fputs("\"renderbuffer\"", file);
+        } else {
+            fprintf(file, "\"0x%x\"", (unsigned)type);
+        }
+        if (!identity_supported) {
+            fputs(",\"component_type\":\"unavailable:unsupported\"", file);
+            fputs("}", file);
+        } else {
+            GLint component = 0;
+            glGetFramebufferAttachmentParameteriv(
+                GL_FRAMEBUFFER, attachments[index].attachment,
+                GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &component);
+            fputs(",\"component_type\":", file);
+            switch ((GLenum)component) {
+                case GL_FLOAT: fputs("\"float\"", file); break;
+                case GL_INT: fputs("\"int\"", file); break;
+                case GL_UNSIGNED_INT: fputs("\"unsigned_int\"", file); break;
+                case GL_SIGNED_NORMALIZED:
+                    fputs("\"signed_normalized\"", file); break;
+                case GL_UNSIGNED_NORMALIZED:
+                    fputs("\"unsigned_normalized\"", file); break;
+                default:
+                    fprintf(file, "\"0x%x\"", (unsigned)component); break;
+            }
+            const struct {
+                GLenum parameter;
+                const char *name;
+            } sizes[] = {
+                {GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, "red_size"},
+                {GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, "green_size"},
+                {GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, "blue_size"},
+                {GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE, "alpha_size"},
+                {GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, "depth_size"},
+                {GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, "stencil_size"},
+            };
+            for (size_t size_index = 0;
+                 size_index < sizeof(sizes) / sizeof(sizes[0]); size_index++) {
+                GLint value = 0;
+                glGetFramebufferAttachmentParameteriv(
+                    GL_FRAMEBUFFER, attachments[index].attachment,
+                    sizes[size_index].parameter, &value);
+                fprintf(file, ",\"%s\":%d", sizes[size_index].name,
+                        (int)value);
+            }
+            fputs("}", file);
+        }
+        if (index + 1 < sizeof(attachments) / sizeof(attachments[0])) {
+            fputs(",", file);
+        }
+    }
+    fputs("},", file);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)binding);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_binding);
+}
+
+/* Emits the observation coverage block.  The observation file is the one
+   authoritative record; the manifest references it by digest, byte count and
+   record count instead of duplicating every record. */
+static void write_prefix_manifest(FILE *file) {
+    int complete = prefix_complete_locked();
+    char end_text[32];
+    if (g.prefix_sparse) {
+        snprintf(end_text, sizeof(end_text), "null");
+    } else {
+        snprintf(end_text, sizeof(end_text), "%d", g.prefix_end);
+    }
+    fprintf(file,
+            ",\"prefix\":{\"schema\":\"gfx-observations/v1\","
+            "\"mode\":\"%s\",\"authority\":\"%s\","
+            "\"end\":%s,\"status\":\"%s\",\"count\":%d,"
+            "\"post_event_count\":%d,\"initial\":%s,"
+            "\"depth_stencil\":%s,"
+            "\"observation_file\":\"%s\","
+            "\"observation_sha256\":\"%s\","
+            "\"observation_bytes\":%llu,",
+            g.prefix_sparse ? "selected" : "prefix",
+            g.test_only ? "synthetic" : "authentic",
+            end_text, complete ? "complete" : "incomplete", g.prefix_count,
+            g.prefix_count,
+            (!g.prefix_sparse && g.prefix_initial) ? "true" : "false",
+            g.prefix_depth_stencil ? "true" : "false",
+            g.prefix_file, g.prefix_sha,
+            (unsigned long long)g.prefix_file_bytes);
+    if (g.prefix_sparse) {
+        fputs("\"events\":[", file);
+        for (int index = 0; index < g.prefix_event_count; index++) {
+            fprintf(file, "%s%d", index == 0 ? "" : ",",
+                    g.prefix_events[index]);
+        }
+        fputs("],", file);
+    }
+    fprintf(file,
+            "\"budget\":{\"max_bytes\":%llu,\"used_bytes\":%llu,"
+            "\"max_ns\":%llu,\"used_ns\":%llu}}",
+            (unsigned long long)g.prefix_max_bytes,
+            (unsigned long long)g.prefix_bytes,
+            (unsigned long long)g.prefix_max_ns,
+            (unsigned long long)g.prefix_readback_ns);
+}
+
 static int write_frame_manifest(int complete, const char *reason) {
     char path[FTRACE_PATH];
     snprintf(path, sizeof(path), "%s/frame-trace.json.partial", g.dir);
@@ -3197,6 +4573,7 @@ static int write_frame_manifest(int complete, const char *reason) {
     fprintf(file, "\"complete\":%s,", bool_text(complete));
     fprintf(file, "\"reason\":\"%s\",", reason != NULL ? reason : "");
     fprintf(file, "\"truncated\":%s,", bool_text(g.truncated));
+    fprintf(file, "\"test_only\":%s,", bool_text(g.test_only));
     fprintf(file, "\"stream_validated\":%s,", bool_text(g.stream_validated));
     fprintf(file, "\"pid\":%d,", (int)getpid());
     fprintf(file, "\"present_index\":%d,", g.capturing_frame);
@@ -3249,6 +4626,7 @@ static int write_frame_manifest(int complete, const char *reason) {
                 bool_text(g.gl_dither), bool_text(g.gl_multisample),
                 g.gl_draw_buffer, g.gl_read_buffer);
     }
+    write_cgl_drawable_state(file);
     fprintf(file, "\"drawable_observed\":%s},", bool_text(g.gl_drawable_valid));
     fputs("\"frame\":{", file);
     fprintf(file, "\"width\":%u,", g.reference_width);
@@ -3278,7 +4656,11 @@ static int write_frame_manifest(int complete, const char *reason) {
     fputs("\"seed\":{", file);
     fprintf(file, "\"width\":%d,", g.seed_width);
     fprintf(file, "\"height\":%d},", g.seed_height);
-    fprintf(file, "\"blobs\":%d}\n", g.blob_count);
+    fprintf(file, "\"blobs\":%d", g.blob_count);
+    if (g.prefix_enabled) {
+        write_prefix_manifest(file);
+    }
+    fputs("}\n", file);
     if (ferror(file) != 0 || fflush(file) != 0 || fsync(fileno(file)) != 0) {
         fclose(file);
         unlink(path);
@@ -3845,6 +5227,37 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
            does not claim a reference image. */
         capture_dimensions_only(&g.reference_width, &g.reference_height);
     }
+    if (g.prefix_enabled) {
+        if (g.prefix_observations != NULL) {
+            int close_failed = ferror(g.prefix_observations) != 0 ||
+                               fflush(g.prefix_observations) != 0;
+            int descriptor = fileno(g.prefix_observations);
+            if (!close_failed && descriptor >= 0) {
+                close_failed = fsync(descriptor) != 0;
+            }
+            if (fclose(g.prefix_observations) != 0) {
+                close_failed = 1;
+            }
+            g.prefix_observations = NULL;
+            if (close_failed) {
+                fail_capture_locked("prefix_close");
+            }
+        }
+        char prefix_path[FTRACE_PATH];
+        struct stat prefix_stat;
+        if (snprintf(prefix_path, sizeof(prefix_path), "%s/%s", g.dir,
+                     g.prefix_file) >= (int)sizeof(prefix_path) ||
+            stat(prefix_path, &prefix_stat) != 0 ||
+            prefix_stat.st_size <= 0 ||
+            file_sha256(prefix_path, g.prefix_sha) != 0) {
+            fail_capture_locked("prefix_file");
+        } else {
+            g.prefix_file_bytes = (uint64_t)prefix_stat.st_size;
+        }
+        if (!prefix_complete_locked()) {
+            fail_capture_locked("prefix_incomplete");
+        }
+    }
     /* Every requested checkpoint must have reached a supported
        pre-operation boundary exactly once; a missed one is a capture
        failure, not a frame that can be qualified. */
@@ -4130,6 +5543,7 @@ static void start_capture_at_frame(int next_frame) {
     g.checkpoint_pending = -1;
     g.last_capture_target_fb = 0;
     g.test_target_fb_override = -1;
+    g.test_target_internal_override = -1;
     g.truncated = 0;
     g.capture_failed = 0;
     g.stream_validated = 0;
@@ -4157,6 +5571,24 @@ static void start_capture_at_frame(int next_frame) {
     g.seed_width = 0;
     g.seed_height = 0;
     open_events();
+    if (g.prefix_enabled) {
+        prefix_reset_locked();
+        snprintf(g.prefix_file, sizeof(g.prefix_file), "%s",
+                 "prefix-observations.jsonl");
+        char prefix_path[FTRACE_PATH];
+        if (snprintf(prefix_path, sizeof(prefix_path), "%s/%s", g.dir,
+                     g.prefix_file) >= (int)sizeof(prefix_path)) {
+            fail_capture_locked("prefix_open");
+        } else {
+            g.prefix_observations = fopen(prefix_path, "w");
+            if (g.prefix_observations == NULL) {
+                fail_capture_locked("prefix_open");
+            } else if (!g.prefix_sparse &&
+                       prefix_emit_locked(0, "pre_event", "initial") != 0) {
+                g.prefix_failed = 1;
+            }
+        }
+    }
 }
 
 static void continuous_rearm_after_frame(void) {
@@ -4182,6 +5614,25 @@ static uint64_t stream_caller_signature(void) {
 /* glIsEnabled with an unsupported enum plants a GL error in the engine's
    queue, which this observer must never do.  The sRGB enable is therefore
    queried only when the driver advertises the extension. */
+/* ARB_framebuffer_object adds attachment component/size queries.  On a driver
+   that lacks it those enums raise a GL error, so they are never queried: the
+   observer must not alter the engine's error queue. */
+static int framebuffer_attachment_identity_supported(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *version = (const char *)glGetString(GL_VERSION);
+        const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+        cached = 0;
+        if (version != NULL && atoi(version) >= 3) {
+            cached = 1;
+        } else if (extensions != NULL &&
+                   strstr(extensions, "GL_ARB_framebuffer_object") != NULL) {
+            cached = 1;
+        }
+    }
+    return cached;
+}
+
 static int srgb_extension_supported(void) {
     static int cached = -1;
     if (cached < 0) {
@@ -4237,6 +5688,7 @@ typedef struct {
     GLint draw_framebuffer;
     GLint read_framebuffer;
     GLint read_buffer;
+    GLint texture_binding;
     GLint pack_alignment;
     GLint pack_row;
     GLint pack_skip_rows;
@@ -4244,12 +5696,21 @@ typedef struct {
     GLint pack_buffer;
     GLboolean pack_swap_bytes;
     GLboolean pack_lsb_first;
-} drawable_readback_guard;
+    int texture_bound;
+    int draw_bound;
+} observation_readback_guard;
 
-static void end_drawable_readback(const drawable_readback_guard *guard) {
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)guard->draw_framebuffer);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)guard->read_framebuffer);
-    glReadBuffer((GLenum)guard->read_buffer);
+static void end_observation_readback(const observation_readback_guard *guard) {
+    if (guard->texture_bound) {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)guard->texture_binding);
+    } else {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)guard->read_framebuffer);
+        if (guard->draw_bound) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                              (GLuint)guard->draw_framebuffer);
+        }
+        glReadBuffer((GLenum)guard->read_buffer);
+    }
     glPixelStorei(GL_PACK_ALIGNMENT, guard->pack_alignment);
     glPixelStorei(GL_PACK_ROW_LENGTH, guard->pack_row);
     glPixelStorei(GL_PACK_SKIP_ROWS, guard->pack_skip_rows);
@@ -4261,15 +5722,14 @@ static void end_drawable_readback(const drawable_readback_guard *guard) {
     }
 }
 
-/* Select the real default drawable and a tightly packed pack state.  Every
-   mutation is restored by end_drawable_readback.  The engine's GL error queue
-   is deliberately never queried: OpenGL has no non-destructive peek and the
-   observer must not consume a pending renderer error. */
-static int begin_drawable_readback(drawable_readback_guard *guard) {
+/* Select one observation source and a tightly packed pack state.  Every
+   mutation is restored by end_observation_readback.  The engine's GL error
+   queue is deliberately never queried: OpenGL has no non-destructive peek and
+   the observer must not consume a pending renderer error. */
+static void begin_observation_readback(observation_readback_guard *guard,
+                                       GLuint framebuffer, GLenum read_buffer,
+                                       GLuint texture) {
     memset(guard, 0, sizeof(*guard));
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &guard->draw_framebuffer);
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &guard->read_framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &guard->read_buffer);
     glGetIntegerv(GL_PACK_ALIGNMENT, &guard->pack_alignment);
     glGetIntegerv(GL_PACK_ROW_LENGTH, &guard->pack_row);
     glGetIntegerv(GL_PACK_SKIP_ROWS, &guard->pack_skip_rows);
@@ -4277,22 +5737,22 @@ static int begin_drawable_readback(drawable_readback_guard *guard) {
     glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &guard->pack_buffer);
     glGetBooleanv(GL_PACK_SWAP_BYTES, &guard->pack_swap_bytes);
     glGetBooleanv(GL_PACK_LSB_FIRST, &guard->pack_lsb_first);
-    if (guard->draw_framebuffer != 0) {
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    }
-    if (guard->read_framebuffer != 0) {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    }
-    glReadBuffer(GL_BACK);
-    GLint selected_read_framebuffer = -1, selected_draw_framebuffer = -1;
-    GLint selected_read_buffer = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &selected_read_framebuffer);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &selected_draw_framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &selected_read_buffer);
-    if (selected_read_framebuffer != 0 || selected_draw_framebuffer != 0 ||
-        selected_read_buffer != GL_BACK) {
-        end_drawable_readback(guard);
-        return -1;
+    if (texture != 0) {
+        guard->texture_bound = 1;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &guard->texture_binding);
+        glBindTexture(GL_TEXTURE_2D, texture);
+    } else {
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &guard->draw_framebuffer);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &guard->read_framebuffer);
+        glGetIntegerv(GL_READ_BUFFER, &guard->read_buffer);
+        /* Reading the default drawable requires it to be the draw target as
+           well, so the driver reports its samples/integer state. */
+        guard->draw_bound = framebuffer == 0 && guard->draw_framebuffer != 0;
+        if (guard->draw_bound) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+        glReadBuffer(read_buffer);
     }
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glPixelStorei(GL_PACK_ROW_LENGTH, 0);
@@ -4303,6 +5763,39 @@ static int begin_drawable_readback(drawable_readback_guard *guard) {
     if (guard->pack_buffer != 0) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
+}
+
+/* One shared readback primitive for every observation source: the default
+   drawable, an offscreen framebuffer attachment, or a standalone texture.
+   glReadPixels/glGetTexImage are synchronous; glFinish is not issued because
+   the Apple driver implements it as an error-queue flush. */
+static int read_observation_pixels(uint32_t framebuffer, GLenum read_buffer,
+                                   uint32_t texture, uint32_t width,
+                                   uint32_t height, GLenum format,
+                                   GLenum type, size_t bytes_per_pixel,
+                                   uint8_t **out_pixels) {
+    *out_pixels = NULL;
+    if (width == 0 || height == 0 || width > 8192 || height > 8192 ||
+        bytes_per_pixel == 0 ||
+        (uint64_t)width * (uint64_t)height >
+            (uint64_t)(SIZE_MAX / bytes_per_pixel)) {
+        return -1;
+    }
+    size_t bytes = (size_t)width * (size_t)height * bytes_per_pixel;
+    uint8_t *pixels = (uint8_t *)calloc(bytes ? bytes : 1, 1);
+    if (pixels == NULL) {
+        return -1;
+    }
+    observation_readback_guard guard;
+    begin_observation_readback(&guard, framebuffer, read_buffer, texture);
+    if (texture != 0) {
+        glGetTexImage(GL_TEXTURE_2D, 0, format, type, pixels);
+    } else {
+        glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, format, type,
+                     pixels);
+    }
+    end_observation_readback(&guard);
+    *out_pixels = pixels;
     return 0;
 }
 
@@ -4336,22 +5829,27 @@ static int read_drawable_pixels(GLenum format, GLenum type,
         return -1;
     }
     size_t bytes = (size_t)width * (size_t)height * bytes_per_pixel;
-    uint8_t *pixels = calloc(bytes ? bytes : 1, 1);
+    uint8_t *pixels = (uint8_t *)calloc(bytes ? bytes : 1, 1);
     if (pixels == NULL) {
         return -1;
     }
-    drawable_readback_guard guard;
-    if (begin_drawable_readback(&guard) != 0) {
-        free(pixels);
-        return -1;
-    }
+    observation_readback_guard guard;
+    begin_observation_readback(&guard, 0, GL_BACK, 0);
     if (out_state != NULL) {
         query_drawable_state(out_state);
     }
-    /* glReadPixels is synchronous; do not issue glFinish, which the Apple
-       driver implements as an error-queue flush. */
+    GLint selected_draw = -1, selected_read = -1, selected_buffer = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &selected_draw);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &selected_read);
+    glGetIntegerv(GL_READ_BUFFER, &selected_buffer);
+    if (selected_draw != 0 || selected_read != 0 ||
+        selected_buffer != GL_BACK) {
+        end_observation_readback(&guard);
+        free(pixels);
+        return -1;
+    }
     glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, format, type, pixels);
-    end_drawable_readback(&guard);
+    end_observation_readback(&guard);
     *out_width = width;
     *out_height = height;
     *out_pixels = pixels;
@@ -4948,10 +6446,87 @@ int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
     return 0;
 }
 
+/* Host-test only: run one real observation (shared readback and writer) and
+   return its record.  Used by the synthetic GL-context state host. */
+int eu4_gfx_frame_trace_test_observe(const char *directory, int event,
+                                     const char *timing, const char *kind,
+                                     int texture_name, char *out_record,
+                                     size_t out_size) {
+    if (directory == NULL || directory[0] != '/' || timing == NULL ||
+        kind == NULL) {
+        return -1;
+    }
+    snprintf(g.dir, sizeof(g.dir), "%s", directory);
+    if (mkdir_p(g.dir) != 0) {
+        return -1;
+    }
+    char blobs[FTRACE_PATH];
+    snprintf(blobs, sizeof(blobs), "%s/blobs", g.dir);
+    if (mkdir_p(blobs) != 0) {
+        return -1;
+    }
+    if (g.prefix_observations != NULL) {
+        fclose(g.prefix_observations);
+        g.prefix_observations = NULL;
+    }
+    snprintf(g.prefix_file, sizeof(g.prefix_file), "%s",
+             "prefix-observations.jsonl");
+    char path[FTRACE_PATH];
+    if (snprintf(path, sizeof(path), "%s/%s", g.dir, g.prefix_file) >=
+        (int)sizeof(path)) {
+        return -1;
+    }
+    g.prefix_observations = fopen(path, "w");
+    if (g.prefix_observations == NULL) {
+        return -1;
+    }
+    g.prefix_enabled = 1;
+    g.prefix_end = event;
+    g.prefix_initial = 0;
+    g.prefix_next_event = 0;
+    g.prefix_count = 0;
+    g.prefix_bytes = 0;
+    g.prefix_readback_ns = 0;
+    g.prefix_failed = 0;
+    g.prefix_max_bytes = FTRACE_PREFIX_HARD_MAX_BYTES;
+    g.prefix_max_ns = FTRACE_PREFIX_MAX_NS;
+    int result = prefix_emit_target_locked(event, timing, kind, texture_name);
+    int write_failed = ferror(g.prefix_observations) != 0 ||
+                       fflush(g.prefix_observations) != 0;
+    fclose(g.prefix_observations);
+    g.prefix_observations = NULL;
+    g.prefix_enabled = 0;
+    if (write_failed) {
+        return -1;
+    }
+    if (out_record != NULL && out_size > 0) {
+        out_record[0] = 0;
+        FILE *observations = fopen(path, "r");
+        if (observations != NULL) {
+            if (fgets(out_record, (int)out_size, observations) == NULL) {
+                out_record[0] = 0;
+            }
+            size_t length = strlen(out_record);
+            while (length > 0 && (out_record[length - 1] == '\n' ||
+                                  out_record[length - 1] == '\r')) {
+                out_record[--length] = 0;
+            }
+            fclose(observations);
+        }
+    }
+    return result;
+}
+
 /* Host-test only: force the recorded target framebuffer for a scenario that
    has no GL context.  Value -1 restores the live query. */
 void eu4_gfx_frame_trace_test_set_target(int framebuffer) {
     g.test_target_fb_override = framebuffer;
+}
+
+/* Host-test only: force the recorded colour attachment's internal format for a
+   synthetic target so the format-aware observation path can be exercised. */
+void eu4_gfx_frame_trace_test_set_target_format(int internal_format) {
+    g.test_target_internal_override = internal_format;
 }
 
 /* Host-test only: the last checkpoint's record and attachment blob names, so a
@@ -5335,6 +6910,8 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
     }
     pthread_mutex_lock(&g_lock);
     call->retain = 0;
+    g.prefix_clear_pending_event = -1;
+    g.prefix_clear_flags = (int)frame->rsi;
     if (capture_timed_out_locked()) {
         pthread_mutex_unlock(&g_lock);
         eu4_gfx_frame_sealed_dispatch();
@@ -5410,6 +6987,9 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
             g.event_count++;
             g.clear_events++;
             checkpoint_clear_pending_locked();
+            g.prefix_clear_pending_event =
+                g.prefix_enabled && g.event_count - 1 <= g.prefix_end
+                    ? g.event_count - 1 : -1;
         }
         pthread_mutex_unlock(&g_lock);
         eu4_gfx_frame_sealed_dispatch();
@@ -5460,6 +7040,9 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
                 g.event_count++;
                 g.clear_events++;
                 checkpoint_clear_pending_locked();
+                g.prefix_clear_pending_event =
+                    g.prefix_enabled && g.event_count - 1 <= g.prefix_end
+                        ? g.event_count - 1 : -1;
             } else {
                 g.capture_failed = 1;
             }
@@ -5476,6 +7059,17 @@ void eu4_gfx_frame_trace_clear_exit(eu4_gfx_capture_frame *frame,
     (void)frame;
     (void)record;
     call->retain = 0;
+    if (!g.enabled || !g.prefix_enabled || !g.armed) {
+        return;
+    }
+    pthread_mutex_lock(&g_lock);
+    int event = g.prefix_clear_pending_event;
+    g.prefix_clear_pending_event = -1;
+    if (event >= 0) {
+        (void)prefix_emit_locked(event, "post_event", "clear");
+    }
+    pthread_mutex_unlock(&g_lock);
+    eu4_gfx_frame_sealed_dispatch();
 }
 
 static void draw_entry_common(eu4_gfx_capture_frame *frame,
@@ -5681,6 +7275,11 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                     g.event_count++;
                     g.draw_events++;
                     checkpoint_clear_pending_locked();
+                    if (g.prefix_enabled &&
+                        g.event_count - 1 <= g.prefix_end) {
+                        (void)prefix_emit_locked(g.event_count - 1,
+                                                 "post_event", "draw");
+                    }
                 }
             }
         }
@@ -5746,6 +7345,11 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 g.event_count++;
                 g.draw_events++;
                 checkpoint_clear_pending_locked();
+                if (g.prefix_enabled &&
+                    g.event_count - 1 <= g.prefix_end) {
+                    (void)prefix_emit_locked(g.event_count - 1,
+                                             "post_event", "draw");
+                }
             } else {
                 fail_capture_locked(g_capture_failure_reason != NULL
                                         ? g_capture_failure_reason
@@ -5830,6 +7434,23 @@ void eu4_gfx_frame_trace_draw_instanced_exit(eu4_gfx_capture_frame *frame,
     draw_exit_common(frame, call, 1, pending.mode, pending.first,
                      pending.count, pending.instances, pending.base_vertex,
                      pending.master);
+}
+
+void eu4_gfx_frame_trace_copy_exit(void) {
+    if (!g.enabled || !g.prefix_enabled || !g.armed) {
+        return;
+    }
+    pthread_mutex_lock(&g_lock);
+    int event = g.prefix_copy_pending_event;
+    int texture = g.prefix_copy_pending_texture;
+    g.prefix_copy_pending_event = -1;
+    g.prefix_copy_pending_texture = -1;
+    if (event >= 0 && texture > 0) {
+        (void)prefix_emit_texture_locked(event, "post_event", "resolve",
+                                         texture);
+    }
+    pthread_mutex_unlock(&g_lock);
+    eu4_gfx_frame_sealed_dispatch();
 }
 
 int eu4_gfx_frame_trace_test_manifest(const char *directory) {

@@ -46,6 +46,8 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
     return 1;
 }
 
+void eu4_gfx_frame_trace_copy_exit(void) {}
+
 void eu4_gfx_interpose_test_set_resolvers(void *(*next)(const char *),
                                           void *(*framework)(const char *));
 void eu4_gfx_interpose_test_invoke(GLenum target, GLint level, GLint xoffset,

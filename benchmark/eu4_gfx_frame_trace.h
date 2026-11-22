@@ -105,8 +105,15 @@ int eu4_gfx_frame_trace_test_reference(const char *directory);
    addressed colour blob name. */
 int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
                                         char *out_file, size_t out_size);
+/* Host-test only: run one real observation (shared guarded readback and
+   writer) and return its single record. */
+int eu4_gfx_frame_trace_test_observe(const char *directory, int event,
+                                     const char *timing, const char *kind,
+                                     int texture_name, char *out_record,
+                                     size_t out_size);
 /* Host-test only: force the recorded target framebuffer (no GL context). */
 void eu4_gfx_frame_trace_test_set_target(int framebuffer);
+void eu4_gfx_frame_trace_test_set_target_format(int internal_format);
 /* Host-test only: run the production selected-event checkpoint path with the
    current default framebuffer and GL test state. */
 int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
@@ -161,6 +168,11 @@ typedef struct {
 } eu4_gfx_copy_event;
 
 int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event);
+
+/* Post-copy notification.  Called immediately after the real GL copy when the
+   opt-in exact-prefix mode is active, so the destination is observed after the
+   operation executed.  It is a no-op otherwise. */
+void eu4_gfx_frame_trace_copy_exit(void);
 
 /* GL lifecycle notification from the copy/texture interposer.  Deleted GL
    names are removed from the carried render-target set immediately and are

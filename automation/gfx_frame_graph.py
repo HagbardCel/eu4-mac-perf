@@ -25,6 +25,8 @@ import json
 import re
 from pathlib import Path
 
+from automation import gfx_observation
+
 SCHEMA = "gfx-frame-graph/v1"
 COVERAGE_SCHEMA = "gfx-frame-coverage-report/v1"
 
@@ -1143,6 +1145,9 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
             "the capture records draws and clears only; a sampled full-extent "
             "texture without a producer indicates an uncaptured resolve/copy "
             "operation (for example _GfxResolve)")
+    prefix = prefix_coverage(trace, events, resources)
+    if prefix["status"] == "invalid":
+        contract_problems.extend(prefix["problems"])
     coverage = m6_frame.coverage_report(trace)
     for problem in coverage.get("missing") or []:
         issue = problem.get("issue")
@@ -1195,6 +1200,7 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
         "resources": resources,
         "events": event_rows,
         "default_checkpoints": default_checkpoints,
+        "prefix": prefix,
         "counts": {
             "events": len(events),
             "draws": sum(1 for event in events if event.get("kind") == "draw"),
@@ -1224,6 +1230,395 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
             key for key, value in resources.items()
             if value.get("origin") == BOUNDARY
             and (value.get("history") or {}).get("carried")),
+    }
+
+
+def _event_output_resource(event: dict) -> str | None:
+    """Resource written by one executed event, or ``None`` if it has none."""
+    kind = event.get("kind")
+    if kind in ("resolve", "copy"):
+        destination = _name(event.get("destination"))
+        return f"tex:{destination}" if destination else None
+    if kind in ("draw", "clear"):
+        return _target_resource(event.get("target") or {})[0]
+    return None
+
+
+def _selected_coverage(prefix: dict, events: list[dict],
+                       resources: dict) -> dict:
+    """Validate selected post-event observations without claiming a prefix."""
+    problems: list[str] = []
+    selection = [int(value) for value in prefix.get("events") or []]
+    post = prefix.get("post_events") or []
+    by_event: dict[int, dict] = {}
+    excluded_events: list[int] = []
+    for record in post:
+        event_index = record.get("event")
+        if not isinstance(event_index, int) or isinstance(event_index, bool):
+            problems.append("selected observation has an invalid event index")
+            continue
+        if event_index in by_event:
+            problems.append(f"selected event {event_index} is observed twice")
+            continue
+        by_event[event_index] = record
+    if by_event.keys() != set(selection):
+        problems.append("selected observations do not match the selection")
+    for event_index in selection:
+        if event_index < 0 or event_index >= len(events):
+            problems.append(
+                f"selected event {event_index} is outside the event stream")
+            continue
+        record = by_event.get(event_index)
+        if record is None:
+            problems.append(
+                f"selected event {event_index} has no post-event observation")
+            continue
+        event = events[event_index]
+        expected = _event_output_resource(event)
+        if expected is None:
+            problems.append(
+                f"selected event {event_index} has no identified output "
+                "resource")
+            continue
+        if record.get("resource") != expected:
+            problems.append(
+                f"selected event {event_index} observes "
+                f"{record.get('resource')!r}, not {expected!r}")
+        if record.get("kind") != event.get("kind"):
+            problems.append(
+                f"selected event {event_index} kind disagrees with the stream")
+        colour = record.get("color") or {}
+        if colour.get("status") != "unsupported_format":
+            problems.extend(
+                f"selected event {event_index}: {problem}"
+                for problem in format_scope(record)["problems"])
+        else:
+            excluded_events.append(event_index)
+    return {
+        "status": "invalid" if problems else "selected",
+        "mode": "selected",
+        "end": None,
+        "events": selection,
+        "post_events": post,
+        "initial": None,
+        "initial_state": [],
+        "state_coverage": [],
+        "excluded_events": sorted(excluded_events),
+        "problems": problems,
+    }
+
+
+def prefix_coverage(trace: dict, events: list[dict],
+                    resources: dict) -> dict:
+    """Validate opt-in exact-prefix coverage against the captured event stream.
+
+    Every executed event from 0 through the declared end must have exactly one
+    post-event observation naming the event's own written resource, and every
+    resource consumed inside the prefix must have an in-prefix producer whose
+    write was observed (or be an explicitly external/boundary input).  A
+    missing, misattributed or unobserved operation is a coverage failure, never
+    an implicit match.
+    """
+    prefix = trace.get("_prefix")
+    if prefix is None:
+        return {"status": "absent", "end": None, "post_events": [],
+                "initial": None, "excluded_events": [], "problems": []}
+    if prefix.get("mode") == "selected":
+        return _selected_coverage(prefix, events, resources)
+    problems: list[str] = []
+    end = prefix["end"]
+    post = prefix["post_events"]
+    if len(events) <= end:
+        return {"status": "invalid", "end": end, "post_events": [],
+                "initial": prefix["initial"],
+                "problems": [f"prefix end {end} exceeds the "
+                             f"{len(events)}-event stream"]}
+    by_event: dict[int, dict] = {}
+    excluded_events: list[int] = []
+    for record in post:
+        event_index = record.get("event")
+        if not isinstance(event_index, int) or isinstance(event_index, bool):
+            problems.append("prefix observation has an invalid event index")
+            continue
+        if event_index in by_event:
+            problems.append(f"prefix event {event_index} is observed twice")
+            continue
+        by_event[event_index] = record
+    for event_index in range(end + 1):
+        event = events[event_index]
+        record = by_event.get(event_index)
+        if record is None:
+            problems.append(
+                f"prefix event {event_index} has no post-event observation")
+            continue
+        expected = _event_output_resource(event)
+        if expected is None:
+            problems.append(
+                f"prefix event {event_index} has no identified output "
+                "resource")
+            continue
+        if record.get("resource") != expected:
+            problems.append(
+                f"prefix event {event_index} observes "
+                f"{record.get('resource')!r}, not {expected!r}")
+        if record.get("kind") != event.get("kind"):
+            problems.append(
+                f"prefix event {event_index} kind disagrees with the stream")
+        colour = record.get("color") or {}
+        if colour.get("status") != "unsupported_format":
+            problems.extend(
+                f"prefix event {event_index}: {problem}"
+                for problem in format_scope(record)["problems"])
+        if colour.get("status") == "unsupported_format":
+            if event.get("kind") != "clear":
+                problems.append(
+                    f"prefix event {event_index} has an unsupported colour "
+                    "format for a non-clear operation")
+                continue
+            resource = resources.get(expected) or {}
+            consumers = [
+                int(item["event"]) for item in
+                resource.get("consumers") or []
+                if item.get("event") is not None
+                and int(item["event"]) <= end]
+            if consumers:
+                problems.append(
+                    f"prefix event {event_index} writes an unsupported colour "
+                    f"format to {expected}, which is consumed at "
+                    f"{consumers[0]}")
+                continue
+            later = [
+                item for item in resource.get("producers") or []
+                if item.get("event") is not None
+                and event_index < int(item["event"]) <= end]
+            unsafe = [
+                item for item in later
+                if not item.get("cleared")
+                or not (item.get("coverage") or {}).get("color_full")]
+            if unsafe:
+                problems.append(
+                    f"prefix event {event_index} writes an unsupported colour "
+                    f"format to {expected}, which is rewritten without a full "
+                    "clear inside the prefix")
+                continue
+            excluded_events.append(event_index)
+            continue
+        producers = [
+            int(item["event"]) for item in
+            (resources.get(expected) or {}).get("producers") or []
+            if item.get("event") is not None]
+        if event_index not in producers:
+            problems.append(
+                f"prefix event {event_index} is not a producer of {expected}")
+    initial = prefix.get("initial") or {}
+    if initial.get("resource") != "fb:0":
+        # The initial observation is the default framebuffer state; a
+        # non-default initial target is allowed only when it is the frame's
+        # first written resource and is covered by its own producer.
+        expected_initial = _event_output_resource(events[0])
+        if initial.get("resource") != expected_initial:
+            problems.append(
+                "prefix initial observation does not name the first event's "
+                "render target")
+    for key, resource in resources.items():
+        consumers = [
+            int(item["event"]) for item in resource.get("consumers") or []
+            if item.get("event") is not None and int(item["event"]) <= end]
+        if not consumers:
+            continue
+        producers = [
+            int(item["event"]) for item in resource.get("producers") or []
+            if item.get("event") is not None and int(item["event"]) <= end]
+        if producers:
+            last = max(producers)
+            if last not in by_event:
+                problems.append(
+                    f"{key} is consumed inside the prefix but its last "
+                    f"in-prefix write at event {last} is not observed")
+                continue
+        elif resource.get("origin") not in (EXTERNAL, BOUNDARY):
+            problems.append(
+                f"{key} is consumed inside the prefix with no in-prefix "
+                "producer and no initial observation")
+    initial_state: list[dict] = []
+    state_coverage: list[dict] = []
+
+    def full_clear_before(resource_key: str, event_index: int,
+                          component: str) -> bool:
+        resource = resources.get(resource_key) or {}
+        for producer in resource.get("producers") or []:
+            producer_event = producer.get("event")
+            if (producer_event is None
+                    or int(producer_event) >= event_index):
+                continue
+            if not producer.get("cleared"):
+                continue
+            coverage = producer.get("coverage") or {}
+            if coverage.get(f"{component}_full") is True:
+                return True
+        return False
+
+    for event_index, event in enumerate(events[:end + 1]):
+        kind = event.get("kind")
+        if kind not in ("draw", "resolve", "copy"):
+            continue
+        target = event.get("target") or {}
+        target_key = _event_output_resource(event)
+        if kind in ("resolve", "copy"):
+            source = _name(event.get("source") or event.get("source_texture"))
+            source_key = ("fb:0" if source in ("", "0")
+                          else f"tex:{source}")
+            if not full_clear_before(source_key, event_index, "color"):
+                problems.append(
+                    f"prefix event {event_index} reads {source_key} before a "
+                    "full colour clear")
+            continue
+        if target_key is None:
+            problems.append(
+                f"prefix event {event_index} has no identified output target")
+            continue
+        state = event.get("state") or {}
+        depth = state.get("depth") or {}
+        stencil = state.get("stencil") or {}
+        depth_used = bool(depth.get("test") or depth.get("write"))
+        stencil_used = bool(stencil.get("test") or stencil.get("write"))
+        depth_present = target_key == "fb:0" or bool(
+            target.get("depth_attachment"))
+        stencil_present = target_key == "fb:0" or bool(
+            target.get("depth_attachment"))
+        if not full_clear_before(target_key, event_index, "color"):
+            if target_key == "fb:0" and prefix.get("initial"):
+                # The initial default-framebuffer observation is captured, but
+                # it is only a verified input when a later full clear does not
+                # overwrite it before consumption.
+                problems.append(
+                    f"prefix event {event_index} reads {target_key} before a "
+                    "full colour clear")
+            else:
+                problems.append(
+                    f"prefix event {event_index} reads {target_key} before a "
+                    "full colour clear")
+        if depth_used and depth_present and not full_clear_before(
+                target_key, event_index, "depth"):
+            problems.append(
+                f"prefix event {event_index} uses depth on {target_key} "
+                "before a full depth clear")
+        if stencil_used and stencil_present and not full_clear_before(
+                target_key, event_index, "stencil"):
+            problems.append(
+                f"prefix event {event_index} uses stencil on {target_key} "
+                "before a full stencil clear")
+        state_coverage.append({
+            "event": event_index,
+            "resource": target_key,
+            "color_initialized": full_clear_before(
+                target_key, event_index, "color"),
+            "depth_used": depth_used,
+            "depth_present": depth_present,
+            "depth_initialized": (full_clear_before(
+                target_key, event_index, "depth") if depth_present else None),
+            "stencil_used": stencil_used,
+            "stencil_present": stencil_present,
+            "stencil_initialized": (full_clear_before(
+                target_key, event_index, "stencil") if stencil_present else None),
+        })
+    for key, resource in resources.items():
+        consumers = [
+            int(item["event"]) for item in resource.get("consumers") or []
+            if item.get("event") is not None and int(item["event"]) <= end]
+        if not consumers:
+            continue
+        producers = [
+            item for item in resource.get("producers") or []
+            if item.get("event") is not None
+            and int(item["event"]) < min(consumers)]
+        first = min(consumers)
+        if producers:
+            producer = min(producers, key=lambda item: int(item["event"]))
+            full_clear = any(
+                item.get("cleared")
+                and (item.get("coverage") or {}).get("color_full") is True
+                for item in producers)
+            initial_state.append({
+                "resource": key,
+                "first_consumer": first,
+                "first_producer": int(producer["event"]),
+                "status": "overwritten_by_producer",
+                "proof": ("the first in-prefix writer is an observed full clear"
+                          if (producer.get("cleared")
+                              and (producer.get("coverage") or {}).get(
+                                  "color_full") is True)
+                          else ("an observed full clear precedes the first "
+                                "consumer" if full_clear
+                                else "the first in-prefix writer is observed")),
+            })
+        elif key == "fb:0" and prefix.get("initial"):
+            initial_state.append({
+                "resource": key,
+                "first_consumer": first,
+                "first_producer": None,
+                "status": "initial_observation",
+                "proof": "the initial pre-event-0 default-framebuffer state is "
+                         "captured; no unverified pre-frame input is assumed",
+            })
+        elif resource.get("origin") in (EXTERNAL, BOUNDARY):
+            initial_state.append({
+                "resource": key,
+                "first_consumer": first,
+                "first_producer": None,
+                "status": "declared_external_input",
+                "proof": "the resource is an explicit external/boundary input, "
+                         "not renderer output",
+            })
+        else:
+            problems.append(
+                f"{key} is consumed inside the prefix with no observed producer "
+                "and no initial-state proof")
+    if prefix.get("initial") and not any(
+            row["resource"] == "fb:0" for row in initial_state):
+        fb0 = resources.get("fb:0") or {}
+        consumers = [
+            int(item["event"]) for item in fb0.get("consumers") or []
+            if item.get("event") is not None]
+        first_consumer = min(consumers) if consumers else None
+        producers = [
+            item for item in fb0.get("producers") or []
+            if item.get("event") is not None
+            and (first_consumer is None or int(item["event"]) < first_consumer)]
+        overwritten = any(
+            item.get("cleared")
+            and (item.get("coverage") or {}).get("color_full") is True
+            for item in producers)
+        if first_consumer is None or first_consumer > end:
+            status = "not_consumed_inside_prefix"
+            proof = ("the initial default-framebuffer state is captured and no "
+                     "default-framebuffer consumer exists inside the prefix")
+        elif overwritten:
+            status = "overwritten_before_consumption"
+            proof = ("an observed full default-framebuffer clear precedes the "
+                     "first default-framebuffer consumer")
+        else:
+            status = "unverified_initial_consumption"
+            proof = ("the initial default-framebuffer state is captured but no "
+                     "full clear proves that it is irrelevant")
+            problems.append(proof)
+        initial_state.append({
+            "resource": "fb:0",
+            "first_consumer": first_consumer,
+            "first_producer": (int(min(producers, key=lambda item: int(
+                item["event"]))["event"]) if producers else None),
+            "status": status,
+            "proof": proof,
+        })
+    return {
+        "status": "complete" if not problems else "invalid",
+        "end": end,
+        "initial": prefix.get("initial"),
+        "post_events": post,
+        "excluded_events": excluded_events,
+        "initial_state": initial_state,
+        "state_coverage": state_coverage,
+        "problems": problems,
     }
 
 
@@ -1339,6 +1734,70 @@ def checkpoint_plan(graph: dict) -> list[dict]:
     return plan
 
 
+def format_scope(observation: dict) -> dict:
+    """Derive the applicable comparison channels from sealed attachment identity.
+
+    The definition lives in :mod:`automation.gfx_observation` so the native
+    writer, the graph, the portable case builder and the reconciler cannot
+    disagree.  The declared ``alpha_applicable`` field is evidence to be
+    checked, never an authority.
+    """
+    return gfx_observation.format_scope(observation)
+
+
+def _alpha_applicable(observation: dict) -> bool:
+    return format_scope(observation)["alpha_applicable"]
+
+
+def prefix_checkpoint_plan(graph: dict) -> list[dict]:
+    """Post-event Metal checkpoints for the opt-in exact-prefix mode.
+
+    The reference is the original EU4 post-event readback captured natively.
+    Each entry names ``timing="post_event"`` so the replay reads the target
+    after the event executed, never before it.
+    """
+    prefix = graph.get("prefix") or {}
+    if prefix.get("status") not in ("complete", "selected"):
+        return []
+    resources = graph.get("resources") or {}
+    plan: list[dict] = []
+    for observation in prefix.get("post_events") or []:
+        if ((observation.get("color") or {}).get("status")
+                == "unsupported_format"):
+            continue
+        scope = format_scope(observation)
+        event = int(observation["event"])
+        resource = str(observation["resource"])
+        target = str(observation["target_name"])
+        colour = observation.get("color") or {}
+        plan.append({
+            "event": event,
+            "target": target,
+            "resource": resource,
+            "timing": "post_event",
+            "file": f"prefix-event{event}-{target}.bgra",
+            "reference_file": colour.get("file"),
+            "reference_sha256": colour.get("sha256"),
+            "reference_width": observation.get("width"),
+            "reference_height": observation.get("height"),
+            "reference_pixel_format": colour.get("pixel_format")
+            or observation.get("pixel_format"),
+            "alpha_applicable": scope["alpha_applicable"],
+            "compared_channels": scope["compared_channels"],
+            "producer_events": [event],
+            "writer_authority": "prefix_observation",
+            "session_id": _observation_identity(observation, "session_id"),
+            "capture_frame_id": _observation_identity(
+                observation, "capture_frame_id"),
+        })
+    return plan
+
+
+def _observation_identity(observation: dict, field: str):
+    value = observation.get(field)
+    return value if value is not None else None
+
+
 def checkpoint_request(graph: dict) -> dict:
     """Build the deterministic checkpoint request for one graph.
 
@@ -1365,6 +1824,28 @@ def checkpoint_request(graph: dict) -> dict:
         # derived before them therefore has a different digest; legacy
         # published requests remain valid through the explicit legacy path,
         # but their exact source digest is not preserved by re-derivation.
+        if item.get("session_id") is not None:
+            entry["session_id"] = item["session_id"]
+        if item.get("capture_frame_id") is not None:
+            entry["capture_frame_id"] = item["capture_frame_id"]
+        checkpoints.append(entry)
+    for item in prefix_checkpoint_plan(graph):
+        entry = {
+            "event": item["event"],
+            "target": item["target"],
+            "resource": item["resource"],
+            "timing": "post_event",
+            "file": item["file"],
+            "reference_file": item["reference_file"],
+            "reference_sha256": item["reference_sha256"],
+            "reference_width": item["reference_width"],
+            "reference_height": item["reference_height"],
+            "reference_pixel_format": item.get("reference_pixel_format"),
+            "alpha_applicable": item.get("alpha_applicable", True),
+            "compared_channels": item.get("compared_channels"),
+            "producer_events": item["producer_events"],
+            "writer_authority": item["writer_authority"],
+        }
         if item.get("session_id") is not None:
             entry["session_id"] = item["session_id"]
         if item.get("capture_frame_id") is not None:

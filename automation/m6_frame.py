@@ -34,7 +34,8 @@ import time
 import uuid
 from pathlib import Path
 
-from automation import campaign_guard, replay_host_dependencies  # noqa: E402
+from automation import (  # noqa: E402
+    campaign_guard, gfx_observation, replay_host_dependencies)
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
@@ -58,6 +59,11 @@ TARGETS = [
 
 class FrameError(RuntimeError):
     pass
+
+
+def _is_sha256(value) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value))
 
 
 def _sha256(path: Path) -> str:
@@ -105,6 +111,464 @@ def _read_json(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
+
+PREFIX_SCHEMA = gfx_observation.OBSERVATIONS_SCHEMA
+PREFIX_OBSERVATION_SCHEMA = gfx_observation.OBSERVATION_SCHEMA
+
+
+def _prefix_record_problems(record, index: int,
+                            expected_event: int | None = None) -> list[str]:
+    """Validate one observation's self-description against its selection."""
+    if not isinstance(record, dict):
+        return [f"prefix observation {index} is not an object"]
+    problems: list[str] = []
+    if not gfx_observation.is_supported_observation_schema(
+            record.get("schema")):
+        problems.append(f"prefix observation {index} has an unsupported schema")
+    expected = index if expected_event is None else expected_event
+    if record.get("event") != expected:
+        problems.append(
+            f"prefix observation {index} names event {record.get('event')!r}, "
+            f"expected {expected}")
+    timing = record.get("timing")
+    if timing not in ("pre_event", "post_event"):
+        problems.append(f"prefix observation {index} has an invalid timing")
+    if record.get("origin") != "lower_left":
+        problems.append(f"prefix observation {index} is not lower-left origin")
+    pixel_format = record.get("pixel_format")
+    colour_block = record.get("color") if isinstance(record.get("color"), dict) else {}
+    if (pixel_format not in ("BGRA8", "RGBA8", "R32F")
+            and colour_block.get("status") != "unsupported_format"):
+        problems.append(f"prefix observation {index} has an unsupported "
+                        "pixel format")
+    width = record.get("width")
+    height = record.get("height")
+    if (not isinstance(width, int) or isinstance(width, bool)
+            or not 0 < width <= 8192):
+        problems.append(f"prefix observation {index} has an invalid width")
+        width = None
+    if (not isinstance(height, int) or isinstance(height, bool)
+            or not 0 < height <= 8192):
+        problems.append(f"prefix observation {index} has an invalid height")
+        height = None
+    stride = record.get("row_stride")
+    if width is not None and stride != width * 4:
+        problems.append(f"prefix observation {index} row stride does not "
+                        "match its width")
+    colour = record.get("color")
+    if not isinstance(colour, dict):
+        problems.append(f"prefix observation {index} has no colour image")
+    elif colour.get("status") == "unsupported_format":
+        if record.get("kind") != "clear":
+            problems.append(
+                f"prefix observation {index} has an unsupported colour "
+                "format for a non-clear operation")
+        if pixel_format is not None:
+            problems.append(
+                f"prefix observation {index} declares a pixel format for an "
+                "unsupported colour target")
+    else:
+        name = colour.get("file")
+        if (not isinstance(name, str) or not name
+                or Path(name).name != name):
+            problems.append(f"prefix observation {index} has an invalid "
+                            "colour blob name")
+        if width is not None and height is not None and colour.get(
+                "bytes") != width * height * 4:
+            problems.append(f"prefix observation {index} colour byte count "
+                            "does not match its dimensions")
+        if colour.get("pixel_format") not in (None, pixel_format):
+            problems.append(f"prefix observation {index} colour pixel format "
+                            "disagrees with the observation")
+        scope = gfx_observation.format_scope(record)
+        for problem in scope["problems"]:
+            problems.append(f"prefix observation {index}: {problem}")
+        if not _is_sha256(colour.get("sha256")):
+            problems.append(f"prefix observation {index} has an invalid "
+                            "colour digest")
+    for member in ("depth", "stencil"):
+        value = record.get(member)
+        if not isinstance(value, dict):
+            problems.append(f"prefix observation {index} has no {member} "
+                            "status")
+            continue
+        status = value.get("status")
+        if status not in ("captured", "absent", "not_used", "not_present"):
+            problems.append(f"prefix observation {index} has an invalid "
+                            f"{member} status")
+        elif status == "captured":
+            name = value.get("file")
+            if (not isinstance(name, str) or not name
+                    or Path(name).name != name):
+                problems.append(f"prefix observation {index} has an invalid "
+                                f"{member} blob name")
+            if not _is_sha256(value.get("sha256")):
+                problems.append(f"prefix observation {index} has an invalid "
+                                f"{member} digest")
+            if width is not None and height is not None:
+                expected = (width * height * 4 if member == "depth"
+                            else width * height)
+                if value.get("bytes") != expected:
+                    problems.append(
+                        f"prefix observation {index} {member} byte count does "
+                        "not match its dimensions")
+    return problems
+
+
+def iter_blob_members(value):
+    """Yield dict members that name a frame blob file."""
+    if isinstance(value, dict):
+        if isinstance(value.get("file"), str) and value.get("file"):
+            yield value
+        for item in value.values():
+            yield from iter_blob_members(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from iter_blob_members(item)
+
+
+def event_input_blob_names(events) -> set[str]:
+    """Explicit inventory of blobs the replay reads as renderer inputs.
+
+    Event records also carry expected-output and provenance fields; only the
+    paths the replay actually consumes are copied into a candidate input frame.
+    """
+    names: set[str] = set()
+
+    def add(value) -> None:
+        if isinstance(value, dict) and isinstance(value.get("file"), str)                 and value["file"]:
+            names.add(Path(value["file"]).name)
+
+    for event in events:
+        add(event.get("seed"))
+        add(event.get("pre_image"))
+        add(event.get("source_image"))
+        for attribute in event.get("attributes") or []:
+            if isinstance(attribute, dict) and isinstance(
+                    attribute.get("data"), str) and attribute["data"]:
+                names.add(Path(attribute["data"]).name)
+        add(event.get("indices"))
+        program = event.get("program") or {}
+        for shader in program.get("shaders") or []:
+            add(shader)
+        for uniform in program.get("uniforms") or []:
+            add(uniform)
+        for texture in event.get("textures") or []:
+            for level in texture.get("levels") or []:
+                add(level)
+                add(level.get("compressed") if isinstance(level, dict) else None)
+                for face in (level.get("faces") if isinstance(level, dict)
+                             else None) or []:
+                    add(face)
+    return names
+
+
+def event_blob_names(events) -> set[str]:
+    """All blobs referenced by a trusted record (inputs or expected outputs)."""
+    names: set[str] = set()
+    for event in events:
+        for member in iter_blob_members(event):
+            name = member.get("file")
+            if isinstance(name, str) and name:
+                names.add(Path(name).name)
+        for attribute in event.get("attributes") or []:
+            if isinstance(attribute, dict) and isinstance(
+                    attribute.get("data"), str) and attribute["data"]:
+                names.add(Path(attribute["data"]).name)
+    return names
+
+
+def _blob_entry(member, *,
+                role: str, identity: dict) -> dict | None:
+    if not isinstance(member, dict):
+        return None
+    name = member.get("file")
+    if not isinstance(name, str) or not name:
+        return None
+    return {
+        "file": Path(name).name,
+        "sha256": member.get("sha256") if isinstance(
+            member.get("sha256"), str) else None,
+        "role": role,
+        "identity": identity,
+    }
+
+
+def expected_output_blobs(trace: dict) -> list[dict]:
+    """Inventory expected observation/checkpoint/reference payloads.
+
+    Each entry records its byte digest and the exact role it plays, so the
+    overlap classifier can distinguish a compared post-event colour payload
+    from an initial state, a depth/stencil diagnostic, a default checkpoint or
+    the final-frame reference.
+    """
+    entries: list[dict] = []
+
+    def add(member, role: str, identity: dict) -> None:
+        entry = _blob_entry(member, role=role, identity=identity)
+        if entry is not None:
+            entries.append(entry)
+
+    prefix = trace.get("_prefix") or {}
+    for record in [prefix.get("initial"), *(prefix.get("post_events") or [])]:
+        if not isinstance(record, dict):
+            continue
+        identity = {
+            "kind": "observation",
+            "event": record.get("event"),
+            "timing": record.get("timing"),
+            "resource": record.get("resource"),
+        }
+        add(record.get("color"), "color", identity)
+        add(record.get("depth"), "depth", identity)
+        add(record.get("stencil"), "stencil", identity)
+    for event in trace.get("_events") or []:
+        checkpoint = event.get("default_checkpoint")
+        if not isinstance(checkpoint, dict):
+            continue
+        identity = {
+            "kind": "default_checkpoint",
+            "event": checkpoint.get("event"),
+            "timing": checkpoint.get("timing"),
+            "resource": checkpoint.get("resource"),
+        }
+        add(checkpoint.get("depth"), "depth", identity)
+        add(checkpoint.get("stencil"), "stencil", identity)
+        colour_file = checkpoint.get("file") or checkpoint.get("reference_file")
+        colour_sha = checkpoint.get("sha256") or checkpoint.get(
+            "reference_sha256")
+        if isinstance(colour_file, str) and colour_file:
+            add({"file": colour_file, "sha256": colour_sha}, "color",
+                identity)
+    frame = trace.get("frame") or {}
+    reference = frame.get("reference")
+    if isinstance(reference, str) and reference:
+        entries.append({
+            "file": Path(reference).name,
+            "sha256": frame.get("reference_sha256"),
+            "role": "final_reference",
+            "identity": {"kind": "final_reference"},
+        })
+    return entries
+
+
+def _input_blob_entries(events, frame_dir: Path | None) -> list[dict]:
+    entries = []
+    for name in sorted(event_input_blob_names(events)):
+        entry = {"file": name, "sha256": None}
+        if frame_dir is not None:
+            path = Path(frame_dir) / "blobs" / name
+            if path.is_file():
+                entry["sha256"] = _sha256(path)
+        entries.append(entry)
+    return entries
+
+
+def replay_input_overlap(trace: dict,
+                         frame_dir: Path | str | None = None) -> list[dict]:
+    """Expected outputs whose bytes remain accessible as renderer inputs.
+
+    Matching is by content digest, not filename, so a copied payload under a
+    different name is still reported.  Every accessible expected output is
+    listed; ``affects_claim`` later depends on its role and timing.
+    """
+    events = [{key: value for key, value in event.items()
+               if key != "default_checkpoint"}
+              for event in trace.get("_events") or []]
+    expected = expected_output_blobs(trace)
+    overlaps = []
+    for item in _input_blob_entries(events, frame_dir):
+        digest = item.get("sha256")
+        matches = [entry for entry in expected
+                   if digest is not None and entry.get("sha256") == digest]
+        if not matches:
+            continue
+        overlaps.append({
+            "file": matches[0]["file"],
+            "input_file": item["file"],
+            "sha256": digest,
+            "expected_by": [{
+                "kind": entry["identity"]["kind"],
+                "role": entry["role"],
+                "event": entry["identity"].get("event"),
+                "timing": entry["identity"].get("timing"),
+                "resource": entry["identity"].get("resource"),
+            } for entry in matches],
+        })
+    return overlaps
+
+
+def materialize_replay_input(frame_dir: Path | str, trace: dict,
+                             destination: Path | str) -> dict:
+    """Create a replay input frame without expected output pixels.
+
+    The sanitized event representation is built first, then its explicit input
+    inventory is derived from that representation.  Expected outputs are never
+    copied, even when the same bytes are available under another input name;
+    overlap is reported by content digest.
+    """
+    frame_dir = Path(frame_dir).resolve()
+    destination = Path(destination).resolve()
+    events = trace.get("_events") or []
+    if not events:
+        raise FrameError("replay input frame has no events")
+    sanitized_events = []
+    for event in events:
+        sanitized_events.append({key: value for key, value in event.items()
+                                 if key != "default_checkpoint"})
+    inputs = event_input_blob_names(sanitized_events)
+    overlap = replay_input_overlap(trace, frame_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    blobs = destination / "blobs"
+    blobs.mkdir(exist_ok=True)
+    for name in sorted(inputs):
+        source = frame_dir / "blobs" / name
+        if not source.is_file():
+            raise FrameError(f"replay input blob is absent: {name}")
+        shutil.copyfile(source, blobs / name)
+    manifest = {key: value for key, value in trace.items()
+                if not key.startswith("_")}
+    for key in ("prefix", "default_checkpoint_events",
+                "default_checkpoint_count", "default_checkpoint_event"):
+        manifest.pop(key, None)
+    frame_info = manifest.get("frame")
+    if isinstance(frame_info, dict):
+        # The candidate does not need expected-reference paths or digests.
+        manifest["frame"] = {
+            key: value for key, value in frame_info.items()
+            if key not in ("reference", "reference_file", "reference_bytes",
+                           "reference_sha256")
+        }
+    (destination / "frame-events.jsonl").write_text(
+        "".join(json.dumps(event, sort_keys=True) + "\n"
+                for event in sanitized_events))
+    (destination / "frame-trace.json").write_text(
+        json.dumps(manifest, indent=2) + "\n")
+    expected = expected_output_blobs(trace)
+    return {
+        "frame_dir": str(destination),
+        "blob_count": len(inputs),
+        "event_count": len(sanitized_events),
+        "excluded": ["frame-reference", "default-checkpoint", "observation"],
+        "expected_only_blobs": len([entry for entry in expected
+                                    if entry["file"] not in inputs]),
+        "shared_input_outputs": overlap,
+    }
+
+
+def load_prefix_observations(manifest: dict, frame_dir: Path) -> dict | None:
+    """Load and verify the observation file declared by the manifest.
+
+    Two selections share this representation: a contiguous prefix from event
+    0 (with a proven initial state) and a bounded set of independently selected
+    post-event observations (no initial-state anchor).  The file is
+    authoritative; a legacy manifest may embed the same records only when they
+    agree exactly.
+    """
+    block = manifest.get("prefix")
+    if block is None:
+        return None
+    frame_dir = Path(frame_dir)
+    if not isinstance(block, dict):
+        raise FrameError("frame prefix block is not an object")
+    if not gfx_observation.is_supported_observations_schema(
+            block.get("schema")):
+        raise FrameError("unexpected frame prefix schema")
+    mode = str(block.get("mode") or "prefix")
+    if mode not in ("prefix", "selected"):
+        raise FrameError("frame observation mode is unsupported")
+    if block.get("status") != "complete":
+        raise FrameError(
+            "frame observation coverage is incomplete: "
+            + str(block.get("status") or "unknown"))
+    count = block.get("count")
+    if (not isinstance(count, int) or isinstance(count, bool) or count < 0
+            or count > 4096):
+        raise FrameError("frame observation count is invalid")
+    name = block.get("observation_file")
+    if (not isinstance(name, str) or not name or Path(name).name != name):
+        raise FrameError("frame observation file name is invalid")
+    path = frame_dir / name
+    if not path.is_file():
+        raise FrameError("frame observation file is absent")
+    declared_bytes = block.get("observation_bytes")
+    if path.stat().st_size != declared_bytes:
+        raise FrameError("frame observation byte count does not match")
+    digest = _sha256(path)
+    if block.get("observation_sha256") != digest:
+        raise FrameError("frame observation digest does not match")
+    try:
+        records = [json.loads(line) for line in path.read_text().splitlines()
+                   if line.strip()]
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise FrameError(f"unreadable frame observations: {exc}") from exc
+    embedded = block.get("observations")
+    if embedded is not None and (
+            not isinstance(embedded, list) or embedded != records):
+        raise FrameError("frame observations disagree with the manifest")
+    post = [record for record in records
+            if isinstance(record, dict) and record.get("timing") == "post_event"]
+    initial = [record for record in records
+               if isinstance(record, dict)
+               and record.get("timing") == "pre_event"]
+    if block.get("post_event_count") != count or len(post) != count:
+        raise FrameError("frame observation coverage is incomplete")
+    if mode == "prefix":
+        end = block.get("end")
+        if (not isinstance(end, int) or isinstance(end, bool)
+                or not 0 <= end < 4096):
+            raise FrameError("frame prefix end event is invalid")
+        if count != end + 1:
+            raise FrameError(
+                "frame prefix post-event count does not match its end")
+        if block.get("initial") is not True or len(initial) != 1:
+            raise FrameError("frame prefix has no initial state observation")
+        if initial[0].get("event") != 0:
+            raise FrameError("frame prefix initial observation is not event 0")
+        selection = list(range(end + 1))
+    else:
+        if block.get("end") is not None:
+            raise FrameError("selected observations must not declare a prefix end")
+        if block.get("initial") not in (False, None) or initial:
+            raise FrameError("selected observations must not claim an initial state")
+        selection = block.get("events")
+        if (not isinstance(selection, list) or not selection
+                or any(not isinstance(value, int) or isinstance(value, bool)
+                       or not 0 <= value < 4096 for value in selection)
+                or selection != sorted(set(selection))):
+            raise FrameError("selected observation events are invalid")
+        if count != len(selection):
+            raise FrameError(
+                "selected observation count does not match its event set")
+        end = None
+    for index, record in enumerate(post):
+        expected_event = selection[index]
+        if not gfx_observation.is_supported_observation_schema(
+                record.get("schema") if isinstance(record, dict) else None):
+            raise FrameError(
+                f"frame observation {index} has an unsupported schema")
+        problems = _prefix_record_problems(record, index, expected_event)
+        if problems:
+            raise FrameError(problems[0])
+    if initial:
+        problems = _prefix_record_problems(initial[0], 0, 0)
+        if problems:
+            raise FrameError(problems[0])
+    return {
+        "schema": PREFIX_SCHEMA,
+        "mode": mode,
+        "end": end,
+        "events": selection,
+        "initial": initial[0] if initial else None,
+        "post_events": post,
+        "records": records,
+        "observation_file": name,
+        "observation_sha256": digest,
+        "observation_bytes": declared_bytes,
+        "budget": block.get("budget"),
+    }
+
+
 def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
     """Loads and validates one frame trace. Fails closed on any gap."""
     frame_dir = Path(frame_dir)
@@ -142,6 +606,24 @@ def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
         raise FrameError("frame reference size does not match its declaration")
     if _sha256(reference) != frame.get("reference_sha256"):
         raise FrameError("frame reference sha256 does not match its declaration")
+    prefix = load_prefix_observations(manifest, frame_dir)
+    if prefix is not None:
+        if prefix["mode"] == "prefix":
+            if prefix["end"] >= len(events):
+                raise FrameError("frame prefix extends beyond the event stream")
+        elif prefix["events"] and prefix["events"][-1] >= len(events):
+            raise FrameError(
+                "selected observation extends beyond the event stream")
+        for index, record in enumerate(prefix["post_events"]):
+            event_index = int(record.get("event"))
+            if event_index >= len(events):
+                raise FrameError(
+                    "observation event is beyond the event stream")
+            event = events[event_index]
+            if record.get("kind") != event.get("kind"):
+                raise FrameError(
+                    f"frame observation {index} kind disagrees with "
+                    "the event stream")
     if verify_blobs:
         blobs: dict[str, str] = {}
         for event in events:
@@ -168,7 +650,23 @@ def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
                 if member.get("sha256") and member["sha256"] != digest:
                     raise FrameError(f"blob digest mismatch: {name}")
                 blobs[name] = digest
+        if prefix is not None:
+            for record in prefix["records"]:
+                for member in _iter_blob_members(record):
+                    blob_name = member.get("file")
+                    if not blob_name or blob_name in blobs:
+                        continue
+                    path = frame_dir / "blobs" / str(blob_name)
+                    if not path.is_file():
+                        raise FrameError(f"missing prefix blob: {blob_name}")
+                    blob_digest = _verified_blob_sha256(path)
+                    if (member.get("sha256")
+                            and member["sha256"] != blob_digest):
+                        raise FrameError(
+                            f"prefix blob digest mismatch: {blob_name}")
+                    blobs[blob_name] = blob_digest
         manifest["_blob_count_verified"] = len(blobs)
+    manifest["_prefix"] = prefix
     manifest["_events"] = events
     manifest["_draws"] = draws
     manifest["_frame_dir"] = str(frame_dir)
@@ -185,6 +683,7 @@ def load_seal(
     trace: dict | None = None,
     verify_counts: bool = True,
     verify_blobs: bool = True,
+    trusted_evidence: dict | None = None,
 ) -> dict:
     """Loads and validates the authoritative same-process frame seal.
 
@@ -261,7 +760,22 @@ def load_seal(
     if not portable_capture and (
             not declared_dir.is_absolute()
             or declared_dir.resolve() != frame_dir.resolve()):
-        raise FrameError("frame seal capture directory does not match")
+        if trusted_evidence is None:
+            raise FrameError("frame seal capture directory does not match")
+        # A verified copied snapshot keeps the original seal unchanged but
+        # lives at a different absolute path.  The trusted-evidence record
+        # binds the original capture directory and the copied byte manifest.
+        original = str(trusted_evidence.get("original_capture_dir") or "")
+        if (not original
+                or Path(original).resolve() != declared_dir.resolve()):
+            raise FrameError(
+                "trusted evidence does not name the sealed capture directory")
+        relative = trusted_evidence.get("frame_relative")
+        if relative is not None:
+            expected = Path(str(trusted_evidence.get("_root") or "")).resolve() / str(relative)
+            if frame_dir.resolve() != expected:
+                raise FrameError(
+                    "trusted evidence frame is not the verified snapshot")
 
     def member(name: object, label: str) -> Path:
         text = str(name or "")
@@ -596,6 +1110,31 @@ def checkpoint_events_selection_error(events, max_draws,
     return None
 
 
+def observation_selection_error(value, max_draws: int) -> str | None:
+    """Validate a comma-separated post-event selection."""
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        return "--observe-events must be a comma-separated list"
+    parts = value.split(",")
+    if not parts or any(not part for part in parts):
+        return "--observe-events contains an empty element"
+    selected: list[int] = []
+    for part in parts:
+        try:
+            event = int(part, 10)
+        except ValueError:
+            return "--observe-events contains a non-integer"
+        if event < 0 or event >= 4096:
+            return "--observe-events is outside the native hard bound"
+        if max_draws and event >= max_draws:
+            return "--observe-events must be below --max-draws"
+        if selected and event <= selected[-1]:
+            return "--observe-events must be strictly increasing"
+        selected.append(event)
+    return None
+
+
 def checkpoint_options_error(args) -> str | None:
     """Validate the checkpoint capture options before a live launch.
 
@@ -622,6 +1161,29 @@ def checkpoint_options_error(args) -> str | None:
     if (checkpoint_event is not None or checkpoint_events is not None) and \
             checkpoint_budget <= 0:
         return "--checkpoint-max-bytes must be positive"
+    prefix_end = getattr(args, "prefix_end", None)
+    observe_events = getattr(args, "observe_events", None)
+    if prefix_end is not None and observe_events:
+        return "--prefix-end and --observe-events are mutually exclusive"
+    selection_problem = observation_selection_error(
+        observe_events, int(getattr(args, "max_draws", 0) or 0))
+    if selection_problem is not None:
+        return selection_problem
+    if observe_events and (
+            int(getattr(args, "prefix_max_bytes", 0) or 0) <= 0 or
+            int(getattr(args, "prefix_max_ns", 0) or 0) <= 0):
+        return "--prefix-max-bytes and --prefix-max-ns must be positive"
+    if prefix_end is not None:
+        if prefix_end < 0:
+            return "--prefix-end must be non-negative"
+        if prefix_end >= 4096:
+            return "--prefix-end must be below the native hard bound 4096"
+        if prefix_end >= int(getattr(args, "max_draws", 0) or 0):
+            return "--prefix-end must be below --max-draws"
+        if int(getattr(args, "prefix_max_bytes", 0) or 0) <= 0:
+            return "--prefix-max-bytes must be positive"
+        if int(getattr(args, "prefix_max_ns", 0) or 0) <= 0:
+            return "--prefix-max-ns must be positive"
     return None
 
 
@@ -829,6 +1391,24 @@ def capture(args: argparse.Namespace) -> int:
         # The aggregate readback budget applies to the single-event form too.
         env_extra["EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES"] = str(
             checkpoint_budget)
+    prefix_end = getattr(args, "prefix_end", None)
+    observe_events = getattr(args, "observe_events", None)
+    if prefix_end is not None and observe_events:
+        return "--prefix-end and --observe-events are mutually exclusive"
+    selection_problem = observation_selection_error(
+        observe_events, int(getattr(args, "max_draws", 0) or 0))
+    if selection_problem is not None:
+        return selection_problem
+    if observe_events and (
+            int(getattr(args, "prefix_max_bytes", 0) or 0) <= 0 or
+            int(getattr(args, "prefix_max_ns", 0) or 0) <= 0):
+        return "--prefix-max-bytes and --prefix-max-ns must be positive"
+    if prefix_end is not None:
+        env_extra["EU4_GFX_FRAME_TRACE_PREFIX_END"] = str(prefix_end)
+        env_extra["EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES"] = str(
+            int(getattr(args, "prefix_max_bytes", 384 * 1024 * 1024)))
+        env_extra["EU4_GFX_FRAME_TRACE_PREFIX_MAX_NS"] = str(
+            int(getattr(args, "prefix_max_ns", 10_000_000_000)))
     shadow_enabled = bool(getattr(args, "shadow", False))
     continuous = bool(getattr(args, "continuous", False))
     asynchronous = bool(getattr(args, "async", False))
@@ -1045,6 +1625,10 @@ def capture(args: argparse.Namespace) -> int:
             "max_checkpoints": getattr(args, "max_checkpoints", None),
             "checkpoint_max_bytes": getattr(
                 args, "checkpoint_max_bytes", None),
+            "prefix_end": getattr(args, "prefix_end", None),
+            "observe_events": getattr(args, "observe_events", None),
+            "prefix_max_bytes": getattr(args, "prefix_max_bytes", None),
+            "prefix_max_ns": getattr(args, "prefix_max_ns", None),
         },
     }
     status = 0
@@ -2628,19 +3212,8 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         (shadow / "coordinator.json").write_text(
             json.dumps(result, indent=2) + "\n")
         return 1
-    receipt = {
-        "schema": "m7-shadow-shader-receipt/v1",
-        "capture_frame_id": seal.get("capture_frame_id"),
-        "pid": seal.get("pid"),
-        "session_id": seal.get("session_id"),
-        "trace_manifest_sha256": seal.get("manifest_sha256"),
-        "event_stream_sha256": seal.get("event_stream_sha256"),
-        "event_stream_bytes": seal.get("event_stream_bytes"),
-        **identity,
-        "checkpoint_request_file": request_path.name,
-        "checkpoint_request_sha256": request_sha256,
-        "checkpoint_count": len(request.get("checkpoints") or []),
-    }
+    receipt = build_shader_receipt(seal, request_path)
+    receipt.update(identity)
     receipt_path = shadow / "shader-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     (shader_dir / "ready").write_text(
@@ -2907,6 +3480,38 @@ def shader_receipt_identity(directory: Path | str | None, *,
     }
 
 
+def build_shader_receipt(seal: dict, request_path: Path | str,
+                         shader_dir: Path | str | None = None,
+                         *, required_identity: bool = False) -> dict:
+    """Build the one shader-receipt representation used by every replay path.
+
+    The receipt binds the checkpoint request to the sealed frame; when a
+    translated shader directory is supplied its canonical identity is added.
+    It is metadata about an execution, never a substitute for the independently
+    verified result.
+    """
+    request_path = Path(request_path)
+    receipt = {
+        "schema": "gfx-shader-receipt/v1",
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "pid": seal.get("pid"),
+        "session_id": seal.get("session_id"),
+        "trace_manifest_sha256": seal.get("manifest_sha256"),
+        "event_stream_sha256": seal.get("event_stream_sha256"),
+        "event_stream_bytes": seal.get("event_stream_bytes"),
+    }
+    if shader_dir is not None:
+        receipt.update(shader_receipt_identity(
+            shader_dir, required=required_identity))
+    receipt.update({
+        "checkpoint_request_file": request_path.name,
+        "checkpoint_request_sha256": _sha256(request_path),
+        "checkpoint_count": len(_read_json(request_path).get("checkpoints")
+                                or []),
+    })
+    return receipt
+
+
 def _continuous_frame_coordinator(
     run: Path, shadow: Path, frame_index: int, args,
     overall_deadline: float,
@@ -2949,19 +3554,8 @@ def _continuous_frame_coordinator(
     request = gfx_frame_graph.write_checkpoint_request(graph, request_path)
     request_sha256 = _sha256(request_path)
     identity = shader_receipt_identity(shader_dir, required=True)
-    receipt = {
-        "schema": "m7-shadow-shader-receipt/v1",
-        "capture_frame_id": seal.get("capture_frame_id"),
-        "pid": seal.get("pid"),
-        "session_id": seal.get("session_id"),
-        "trace_manifest_sha256": seal.get("manifest_sha256"),
-        "event_stream_sha256": seal.get("event_stream_sha256"),
-        "event_stream_bytes": seal.get("event_stream_bytes"),
-        **identity,
-        "checkpoint_request_file": request_path.name,
-        "checkpoint_request_sha256": request_sha256,
-        "checkpoint_count": len(request.get("checkpoints") or []),
-    }
+    receipt = build_shader_receipt(seal, request_path)
+    receipt.update(identity)
     receipt_path = output / "shader-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     (shader_dir / "ready").write_text(json.dumps({
@@ -3365,6 +3959,21 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument(
         "--checkpoint-max-bytes", type=int, default=128 * 1024 * 1024,
         help="aggregate readback-byte budget for the whole checkpoint set")
+    cap.add_argument(
+        "--prefix-end", type=int, default=None, metavar="EVENT",
+        help="opt-in exact-prefix mode: observe the post-event state of every "
+             "operation from event 0 through EVENT (bounded by the byte/time "
+             "budgets and the native hard bound)")
+    cap.add_argument(
+        "--observe-events", default=None, metavar="LIST",
+        help="bounded post-event selection, e.g. 118,120,129; no initial-state "
+             "anchor and never an exact-prefix claim")
+    cap.add_argument(
+        "--prefix-max-bytes", type=int, default=384 * 1024 * 1024,
+        help="aggregate readback-byte budget for exact-prefix observations")
+    cap.add_argument(
+        "--prefix-max-ns", type=int, default=10_000_000_000,
+        help="aggregate readback-time budget for exact-prefix observations")
     cap.add_argument("--seal", action="store_true",
                      help="publish the authoritative frame-seal/v1 handoff")
     cap.add_argument("--shadow", action="store_true",

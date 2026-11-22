@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-from automation import case_baseline
+from automation import case_baseline, replay_host_dependencies
 
 
 def _write_case(root: Path) -> Path:
@@ -187,6 +187,18 @@ class BaselineIdentityTests(unittest.TestCase):
                          "ok")
         self.assertEqual(recorded["identity"]["validity"]["replay_status"],
                          "ok")
+
+    def test_portable_identity_uses_quoted_include_fallback(self):
+        with mock.patch.object(replay_host_dependencies.sys, "platform",
+                               "linux"):
+            identity = replay_host_dependencies.build_identity()
+            recorded = case_baseline.record(self.case, self.baseline)
+            checked = case_baseline.load_check(self.case, self.baseline)
+        self.assertEqual(identity["dependency_authority"], "quoted-include")
+        self.assertEqual(identity["platform"], "linux")
+        self.assertTrue(checked["ok"], checked)
+        self.assertEqual(checked["current_fingerprint"],
+                         recorded["identity"]["fingerprint"])
 
     def test_identity_runs_one_authoritative_payload_pass(self):
         original = case_baseline.gfx_replay_case.verify

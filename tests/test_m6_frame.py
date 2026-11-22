@@ -923,6 +923,149 @@ class ShaderCacheAttributeTests(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")
+class ReplayInputSanitizationTests(unittest.TestCase):
+    def test_expected_outputs_are_removed_before_the_blob_allowlist(self):
+        import tempfile
+        from pathlib import Path as _Path
+        with tempfile.TemporaryDirectory() as temporary:
+            frame = _Path(temporary) / "frame"
+            (frame / "blobs").mkdir(parents=True)
+            for name in ("input.bin", "expected.bin", "shared.bin",
+                         "source.bin", "cube-face.bin", "compressed.bin",
+                         "frame-reference.bgra"):
+                (frame / "blobs" / name).write_bytes(name.encode())
+            shared_sha = hashlib.sha256(b"shared.bin").hexdigest()
+            expected_sha = hashlib.sha256(b"expected.bin").hexdigest()
+            events = [
+                {"kind": "draw", "index": 0,
+                 "default_checkpoint": {"file": "expected.bin",
+                                        "sha256": expected_sha},
+                 "unrelated": {"file": "expected.bin"},
+                 "source_image": {"file": "source.bin"},
+                 "attributes": [{"data": "input.bin"}],
+                 "textures": [{"levels": [{
+                     "file": "shared.bin",
+                     "compressed": {"file": "compressed.bin"},
+                     "faces": [{"file": "cube-face.bin"}]}]}]},
+            ]
+            trace = {
+                "_events": events,
+                "_prefix": {
+                    "post_events": [
+                        {"event": 0, "timing": "post_event",
+                         "color": {"file": "shared.bin",
+                                   "sha256": shared_sha}},
+                        {"event": 1, "timing": "post_event",
+                         "color": {"file": "expected.bin",
+                                   "sha256": expected_sha}},
+                    ],
+                },
+                "frame": {"width": 4, "height": 4,
+                          "reference": "frame-reference.bgra"},
+                "schema": m6_frame.TRACE_SCHEMA,
+            }
+            destination = _Path(temporary) / "replay-input"
+            record = m6_frame.materialize_replay_input(
+                frame, trace, destination)
+            copied = {path.name for path in (destination / "blobs").iterdir()}
+            self.assertIn("input.bin", copied)
+            self.assertIn("shared.bin", copied)
+            self.assertIn("source.bin", copied)
+            self.assertIn("cube-face.bin", copied)
+            self.assertIn("compressed.bin", copied)
+            self.assertNotIn("expected.bin", copied)
+            self.assertNotIn("frame-reference.bgra", copied)
+            self.assertEqual(record["shared_input_outputs"][0]["file"],
+                             "shared.bin")
+            self.assertEqual(record["shared_input_outputs"][0]["expected_by"][0]
+                             ["kind"], "observation")
+            self.assertGreaterEqual(record["expected_only_blobs"], 2)
+            sanitized = [json.loads(line) for line in
+                         (destination / "frame-events.jsonl").read_text()
+                         .splitlines() if line.strip()]
+            self.assertNotIn("default_checkpoint", sanitized[0])
+
+
+class ReplayInputOverlapTests(unittest.TestCase):
+    def _frame(self, root: Path, payload: bytes) -> tuple[Path, dict]:
+        frame = root / "frame"
+        (frame / "blobs").mkdir(parents=True)
+        import hashlib
+        digest = hashlib.sha256(payload).hexdigest()
+        for name in ("input.bin", "expected-other.bin"):
+            (frame / "blobs" / name).write_bytes(payload)
+        events = [{"kind": "draw", "index": 0,
+                   "attributes": [{"data": "input.bin"}]}]
+        trace = {
+            "_events": events,
+            "_prefix": {"post_events": [{
+                "event": 0, "timing": "post_event", "resource": "fb:0",
+                "color": {"file": "expected-other.bin", "sha256": digest},
+                "depth": {"status": "not_used"},
+                "stencil": {"status": "not_used"}}]},
+            "frame": {"width": 4, "height": 4},
+        }
+        return frame, trace
+
+    def test_overlap_matches_content_not_filename(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace = self._frame(root, b"same-payload")
+            record = m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input")
+            self.assertTrue((root / "replay-input" / "blobs" /
+                             "input.bin").is_file())
+            self.assertFalse((root / "replay-input" / "blobs" /
+                              "expected-other.bin").is_file())
+            overlap = record["shared_input_outputs"]
+            self.assertEqual(len(overlap), 1)
+            self.assertEqual(overlap[0]["file"], "expected-other.bin")
+            self.assertEqual(overlap[0]["input_file"], "input.bin")
+            self.assertEqual(overlap[0]["expected_by"][0]["kind"],
+                             "observation")
+
+    def test_default_checkpoint_payload_overlap_has_checkpoint_role(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace = self._frame(root, b"checkpoint-shared")
+            import hashlib
+            digest = hashlib.sha256(b"checkpoint-shared").hexdigest()
+            trace["_events"][0]["default_checkpoint"] = {
+                "event": 0, "timing": "pre_event", "resource": "fb:0",
+                "file": "expected-other.bin", "sha256": digest}
+            overlap = m6_frame.replay_input_overlap(trace, frame)
+            roles = {(entry["kind"], entry["role"])
+                     for item in overlap for entry in item["expected_by"]}
+            self.assertIn(("default_checkpoint", "color"), roles)
+
+    def test_initial_depth_and_final_reference_are_reported_separately(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace = self._frame(root, b"shared")
+            import hashlib
+            digest = hashlib.sha256(b"shared").hexdigest()
+            trace["_prefix"]["initial"] = {
+                "event": 0, "timing": "pre_event", "resource": "fb:0",
+                "color": {"file": "expected-other.bin", "sha256": digest}}
+            trace["_prefix"]["post_events"][0]["depth"] = {
+                "status": "captured", "file": "expected-other.bin",
+                "sha256": digest, "bytes": 4}
+            trace["frame"].update({
+                "reference": "expected-other.bin",
+                "reference_sha256": digest})
+            overlap = m6_frame.replay_input_overlap(trace, frame)
+            roles = {(entry["kind"], entry["role"], entry["timing"])
+                     for item in overlap for entry in item["expected_by"]}
+            self.assertIn(("observation", "color", "pre_event"), roles)
+            self.assertIn(("observation", "depth", "post_event"), roles)
+            self.assertIn(("final_reference", "final_reference", None), roles)
+
+
+@unittest.skipUnless(sys.platform == "darwin",
+                     "the trace host needs Apple OpenGL")
 class TraceStateHostTests(unittest.TestCase):
     def test_texture_probe_preserves_bindings_and_active_unit(self) -> None:
         source = ROOT / "tests" / "gfx_trace_state_host.m"
@@ -957,6 +1100,9 @@ class TraceStateHostTests(unittest.TestCase):
         self.assertIn("stencil=1", ran.stdout)
         self.assertIn("records=1", ran.stdout)
         self.assertIn("production=111", ran.stdout)
+        self.assertIn("observation=1", ran.stdout)
+        self.assertIn("negative=1", ran.stdout)
+        self.assertIn("manifest=1", ran.stdout)
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")
@@ -1643,6 +1789,29 @@ class CaptureBudgetTests(unittest.TestCase):
                         seen["env_extra"].get(
                             "EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES"),
                         "12345")
+
+    def test_observe_events_selection_is_validated(self):
+        self.assertIsNone(m6_frame.observation_selection_error(
+            "118,120,129", 140))
+        for value, message in (
+                ("118,,120", "empty"),
+                ("a", "non-integer"),
+                ("120,118", "strictly increasing"),
+                ("118,118", "strictly increasing"),
+                ("4096", "hard bound")):
+            self.assertIn(message,
+                          m6_frame.observation_selection_error(value, 512))
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture",
+             "--observe-events", "118,120,129",
+             "--prefix-max-bytes", "1048576",
+             "--prefix-max-ns", "1000000000"])
+        self.assertIsNone(m6_frame.checkpoint_options_error(args))
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture",
+             "--observe-events", "118", "--prefix-end", "20"])
+        self.assertIn("mutually exclusive",
+                      m6_frame.checkpoint_options_error(args))
 
     def test_checkpoint_options_refuse_both_selection_forms(self):
         args = m6_frame._parser().parse_args(

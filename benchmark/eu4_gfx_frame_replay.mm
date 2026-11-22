@@ -118,6 +118,7 @@ typedef struct {
 @property (nonatomic, strong) NSMutableArray *provenance;
 @property (nonatomic, strong) NSMutableDictionary *provenance_seen;
 @property (nonatomic, strong) NSDictionary *checkpoints_by_event;
+@property (nonatomic, strong) NSDictionary *post_checkpoints_by_event;
 @property (nonatomic, strong) NSMutableArray *checkpoint_results;
 @property (nonatomic, strong) NSMutableArray *transfer_records;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary *> *resource_history;
@@ -183,6 +184,7 @@ static thread_local FrameTarget *g_default_target_ptr;
 #define g_provenance (g_state.provenance)
 #define g_provenance_seen (g_state.provenance_seen)
 #define g_checkpoints_by_event (g_state.checkpoints_by_event)
+#define g_post_checkpoints_by_event (g_state.post_checkpoints_by_event)
 #define g_checkpoint_results (g_state.checkpoint_results)
 #define g_transfer_records (g_state.transfer_records)
 #define g_resource_history (g_state.resource_history)
@@ -357,6 +359,7 @@ static NSString *target_format_name(int internal_format) {
         case 0x8815: return @"RGB32F";
         case 0x881A: return @"RGBA16F";
         case 0x881B: return @"RGB16F";
+        case 0x822E: return @"R32F";
         default: return @"other";
     }
 }
@@ -1820,6 +1823,9 @@ static MTLPixelFormat pixel_format_for_name(NSString *format_name) {
         if ([format_name isEqualToString:@"RGB8"] ||
             [format_name isEqualToString:@"SRGB8_ALPHA8"]) {
             return MTLPixelFormatBGRA8Unorm;
+        }
+        if ([format_name isEqualToString:@"R32F"]) {
+            return MTLPixelFormatR32Float;
         }
     }
     return MTLPixelFormatBGRA8Unorm;
@@ -4433,7 +4439,8 @@ static BOOL validate_checkpoints(NSDictionary *document, NSError **error) {
                                     @"checkpoint event index is not a number",
                                     error);
         }
-        for (NSString *field in @[@"target", @"file"]) {
+        for (NSString *field in @[@"target", @"file", @"resource",
+                                  @"reference_file", @"timing"]) {
             id value = item[field];
             if (value != nil && ![value isKindOfClass:[NSString class]]) {
                 return validation_error(-1,
@@ -4443,8 +4450,90 @@ static BOOL validate_checkpoints(NSDictionary *document, NSError **error) {
                                         error);
             }
         }
+        id timing = item[@"timing"];
+        if (timing != nil && ![timing isEqualToString:@"pre_event"] &&
+            ![timing isEqualToString:@"post_event"]) {
+            return validation_error(
+                -1, @"checkpoint timing is not pre_event or post_event", error);
+        }
     }
     return YES;
+}
+
+/* Reads every due checkpoint's target and records its exact provenance.
+   The reference blob is never copied; only the Metal readback is written. */
+static void run_checkpoint_readbacks(NSArray *items, NSUInteger index,
+                                     NSString *output_path, BOOL post_event,
+                                     NSMutableArray *failures, NSUInteger *failed,
+                                     NSError **error) {
+    for (NSDictionary *item in items) {
+        NSString *target_name = item[@"target"];
+        NSMutableDictionary *info = g_render_targets[target_name];
+        NSMutableDictionary *checkpoint = [@{
+            @"event": @(index),
+            @"target": target_name,
+            @"resource": item[@"resource"] ?: @"",
+            @"timing": post_event ? @"post_event" : @"pre_event",
+            @"file": item[@"file"],
+            @"reference_file": item[@"reference_file"] ?: @"",
+            @"reference_sha256": item[@"reference_sha256"] ?: @"",
+            @"ok": @NO,
+        } mutableCopy];
+        if (info == nil) {
+            checkpoint[@"stage"] = @"checkpoint_readback";
+            checkpoint[@"error"] = @"target was not created";
+            [g_checkpoint_results addObject:checkpoint];
+            (*failed)++;
+            [failures addObject:failure_entry(
+                @"checkpoint_readback", (NSInteger)index, @"checkpoint",
+                checkpoint[@"error"], NO, 0, @"")];
+            continue;
+        }
+        checkpoint[@"width"] = info[@"width"] ?: @0;
+        checkpoint[@"height"] = info[@"height"] ?: @0;
+        checkpoint[@"format"] = info[@"format"] ?: @"";
+        checkpoint[@"generation"] = info[@"generation"] ?: @0;
+        id<MTLTexture> colour = info[@"color"];
+        if (colour != nil) {
+            switch (colour.pixelFormat) {
+                case MTLPixelFormatBGRA8Unorm:
+                    checkpoint[@"pixel_format"] = @"BGRA8";
+                    break;
+                case MTLPixelFormatRGBA8Unorm:
+                    checkpoint[@"pixel_format"] = @"RGBA8";
+                    break;
+                case MTLPixelFormatRGBA32Float:
+                    checkpoint[@"pixel_format"] = @"RGBA32F";
+                    break;
+                case MTLPixelFormatR32Float:
+                    checkpoint[@"pixel_format"] = @"R32F";
+                    break;
+                default:
+                    checkpoint[@"pixel_format"] = @"other";
+                    break;
+            }
+        } else {
+            checkpoint[@"pixel_format"] = @"other";
+        }
+        NSString *path = [output_path stringByAppendingPathComponent:
+                              item[@"file"]];
+        NSError *checkpoint_error = nil;
+        NSInteger readback_status = 0;
+        if (capture_target_to_file(info, path, &checkpoint_error,
+                                   &readback_status)) {
+            checkpoint[@"ok"] = @YES;
+        } else {
+            checkpoint[@"stage"] = @"checkpoint_readback";
+            checkpoint[@"error"] =
+                failure_text(checkpoint_error, @"checkpoint readback failed");
+            (*failed)++;
+            [failures addObject:failure_entry(
+                @"checkpoint_readback", (NSInteger)index, @"checkpoint",
+                checkpoint[@"error"], g_deadline_expired != 0, readback_status,
+                @"")];
+        }
+        [g_checkpoint_results addObject:checkpoint];
+    }
 }
 
 static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
@@ -4586,6 +4675,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         g_provenance = [NSMutableArray array];
         g_provenance_seen = [NSMutableDictionary dictionary];
         g_checkpoint_results = [NSMutableArray array];
+        g_post_checkpoints_by_event = @{};
         g_transfer_records = [NSMutableArray array];
         g_checkpoints_by_event = nil;
         g_current_event = 0;
@@ -4662,6 +4752,8 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                       4, nil);
             }
             NSMutableDictionary *by_event = [NSMutableDictionary dictionary];
+            NSMutableDictionary *post_by_event =
+                [NSMutableDictionary dictionary];
             for (NSDictionary *item in document[@"checkpoints"] ?: @[]) {
                 NSNumber *event_index = item[@"event"];
                 NSString *target = item[@"target"];
@@ -4669,14 +4761,19 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 if (event_index == nil || target.length == 0 || file.length == 0) {
                     continue;
                 }
-                NSMutableArray *bucket = by_event[event_index];
+                BOOL post_event =
+                    [item[@"timing"] isEqualToString:@"post_event"];
+                NSMutableDictionary *store =
+                    post_event ? post_by_event : by_event;
+                NSMutableArray *bucket = store[event_index];
                 if (bucket == nil) {
                     bucket = [NSMutableArray array];
-                    by_event[event_index] = bucket;
+                    store[event_index] = bucket;
                 }
                 [bucket addObject:item];
             }
             g_checkpoints_by_event = by_event;
+            g_post_checkpoints_by_event = post_by_event;
         }
         NSMutableDictionary *programs = [NSMutableDictionary dictionary];
         for (NSDictionary *entry in shader_report[@"programs"] ?: @[]) {
@@ -4891,52 +4988,8 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 /* The checkpoint observes the state left by all prior events,
                    before this event executes. */
                 command = [g_queue commandBuffer];
-                for (NSDictionary *item in due_checkpoints) {
-                    NSString *target_name = item[@"target"];
-                    NSMutableDictionary *info = g_render_targets[target_name];
-                    NSMutableDictionary *checkpoint = [@{
-                        @"event": @(index),
-                        @"target": target_name,
-                        @"file": item[@"file"],
-                        @"reference_file": item[@"reference_file"] ?: @"",
-                        @"reference_sha256": item[@"reference_sha256"] ?: @"",
-                        @"ok": @NO,
-                    } mutableCopy];
-                    if (info == nil) {
-                        checkpoint[@"stage"] = @"checkpoint_readback";
-                        checkpoint[@"error"] = @"target was not created";
-                        [g_checkpoint_results addObject:checkpoint];
-                        failed++;
-                        [failures addObject:failure_entry(
-                            @"checkpoint_readback", (NSInteger)index,
-                            @"checkpoint", checkpoint[@"error"], NO,
-                            command.status, @"")];
-                        continue;
-                    }
-                    checkpoint[@"width"] = info[@"width"] ?: @0;
-                    checkpoint[@"height"] = info[@"height"] ?: @0;
-                    checkpoint[@"format"] = info[@"format"] ?: @"";
-                    checkpoint[@"generation"] = info[@"generation"] ?: @0;
-                    NSString *path = [output_path stringByAppendingPathComponent:
-                                          item[@"file"]];
-                    NSError *checkpoint_error = nil;
-                    NSInteger readback_status = 0;
-                    if (capture_target_to_file(info, path, &checkpoint_error,
-                                               &readback_status)) {
-                        checkpoint[@"ok"] = @YES;
-                    } else {
-                        checkpoint[@"stage"] = @"checkpoint_readback";
-                        checkpoint[@"error"] =
-                            failure_text(checkpoint_error,
-                                         @"checkpoint readback failed");
-                        failed++;
-                        [failures addObject:failure_entry(
-                            @"checkpoint_readback", (NSInteger)index,
-                            @"checkpoint", checkpoint[@"error"],
-                            g_deadline_expired != 0, readback_status, @"")];
-                    }
-                    [g_checkpoint_results addObject:checkpoint];
-                }
+                run_checkpoint_readbacks(due_checkpoints, index, output_path,
+                                         NO, failures, &failed, &error);
             }
             BOOL is_selected = isolated && (NSInteger)index == only_event;
             if (isolated && !is_selected) {
@@ -5107,6 +5160,28 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                     event_stage, (NSInteger)index, kind ?: @"unknown",
                     message, g_deadline_expired != 0, event_command_status,
                     string_value(event[@"draw"][@"caller_rva"]) ?: @"")];
+            }
+            NSArray *post_checkpoints =
+                isolated ? nil : g_post_checkpoints_by_event[@(index)];
+            if (ok && post_checkpoints.count > 0) {
+                /* The exact-prefix checkpoint is the target state left by this
+                   event and no later event.  Commit and drain first, then read
+                   every target back. */
+                [command commit];
+                if (!wait_for_transfer(command, @"prefix checkpoint boundary",
+                                       &error)) {
+                    failed++;
+                    [failures addObject:failure_entry(
+                        @"checkpoint_boundary", (NSInteger)index,
+                        kind ?: @"unknown",
+                        failure_text(error, @"prefix checkpoint wait failed"),
+                        g_deadline_expired != 0, command.status, @"")];
+                } else {
+                    command = [g_queue commandBuffer];
+                    run_checkpoint_readbacks(post_checkpoints, index,
+                                             output_path, YES, failures,
+                                             &failed, &error);
+                }
             }
             encoded++;
             g_encoded_count = encoded;
