@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Independent M7 event-20 acceptance checker.
+"""Independent M7 exact-prefix acceptance checker.
 
-    python3 accept.py <workspace>
+    python3 accept.py [--target-end N] <workspace>
+
+The default target is event 20.  A campaign may select a smaller successive
+prefix (for example ``--target-end 3``); later observations remain diagnostics
+and do not expand the acceptance requirement.
 
 The checker lives in the trusted infrastructure checkout and imports the
 trusted ``automation`` modules from there, never from the candidate.  It reads
@@ -15,11 +19,11 @@ A model statement, a matching final image, or a missing intermediate checkpoint
 cannot pass.
 
 Supported verdicts: ``pass`` only for an independently verified exact prefix
-through event 20 from an authentic sealed frame; ``fail`` for a verified first
-divergence; ``inconclusive`` when the evidence is missing, incomplete,
-unsupported or unproven.  ``EVENT20_EXACT`` is a campaign name derived here
-from the generic ``EXACT_PREFIX`` result; the common checker has no event-20
-constant.
+through the requested target from an authentic sealed frame; ``fail`` for a
+verified first divergence; ``inconclusive`` when the evidence is missing,
+incomplete, unsupported or unproven.  ``EVENT20_EXACT`` is a campaign name
+derived here from the generic ``EXACT_PREFIX`` result; the common checker has no
+event-20 constant.
 """
 
 from __future__ import annotations
@@ -35,7 +39,21 @@ if str(ROOT) not in sys.path:
 
 from automation import gfx_prefix_check  # noqa: E402
 
-RELATIVE_BASE = Path(".local") / "m7" / "event20" / "live"
+DEFAULT_TARGET_END = 20
+
+
+def _target_end(argv: list[str]) -> tuple[int, list[str]]:
+    """Read the optional ``--target-end`` before the workspace argument."""
+    target = DEFAULT_TARGET_END
+    rest = list(argv[1:])
+    if rest[:1] == ["--target-end"]:
+        if len(rest) < 2:
+            raise ValueError("--target-end needs an event number")
+        target = int(rest[1])
+        rest = rest[2:]
+    if not 0 <= target < 4096:
+        raise ValueError("target event is out of range")
+    return target, rest
 
 
 def _selected_sidecar() -> Path | None:
@@ -76,9 +94,14 @@ def _emit(verdict: str, diagnostics: str, result: dict | None = None) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        return _emit("inconclusive", "usage: accept.py <workspace>")
-    workspace = Path(argv[1]).expanduser().resolve()
+    try:
+        target_end, positional = _target_end(argv)
+    except ValueError as exc:
+        return _emit("inconclusive", f"invalid target: {exc}")
+    if not positional:
+        return _emit("inconclusive",
+                     "usage: accept.py [--target-end N] <workspace>")
+    workspace = Path(positional[0]).expanduser().resolve()
     try:
         trusted_root = _trusted_root(workspace)
     except (gfx_prefix_check.PrefixCheckError, OSError, ValueError,
@@ -114,7 +137,7 @@ def main(argv: list[str]) -> int:
     run_dir = os.environ.get("EU4_M7_CHECKER_RUN_DIR", "").strip() or None
     try:
         result = gfx_prefix_check.evaluate(
-            frame_dir, None, require_end=20, trusted_execution=True,
+            frame_dir, None, require_end=target_end, trusted_execution=True,
             trusted_root=trusted_root, candidate_workspace=workspace,
             candidate_sidecar=sidecar, trusted_run_dir=run_dir)
     except (gfx_prefix_check.PrefixCheckError, OSError, ValueError) as exc:
@@ -122,16 +145,17 @@ def main(argv: list[str]) -> int:
     generic = result.get("verdict")
     authority = (result.get("evidence") or {}).get("authority")
     exact_prefix = result.get("verified_prefix") or {}
-    if (generic == "EXACT_PREFIX"
+    if (result.get("qualified") is True
             and authority == "authentic"
-            and result.get("independent_equality") is True
-            and int(exact_prefix.get("end", -1)) >= 20):
-        result = dict(result, campaign_verdict="EVENT20_EXACT")
+            and int(exact_prefix.get("end", -1)) >= target_end):
+        name = ("EVENT20_EXACT" if target_end == DEFAULT_TARGET_END
+                else f"EXACT_PREFIX_{target_end}")
+        result = dict(result, campaign_verdict=name)
         return _emit(
             "pass",
-            "independent exact-prefix comparison verified events 0 through 20 "
-            "from the authentic sealed frame; every compared output is "
-            "independently attributable",
+            f"independent exact-prefix comparison verified events 0 through "
+            f"{target_end} from the authentic sealed frame; every compared "
+            "output is independently attributable",
             result)
     if generic == "UNSUPPORTED":
         return _emit(
@@ -140,8 +164,7 @@ def main(argv: list[str]) -> int:
             + ", ".join(str(event) for event in
                         result.get("excluded_events") or []),
             result)
-    if generic == "EXACT_PREFIX" and result.get(
-            "independent_equality") is not True:
+    if generic == "EXACT_PREFIX" and result.get("qualified") is not True:
         return _emit(
             "inconclusive",
             "the exact pixel match is not independently attributable: "
@@ -163,7 +186,7 @@ def main(argv: list[str]) -> int:
             result)
     return _emit(
         "inconclusive",
-        "exact event-20 qualification is not established: "
+        f"exact event-{target_end} qualification is not established: "
         + "; ".join(result.get("problems") or [generic or "unknown"]),
         result)
 

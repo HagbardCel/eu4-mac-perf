@@ -1848,3 +1848,57 @@ class ExcludedAuxiliaryTests(unittest.TestCase):
         self.assertTrue(any("consumed" in problem
                             for problem in coverage["problems"]),
                         coverage["problems"])
+
+
+class PrefixTargetTests(unittest.TestCase):
+    """The requested target bounds qualification; later rows are diagnostics."""
+
+    def _rows(self, end: int = 20) -> list[dict]:
+        return [{"event": event, "status": "match"}
+                for event in range(end + 1)]
+
+    def test_later_divergence_does_not_block_the_requested_target(self):
+        rows = self._rows()
+        rows[4] = {"event": 4, "status": "divergent"}
+        result = gfx_prefix_check.classify_prefix(
+            rows, problems=[], end=20, require_end=3)
+        self.assertEqual(result["verdict"], "EXACT_PREFIX")
+        self.assertEqual(result["verified_prefix"], {"start": 0, "end": 3})
+        self.assertIsNone(result["first_divergence"])
+        self.assertEqual(result["excluded_events"], [])
+        self.assertEqual(result["invalid_events"], [])
+
+    def test_earlier_divergence_blocks_the_requested_target(self):
+        rows = self._rows()
+        rows[1] = {"event": 1, "status": "divergent"}
+        result = gfx_prefix_check.classify_prefix(
+            rows, problems=[], end=20, require_end=3)
+        self.assertEqual(result["verdict"], "FIRST_DIVERGENCE")
+        self.assertEqual(result["first_divergence"], 1)
+        self.assertEqual(result["verified_prefix"], {"start": 0, "end": 0})
+
+    def test_missing_event_inside_the_target_cannot_pass(self):
+        rows = self._rows()
+        rows[2] = {"event": 2, "status": "missing"}
+        result = gfx_prefix_check.classify_prefix(
+            rows, problems=[], end=20, require_end=3)
+        self.assertEqual(result["verdict"], "INCOMPLETE_EVIDENCE")
+        self.assertEqual(result["unverified_event"], 2)
+        self.assertFalse(result["verified_prefix"] == {"start": 0, "end": 3})
+
+    def test_auxiliary_or_invalid_rows_after_the_target_are_diagnostics(self):
+        rows = self._rows()
+        rows[11] = {"event": 11, "status": "unsupported_auxiliary"}
+        rows[12] = {"event": 12, "status": "invalid"}
+        result = gfx_prefix_check.classify_prefix(
+            rows, problems=[], end=20, require_end=3)
+        self.assertEqual(result["verdict"], "EXACT_PREFIX")
+        self.assertEqual(result["verified_prefix"], {"start": 0, "end": 3})
+        self.assertEqual(result["excluded_events"], [])
+
+    def test_target_beyond_coverage_is_not_an_exact_prefix(self):
+        rows = self._rows()
+        result = gfx_prefix_check.classify_prefix(
+            rows, problems=[], end=20, require_end=21)
+        self.assertEqual(result["verdict"], "EXACT_RANGE")
+        self.assertEqual(result["verified_prefix"], {"start": 0, "end": 20})

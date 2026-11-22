@@ -986,6 +986,78 @@ class ReplayInputSanitizationTests(unittest.TestCase):
             self.assertNotIn("default_checkpoint", sanitized[0])
 
 
+class ReplayInputProvenanceTests(unittest.TestCase):
+    def _frame(self, root: Path) -> tuple[Path, dict, dict]:
+        frame = root / "frame"
+        (frame / "blobs").mkdir(parents=True)
+        payload = b"renderer-generated-payload"
+        generated = _write_blob(frame, "generated.bin", payload)
+        expected = _write_blob(frame, "expected.bin", payload)
+        events = [
+            {"kind": "clear",
+             "target": {"color_attachment": {"type": "texture", "name": 431}}},
+            {"kind": "draw", "index": 0, "target": {"framebuffer": 0},
+             "textures": [{"name": 431, "levels": [{
+                 "file": generated["file"],
+                 "sha256": generated["sha256"]}]}]},
+        ]
+        trace = {
+            "_events": events,
+            "_prefix": {"post_events": [{
+                "event": 0, "timing": "post_event", "resource": "tex:431",
+                "color": expected}]},
+            "frame": {"width": 1, "height": 1},
+        }
+        graph = {"resources": {"tex:431": {
+            "producers": [{"event": 0, "kind": "clear"}],
+            "consumers": [{"event": 1}]}}}
+        return frame, trace, graph
+
+    def test_in_frame_generated_texture_is_not_a_candidate_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            record = m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            self.assertFalse(
+                (root / "replay-input" / "blobs" / "generated.bin").exists())
+            self.assertEqual(record["shared_input_outputs"], [])
+
+    def test_payload_still_used_as_an_external_input_is_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            trace["_events"][1]["textures"].append({
+                "name": 9, "levels": [{"file": "generated.bin"}]})
+            graph["resources"]["tex:9"] = {
+                "producers": [], "consumers": [{"event": 1}]}
+            m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            self.assertTrue(
+                (root / "replay-input" / "blobs" / "generated.bin").is_file())
+
+    def test_seed_overwritten_by_an_earlier_full_clear_is_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            seed = trace["_prefix"]["post_events"][0]["color"]
+            trace["_events"][1]["seed"] = seed
+            graph["resources"]["tex:431"]["boundary"] = {
+                "event": 1, "file": seed["file"]}
+            graph["resources"]["tex:431"]["producers"][0].update({
+                "cleared": True, "coverage": {"color_full": True}})
+            record = m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            self.assertFalse(
+                (root / "replay-input" / "blobs" / seed["file"]).exists())
+            self.assertEqual(record["shared_input_outputs"], [])
+            sanitized = [
+                json.loads(line) for line in
+                (root / "replay-input" / "frame-events.jsonl").read_text()
+                .splitlines() if line.strip()]
+            self.assertNotIn("seed", sanitized[1])
+
+
 class ReplayInputOverlapTests(unittest.TestCase):
     def _frame(self, root: Path, payload: bytes) -> tuple[Path, dict]:
         frame = root / "frame"

@@ -352,9 +352,97 @@ def expected_output_blobs(trace: dict) -> list[dict]:
     return entries
 
 
-def _input_blob_entries(events, frame_dir: Path | None) -> list[dict]:
+def _redundant_seed_events(events, graph: dict | None) -> set[int]:
+    """Seeds that an earlier full clear replaces before the first draw.
+
+    The graph records the first draw's seed as a frame-boundary observation.
+    When the same resource was fully cleared by an earlier event in this frame,
+    the captured seed is not previous-frame state the replay needs: the clear
+    overwrites it before any sampling.  Dropping it keeps the replay input free
+    of reference-equivalent pixels without changing resource identities.
+    """
+    resources = (graph or {}).get("resources") or {}
+    redundant: set[int] = set()
+    for index, event in enumerate(events):
+        seed = event.get("seed")
+        if not isinstance(seed, dict) or not seed.get("file"):
+            continue
+        for resource in resources.values():
+            boundary = resource.get("boundary") or {}
+            if (boundary.get("event") != index
+                    or boundary.get("file") != seed.get("file")):
+                continue
+            if any(
+                    isinstance(producer.get("event"), int)
+                    and producer["event"] < index
+                    and producer.get("cleared")
+                    and (producer.get("coverage") or {}).get("color_full")
+                    for producer in resource.get("producers") or []):
+                redundant.add(index)
+            break
+    return redundant
+
+
+def _sanitized_events(trace: dict, graph: dict | None) -> list[dict]:
+    events = [{key: value for key, value in event.items()
+               if key != "default_checkpoint"}
+              for event in trace.get("_events") or []]
+    for index in _redundant_seed_events(events, graph):
+        events[index].pop("seed", None)
+    return events
+
+
+def _texture_level_files(level) -> list[str]:
+    """One texture level's captured payload names, including faces/compression."""
+    if not isinstance(level, dict):
+        return []
+    members = [level, level.get("compressed"), *(level.get("faces") or [])]
+    names = []
+    for member in members:
+        if isinstance(member, dict) and isinstance(member.get("file"), str) \
+                and member["file"]:
+            names.append(Path(member["file"]).name)
+    return names
+
+
+def _generated_texture_input_files(events, graph: dict | None) -> set[str]:
+    """Captured texture payloads the Metal replay regenerates in-frame.
+
+    A texture sampled only after an earlier event in the same frame produced
+    its resource is a renderer-generated input.  The captured payload is then
+    redundant (and, when it matches a checkpoint, contaminating): the renderer
+    samples its own render target.  Any usage without such a producer keeps the
+    payload as a genuine external input.  Resource relationships come from
+    :mod:`gfx_frame_graph`, not from this module's own classifier.
+    """
+    resources = (graph or {}).get("resources") or {}
+    usages: dict[str, list[bool]] = {}
+    for index, event in enumerate(events):
+        for texture in event.get("textures") or []:
+            if not isinstance(texture, dict):
+                continue
+            key = f"tex:{texture.get('name')}"
+            producers = (resources.get(key) or {}).get("producers") or []
+            generated = any(
+                isinstance(producer.get("event"), int)
+                and producer["event"] < index
+                for producer in producers)
+            for level in texture.get("levels") or []:
+                for name in _texture_level_files(level):
+                    usages.setdefault(name, []).append(generated)
+    return {name for name, flags in usages.items() if flags and all(flags)}
+
+
+def _effective_input_names(events, graph: dict | None = None) -> set[str]:
+    return (event_input_blob_names(events)
+            - _generated_texture_input_files(events, graph))
+
+
+def _input_blob_entries(events, frame_dir: Path | None,
+                        names: set[str] | None = None) -> list[dict]:
     entries = []
-    for name in sorted(event_input_blob_names(events)):
+    for name in sorted(names if names is not None
+                       else event_input_blob_names(events)):
         entry = {"file": name, "sha256": None}
         if frame_dir is not None:
             path = Path(frame_dir) / "blobs" / name
@@ -365,19 +453,21 @@ def _input_blob_entries(events, frame_dir: Path | None) -> list[dict]:
 
 
 def replay_input_overlap(trace: dict,
-                         frame_dir: Path | str | None = None) -> list[dict]:
+                         frame_dir: Path | str | None = None, *,
+                         graph: dict | None = None) -> list[dict]:
     """Expected outputs whose bytes remain accessible as renderer inputs.
 
     Matching is by content digest, not filename, so a copied payload under a
-    different name is still reported.  Every accessible expected output is
-    listed; ``affects_claim`` later depends on its role and timing.
+    different name is still reported.  Inputs the replay regenerates from an
+    earlier in-frame producer are not accessible inputs and are not reported;
+    pass the same ``graph`` used for materialization so both agree.
     """
-    events = [{key: value for key, value in event.items()
-               if key != "default_checkpoint"}
-              for event in trace.get("_events") or []]
+    events = _sanitized_events(trace, graph)
     expected = expected_output_blobs(trace)
     overlaps = []
-    for item in _input_blob_entries(events, frame_dir):
+    for item in _input_blob_entries(events, frame_dir,
+                                    names=_effective_input_names(events,
+                                                                 graph)):
         digest = item.get("sha256")
         matches = [entry for entry in expected
                    if digest is not None and entry.get("sha256") == digest]
@@ -399,25 +489,27 @@ def replay_input_overlap(trace: dict,
 
 
 def materialize_replay_input(frame_dir: Path | str, trace: dict,
-                             destination: Path | str) -> dict:
+                             destination: Path | str, *,
+                             graph: dict | None = None) -> dict:
     """Create a replay input frame without expected output pixels.
 
     The sanitized event representation is built first, then its explicit input
     inventory is derived from that representation.  Expected outputs are never
     copied, even when the same bytes are available under another input name;
-    overlap is reported by content digest.
+    overlap is reported by content digest.  Texture payloads that an earlier
+    in-frame event regenerates are omitted: the renderer samples its own
+    render target, so accepting the captured bytes would both be redundant and
+    make the checkpoint non-independent.  Pass ``graph`` from
+    :func:`gfx_frame_graph.build` to derive that provenance.
     """
     frame_dir = Path(frame_dir).resolve()
     destination = Path(destination).resolve()
     events = trace.get("_events") or []
     if not events:
         raise FrameError("replay input frame has no events")
-    sanitized_events = []
-    for event in events:
-        sanitized_events.append({key: value for key, value in event.items()
-                                 if key != "default_checkpoint"})
-    inputs = event_input_blob_names(sanitized_events)
-    overlap = replay_input_overlap(trace, frame_dir)
+    sanitized_events = _sanitized_events(trace, graph)
+    inputs = _effective_input_names(sanitized_events, graph)
+    overlap = replay_input_overlap(trace, frame_dir, graph=graph)
     destination.mkdir(parents=True, exist_ok=True)
     blobs = destination / "blobs"
     blobs.mkdir(exist_ok=True)

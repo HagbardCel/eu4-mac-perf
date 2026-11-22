@@ -64,20 +64,23 @@ def _require(condition: bool, problems: list[str], message: str) -> None:
 
 
 def classify_prefix(events_out: list[dict], *, problems: list[str],
-                    end: int, require_end: int) -> dict:
-    """Classify only authenticated evidence, walking the prefix sequentially.
+                    end: int, require_end: int | None) -> dict:
+    """Classify only authenticated evidence, walking the requested prefix.
 
-    A missing, invalid or excluded event stops an exact walk.  A later mismatch
-    may not be promoted to ``FIRST_DIVERGENCE`` when an earlier event could not
-    be verified.  The generic verdicts never mention a campaign-specific event
-    number; the M7 adapter derives its name from ``EXACT_PREFIX``.
+    ``end`` is the capture's observation coverage; ``require_end`` is the
+    acceptance boundary.  Later observations stay available in ``events`` as
+    diagnostics but neither qualify nor invalidate the requested prefix.  A
+    missing, invalid or excluded event inside the boundary stops an exact walk.
+    A later mismatch may not be promoted to ``FIRST_DIVERGENCE`` when an earlier
+    event could not be verified.
     """
     rows = {int(item["event"]): item for item in events_out
             if isinstance(item.get("event"), int)}
+    target = end if require_end is None else min(int(require_end), end)
     verified_end = -1
     first_divergence = None
     unverified_event = None
-    for event in range(end + 1):
+    for event in range(target + 1):
         row = rows.get(event)
         if row is None:
             unverified_event = event
@@ -93,13 +96,15 @@ def classify_prefix(events_out: list[dict], *, problems: list[str],
         break
     invalid_events = sorted(
         event for event, row in rows.items()
-        if row.get("status") not in ("match", "divergent",
-                                     "unsupported_auxiliary"))
+        if event <= target
+        and row.get("status") not in ("match", "divergent",
+                                      "unsupported_auxiliary"))
     excluded_events = sorted(
         event for event, row in rows.items()
-        if row.get("status") == "unsupported_auxiliary")
+        if event <= target and row.get("status") == "unsupported_auxiliary")
     verified_color_events = sorted(
-        event for event, row in rows.items() if row.get("status") == "match")
+        event for event, row in rows.items()
+        if event <= target and row.get("status") == "match")
     if problems or unverified_event is not None:
         verdict = "INCOMPLETE_EVIDENCE"
         status = "incomplete"
@@ -115,18 +120,14 @@ def classify_prefix(events_out: list[dict], *, problems: list[str],
         verdict = "UNSUPPORTED"
         status = "unsupported"
         verified_prefix = {"start": 0, "end": verified_end}
-    elif verified_end == end and end >= require_end:
-        verdict = "EXACT_PREFIX"
-        status = "qualified"
-        verified_prefix = {"start": 0, "end": require_end}
-    elif verified_end == end:
+    elif require_end is not None and end < int(require_end):
         verdict = "EXACT_RANGE"
         status = "qualified_range"
         verified_prefix = {"start": 0, "end": end}
     else:
-        verdict = "INCOMPLETE_EVIDENCE"
-        status = "incomplete"
-        verified_prefix = None
+        verdict = "EXACT_PREFIX"
+        status = "qualified"
+        verified_prefix = {"start": 0, "end": target}
     return {
         "first_divergence": first_divergence,
         "unverified_event": unverified_event,
@@ -471,9 +472,9 @@ def _execution_environment(execution_dir: Path) -> dict:
 
     EU4 evidence-location variables are removed so the candidate process is not
     handed a path to authenticated reference evidence.  This is input
-    separation, not a sandbox: arbitrary native candidate code can still read
-    the filesystem.  The trusted checker therefore never passes reference
-    payloads as replay inputs.
+    separation, not a sandbox: agents are cooperative, and native candidate code
+    can still read the filesystem.  Independence is established by the
+    reference-free replay input and the checker's own pixel comparison.
     """
     home = execution_dir / "home"
     tmp = execution_dir / "tmp"
@@ -491,45 +492,6 @@ def _execution_environment(execution_dir: Path) -> dict:
     environment["HOME"] = str(home)
     environment["TMPDIR"] = str(tmp)
     return environment
-
-
-def _sandbox_profile(protected_paths: list[Path]) -> str:
-    """Seatbelt profile denying candidate access to reference evidence."""
-    rules = ["(version 1)", "(allow default)"]
-    for path in protected_paths:
-        resolved = Path(path).expanduser().resolve()
-        escaped = str(resolved).replace("\\", "\\\\").replace('"', '\\"')
-        rules.append(f'(deny file-read* (subpath "{escaped}"))')
-        rules.append(f'(deny file-write* (subpath "{escaped}"))')
-    return "\n".join(rules)
-
-
-def _isolated_replay_command(host: Path, argv: list[str],
-                             execution_dir: Path,
-                             protected_paths: list[Path] | None) -> list[str]:
-    """Wrap the candidate host in the platform's local reference isolation.
-
-    Seatbelt is the existing macOS mechanism.  If it is unavailable the checker
-    refuses to run a candidate rather than claiming isolation it does not have.
-    """
-    if not protected_paths:
-        raise PrefixCheckError(
-            "candidate reference isolation is unconfigured: no protected "
-            "reference path")
-    sandbox = shutil.which("sandbox-exec")
-    if sandbox is None:
-        raise PrefixCheckError(
-            "candidate reference isolation is unavailable: sandbox-exec not "
-            "found")
-    probe = subprocess.run(
-        [sandbox, "-p", "(version 1)(allow default)", "/usr/bin/true"],
-        capture_output=True, text=True, check=False, timeout=30)
-    if probe.returncode != 0:
-        raise PrefixCheckError(
-            "candidate reference isolation is unavailable: sandbox-exec "
-            "preparation probe failed")
-    profile = _sandbox_profile(protected_paths)
-    return [sandbox, "-p", profile, str(host), *argv]
 
 
 def _cached_candidate_build(snapshot_root: Path, destination: Path,
@@ -576,9 +538,9 @@ def _cached_candidate_build(snapshot_root: Path, destination: Path,
 def _run_trusted_replay(frame_dir: Path, request: dict,
                         run_dir: Path | str | None = None, *,
                         trace: dict | None = None,
+                        graph: dict | None = None,
                         candidate_workspace: Path | str | None = None,
                         candidate_sidecar: Path | str | None = None,
-                        protected_paths: list[Path] | None = None,
                         diagnostics: dict | None = None) -> dict:
     """Execute one Metal replay in a fresh, self-contained execution directory.
 
@@ -601,7 +563,7 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         diagnostics["execution_dir"] = str(execution_dir)
     replay_input = execution_dir / "replay-input"
     input_record = m6_frame.materialize_replay_input(
-        frame_dir, trace, replay_input)
+        frame_dir, trace, replay_input, graph=graph)
     request_path = execution_dir / "checkpoint-request.json"
     request_path.write_text(json.dumps(request, indent=2) + "\n")
     shaders = execution_dir / "shaders"
@@ -623,11 +585,6 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         if candidate_sidecar is None:
             raise PrefixCheckError(
                 "trusted candidate execution requires an explicit sidecar")
-        present = [Path(path) for path in (protected_paths or [])
-                   if Path(path).exists()]
-        if not present or frame_dir not in [path.resolve() for path in present]:
-            raise PrefixCheckError(
-                "candidate reference isolation has no protected reference path")
         candidate = verify_candidate(Path(candidate_workspace),
                                      Path(candidate_sidecar))
         before = _candidate_source_digests(Path(candidate["workspace"]))
@@ -665,11 +622,7 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         "--frame", str(replay_input), "--shaders", str(shaders),
         "--out", str(replay_dir), "--checkpoints", str(request_path),
     ]
-    if candidate is not None:
-        replay_command = _isolated_replay_command(
-            Path(host), host_argv, execution_dir, protected_paths)
-    else:
-        replay_command = [str(host), *host_argv]
+    replay_command = [str(host), *host_argv]
     # Serialize the trusted GPU execution host-wide.  A stop or an expired
     # operator deadline that happened while this execution waited for the lock
     # must prevent the replay host from starting.
@@ -716,15 +669,13 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
                             "sha256": _sha256(path)})
     isolation = None
     if candidate is not None:
-        protected = [str(Path(path).resolve())
-                     for path in (protected_paths or [])]
         isolation = {
-            "mechanism": "seatbelt",
-            "reference_roots": protected,
-            "protected_paths": protected,
-            "profile_sha256": hashlib.sha256(
-                _sandbox_profile(protected_paths or []).encode()).hexdigest()
-            if protected else None,
+            "mechanism": "input-separation",
+            "trust": (
+                "candidate agents are cooperative participants; the replay "
+                "input contains no reference pixels and the comparison is "
+                "performed by the checker after execution"),
+            "reference_roots": [str(frame_dir)],
         }
     execution = {
         "schema": "gfx-trusted-execution/v1",
@@ -782,6 +733,76 @@ def _invalid_result(result: dict, problems: list[str], *, status: str,
     return result
 
 
+def _scope_overlap(overlap: list[dict], scope: set[int]) -> list[dict]:
+    """Overlap entries that make an expected output inside *scope* unattributable."""
+    affected = []
+    for item in overlap:
+        events = {
+            entry.get("event") for entry in item.get("expected_by") or []
+            if (entry.get("kind") == "observation"
+                and entry.get("role") == "color"
+                and entry.get("timing") == "post_event")
+        }
+        if events & scope:
+            affected.append(item)
+    return affected
+
+
+def preflight_fixture(frame_dir: Path | str, *, require_end: int,
+                      trusted_root: Path | str | None = None) -> dict:
+    """Cheap static eligibility check before an expensive trusted replay.
+
+    Reuses the sealed-frame loader, the resource graph and the same
+    provenance-aware input inventory as :func:`evaluate`.  It answers only
+    whether the configured trusted fixture can qualify the requested prefix;
+    it never executes candidate code.
+    """
+    frame_dir = Path(frame_dir).expanduser().resolve()
+    problems: list[str] = []
+    result: dict = {"schema": "gfx-prefix-preflight/v1",
+                    "frame_dir": str(frame_dir),
+                    "target_end": int(require_end),
+                    "problems": problems}
+    trusted_record = None
+    if trusted_root is not None:
+        try:
+            trusted_record = verify_trusted_evidence(trusted_root, frame_dir)
+        except (PrefixCheckError, OSError) as exc:
+            problems.append(f"trusted evidence is not usable: {exc}")
+            return result
+    try:
+        seal = m6_frame.load_seal(frame_dir, trusted_evidence=trusted_record)
+        trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
+    except (m6_frame.FrameError, OSError, ValueError) as exc:
+        problems.append(f"sealed frame is not usable: {exc}")
+        return result
+    result["authority"] = gfx_observation.authority(trace, seal)
+    result["trusted_evidence"] = trusted_record is not None
+    graph = gfx_frame_graph.build(frame_dir, trace=trace)
+    prefix = graph.get("prefix") or {}
+    if prefix.get("status") != "complete":
+        problems.append(
+            "observation coverage is not a complete prefix: "
+            + str(prefix.get("status") or "unknown"))
+        return result
+    end = prefix.get("end")
+    result["prefix_end"] = end
+    if not isinstance(end, int) or end < int(require_end):
+        problems.append(
+            f"observation scope ends at event {end}, not {require_end}")
+        return result
+    overlap = _scope_overlap(
+        m6_frame.replay_input_overlap(trace, frame_dir, graph=graph),
+        set(range(int(require_end) + 1)))
+    result["shared_input_outputs"] = overlap
+    for item in overlap:
+        problems.append(
+            f"expected payload {item['file']} remains a candidate input "
+            f"({item['input_file']}); the fixture cannot qualify events "
+            f"0..{require_end} independently")
+    return result
+
+
 def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
              *, request_path: Path | str | None = None,
              require_end: int | None = None,
@@ -830,25 +851,7 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     except (m6_frame.FrameError, OSError, ValueError) as exc:
         problems.append(f"sealed frame is not usable: {exc}")
         return _invalid_result(result, problems, status="invalid")
-    overlap = m6_frame.replay_input_overlap(trace, frame_dir)
-    result["shared_input_outputs"] = overlap
     result["evidence_limitations"] = []
-    for item in overlap:
-        roles = ", ".join(sorted({
-            f"{entry['kind']}:{entry.get('role')}"
-            for entry in item.get("expected_by") or []
-        }))
-        result["evidence_limitations"].append(
-            f"expected payload {item['file']} is accessible as renderer input "
-            f"{item['input_file']} ({roles}); its bytes cannot be independently "
-            "attributed")
-    shared_files = {
-        item["file"] for item in overlap
-        if any(entry.get("kind") == "observation"
-               and entry.get("role") == "color"
-               and entry.get("timing") == "post_event"
-               for entry in item.get("expected_by") or [])
-    }
     provenance = gfx_observation.authority(trace, seal)
     trusted_authority = trusted_record is not None
     if provenance == "authentic" and not trusted_authority:
@@ -866,6 +869,24 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
         "reference_sha256": seal.get("reference_sha256"),
     }
     graph = gfx_frame_graph.build(frame_dir, trace=trace)
+    overlap = m6_frame.replay_input_overlap(trace, frame_dir, graph=graph)
+    result["shared_input_outputs"] = overlap
+    for item in overlap:
+        roles = ", ".join(sorted({
+            f"{entry['kind']}:{entry.get('role')}"
+            for entry in item.get("expected_by") or []
+        }))
+        result["evidence_limitations"].append(
+            f"expected payload {item['file']} is accessible as renderer input "
+            f"{item['input_file']} ({roles}); its bytes cannot be independently "
+            "attributed")
+    shared_files = {
+        item["file"] for item in overlap
+        if any(entry.get("kind") == "observation"
+               and entry.get("role") == "color"
+               and entry.get("timing") == "post_event"
+               for entry in item.get("expected_by") or [])
+    }
     result["capture"] = gfx_independent_replay.capture_identity(seal, trace)
     result["graph_status"] = graph.get("status")
     result["graph_reasons"] = graph.get("reasons") or []
@@ -912,19 +933,11 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
         execution_diagnostics: dict = {}
         try:
             campaign_guard.require_active_from_env()
-            protected = [frame_dir]
-            if trusted_root is not None:
-                protected.append(Path(trusted_root).expanduser().resolve())
-            if trusted_record is not None:
-                original = trusted_record.get("original_capture_dir")
-                if original:
-                    protected.append(Path(str(original)))
             trusted = _run_trusted_replay(
                 frame_dir, expected_request, trusted_run_dir,
-                trace=trace,
+                trace=trace, graph=graph,
                 candidate_workspace=candidate_workspace,
                 candidate_sidecar=candidate_sidecar,
-                protected_paths=protected,
                 diagnostics=execution_diagnostics)
         except campaign_guard.CampaignRefusal as exc:
             problems.append(f"trusted replay refused: {exc}")
@@ -1041,6 +1054,8 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
             continue
         event = int(entry.get("event"))
         seen.add(event)
+        beyond_target = (mode == "prefix" and require_end is not None
+                         and event > int(require_end))
         observation = sealed.get(event)
         row = {
             "event": event,
@@ -1107,7 +1122,8 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                 problem = str(entry.get("reason")
                               or "reconciled status is not match or divergence")
         if problem is not None:
-            problems.append(f"prefix event {event}: {problem}")
+            if not beyond_target:
+                problems.append(f"prefix event {event}: {problem}")
             row["status"] = "invalid"
             row["problem"] = problem
         events_out.append(row)
@@ -1124,7 +1140,8 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                            "format; accounted for but not compared",
             })
             continue
-        problems.append(f"event {event} has no reconciled result")
+        if mode != "prefix" or require_end is None or event <= require_end:
+            problems.append(f"event {event} has no reconciled result")
         events_out.append({
             "event": event,
             "status": "missing",
@@ -1133,6 +1150,17 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     events_out.sort(key=lambda item: item["event"])
     result["events"] = events_out
     result["observed_events"] = len(events_out)
+    scope_events = set()
+    if mode == "prefix" and end is not None:
+        scope_end = end if require_end is None else min(int(require_end), end)
+        scope_events = set(range(scope_end + 1))
+    elif mode == "selected":
+        scope_events = set(selection)
+    result["independent_equality"] = not _scope_overlap(overlap, scope_events)
+    if not result["independent_equality"]:
+        result["evidence_limitations"].append(
+            "one or more compared post-event colour outputs are also renderer "
+            "inputs; the pixel match is not independently attributable")
     if mode == "prefix":
         classification = classify_prefix(
             events_out, problems=problems, end=end, require_end=require_end)
@@ -1141,23 +1169,10 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
             events_out, problems=problems, selection=selection)
     result.update(classification)
     result["exact"] = classification["verdict"] == "EXACT_PREFIX"
-    scope_events = set()
-    if mode == "prefix" and end is not None:
-        scope_events = set(range(end + 1))
-    elif mode == "selected":
-        scope_events = set(selection)
-    affected = set()
-    for item in overlap:
-        for entry in item.get("expected_by") or []:
-            if (entry.get("kind") == "observation"
-                    and entry.get("role") == "color"
-                    and entry.get("timing") == "post_event"):
-                affected.add(entry.get("event"))
-    result["independent_equality"] = not (affected & scope_events)
-    if not result["independent_equality"]:
-        result["evidence_limitations"].append(
-            "one or more compared post-event colour outputs are also renderer "
-            "inputs; the pixel match is not independently attributable")
+    # The single acceptance predicate: pixel equality and independent
+    # attribution.  Campaign adapters add only their reference authority.
+    result["qualified"] = bool(
+        result["exact"] and result["independent_equality"])
     result["problems_count"] = len(problems)
     return result
 

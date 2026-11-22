@@ -162,6 +162,18 @@ class CheckerBindingTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    def test_target_end_argument_defaults_to_event_20(self):
+        module = self._accept_module()
+        self.assertEqual(
+            module._target_end(["accept.py", "/workspace"]),
+            (20, ["/workspace"]))
+        self.assertEqual(
+            module._target_end(
+                ["accept.py", "--target-end", "3", "/workspace"]),
+            (3, ["/workspace"]))
+        with self.assertRaises(ValueError):
+            module._target_end(["accept.py", "--target-end"])
+
     def test_the_selected_sidecar_reference_cannot_be_overridden(self):
         module = self._accept_module()
         selected = self.root / "selected.json"
