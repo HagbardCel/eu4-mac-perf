@@ -18,11 +18,17 @@ returns an already-running identical suite instead of launching a duplicate.
    ```
 2. **Once focused tests pass**, run the dependent modules they touch (the
    neighbouring suites named in the change or its plan).
-3. **Run the full offline gate once at the end**:
+3. **Run the full offline gate** only when retaining implementation changes or
+   preparing PR review:
    `python3.14 -m automation.test_runner run --profile offline --label full`.
-   The offline profile is the default and cannot launch EU4. Live tests are
-   explicit: `--profile live --module <module>`, with a real case and bounded
-   timeout, and are never part of the default gate.
+   Do not run it for temporary diagnostic modifications, exactly reverted
+   experiments, individual `/goal` rounds, or campaigns whose acceptance is
+   determined by the existing independent checker; during autonomous
+   reconstruction, focused tests relevant to retained changes and the existing
+   trusted checker are sufficient. The offline profile is the default and
+   cannot launch EU4. Live tests are explicit:
+   `--profile live --module <module>`, with a real case and bounded timeout,
+   and are never part of the default gate.
 4. **Compare failures against base** before claiming a regression:
    run the same focused modules in a base worktree (`--cwd`) and use
    `python3 -m automation.test_runner compare --base <id|record> --candidate <id|record>`.
@@ -30,13 +36,7 @@ returns an already-running identical suite instead of launching a duplicate.
 5. Inspect a running or finished invocation with
    `python3 -m automation.test_runner status --id <id>`; do not poll a log file.
 
-The full offline gate is the final verification step for retained implementation
-changes or PR review, not for temporary diagnostic modifications, exactly
-reverted experiments, individual `/goal` rounds, or campaigns whose acceptance
-is determined by the existing independent checker. During autonomous
-reconstruction, run the focused tests relevant to retained changes and the
-existing trusted checker instead; do not modify `automation/test_runner.py` or
-add test caching.
+Do not modify `automation/test_runner.py` or add test caching.
 
 When reverting an experiment, compare the renderer source or diff against the
 saved pre-experiment state. If it is identical, reuse the earlier verification
