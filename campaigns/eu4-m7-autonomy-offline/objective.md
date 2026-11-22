@@ -24,9 +24,16 @@ checker reports that scope explicitly.
 - Do not claim success based on your own screenshots or reports. Success
   requires an independent checker pass on actual GPU output produced from your
   modified source.
+- Write diagnostic reports under `analysis/m7/reports/` (or another path under
+  `analysis/m7/`). Do not write into `automation/`, `campaigns/` or `dsh/`.
+- The operator deadline is authoritative only through
+  `python3 -m automation.campaign_guard status --state $EU4_CAMPAIGN_STATE`.
+  Never report a deadline stop unless that status shows no remaining time or a
+  campaign action is refused with `kind=deadline`; "not enough time to finish"
+  is a blocker with its actual cause, not deadline exhaustion.
 - Do not merge. Stop with explicit evidence if the correction cannot be
   justified, the required observation or environment is unavailable, or the
-  operator's execution deadline has passed.
+  campaign guard reports the operator's execution deadline has expired.
 
 ## Acceptance
 

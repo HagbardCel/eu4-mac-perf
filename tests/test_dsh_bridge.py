@@ -1707,3 +1707,95 @@ class SessionLeaseTests(unittest.TestCase):
             self.assertEqual(second.holder()["pid"], os.getpid())
         finally:
             second.release()
+
+
+class FixturePreflightTests(BridgeTestCase):
+    """The launcher-owned fixture preflight refuses before agent work starts."""
+
+    def _sidecar(self, campaign_data: dict) -> tuple[object, Path]:
+        from types import SimpleNamespace
+        campaign = self.root / "campaign"
+        campaign.mkdir()
+        (campaign / "campaign.json").write_text(
+            json.dumps(campaign_data), encoding="utf-8")
+        sidecar_path = self.root / "sidecar.json"
+        sidecar_path.write_text(json.dumps({
+            "trusted_reference_root": str(self.root / "trusted")}),
+            encoding="utf-8")
+        workspace = self.root / "workspace"
+        workspace.mkdir()
+        return SimpleNamespace(
+            source_campaign=campaign / "campaign.json",
+            sidecar_path=sidecar_path,
+            workspace=workspace,
+            mode="worktree",
+        ), campaign
+
+    def test_a_fixture_that_cannot_qualify_the_target_is_refused(self) -> None:
+        from automation import gfx_prefix_check
+        sidecar, _campaign = self._sidecar({
+            "accept": ["python3", "checker.py", "--target-end", "3"],
+            "fixture_frame": str(self.root / "frame"),
+            "trusted_reference_root": str(self.root / "trusted")})
+        report = {"problems": ["expected payload x remains a candidate input"],
+                  "authority": "authentic"}
+        with mock.patch.object(dsh_bridge.sys, "platform", "darwin"), \
+                mock.patch.object(
+                    dsh_bridge.shutil, "which", return_value="/usr/bin/clang"), \
+                mock.patch.object(
+                    gfx_prefix_check, "resolve_trusted_reference",
+                    return_value=self.root / "trusted"), \
+                mock.patch.object(
+                    gfx_prefix_check, "preflight_fixture",
+                    return_value=report), \
+                mock.patch.object(gfx_prefix_check, "verify_candidate"):
+            with self.assertRaises(dsh_bridge.Refusal) as caught:
+                dsh_bridge._fixture_preflight(sidecar)
+        self.assertEqual(caught.exception.kind, "fixture_ineligible")
+        self.assertIn("remains a candidate input", caught.exception.detail)
+
+    def test_relative_fixture_frame_resolves_against_the_infra_root(self) -> None:
+        from automation import gfx_prefix_check
+        sidecar, _campaign = self._sidecar({
+            "accept": ["python3", "checker.py", "--target-end", "3"],
+            "fixture_frame": ".local/relative-fixture/frame",
+            "trusted_reference_root": str(self.root / "trusted")})
+        captured = {}
+
+        def record_frame(frame, **_kwargs):
+            captured["frame"] = Path(frame)
+            return {"problems": [], "authority": "authentic"}
+
+        with contextlib.chdir(self.root), \
+                mock.patch.object(dsh_bridge.sys, "platform", "darwin"), \
+                mock.patch.object(
+                    dsh_bridge.shutil, "which", return_value="/usr/bin/clang"), \
+                mock.patch.object(
+                    gfx_prefix_check, "resolve_trusted_reference",
+                    return_value=self.root / "trusted"), \
+                mock.patch.object(
+                    gfx_prefix_check, "preflight_fixture",
+                    side_effect=record_frame), \
+                mock.patch.object(gfx_prefix_check, "verify_candidate"):
+            dsh_bridge._fixture_preflight(sidecar)
+        self.assertEqual(
+            captured["frame"],
+            (dsh_bridge.infra_root() / ".local/relative-fixture/frame").resolve())
+
+    def test_a_qualifying_fixture_passes(self) -> None:
+        from automation import gfx_prefix_check
+        sidecar, _campaign = self._sidecar({
+            "accept": ["python3", "checker.py", "--target-end", "3"],
+            "fixture_frame": str(self.root / "frame"),
+            "trusted_reference_root": str(self.root / "trusted")})
+        with mock.patch.object(dsh_bridge.sys, "platform", "darwin"), \
+                mock.patch.object(
+                    dsh_bridge.shutil, "which", return_value="/usr/bin/clang"), \
+                mock.patch.object(
+                    gfx_prefix_check, "resolve_trusted_reference",
+                    return_value=self.root / "trusted"), \
+                mock.patch.object(
+                    gfx_prefix_check, "preflight_fixture",
+                    return_value={"problems": [], "authority": "authentic"}), \
+                mock.patch.object(gfx_prefix_check, "verify_candidate"):
+            dsh_bridge._fixture_preflight(sidecar)

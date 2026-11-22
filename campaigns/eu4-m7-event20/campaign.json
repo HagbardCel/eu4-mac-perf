@@ -9,8 +9,11 @@
   },
   "accept": [
     "python3",
-    "accept.py"
+    "accept.py",
+    "--target-end",
+    "20"
   ],
   "accept_timeout_seconds": 600,
-  "trusted_reference_root": ".local/m7/event20/trusted-copy/47590918"
+  "trusted_reference_root": ".local/m7/event20/trusted-copy/47590918",
+  "fixture_frame": ".local/m7/event20/trusted-copy/47590918/frame"
 }

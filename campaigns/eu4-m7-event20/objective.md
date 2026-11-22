@@ -1,12 +1,14 @@
-# M7 event-20 exact-prefix campaign
+# M7 authentic exact-prefix campaign
 
 Objective: establish exact original-EU4-OpenGL versus Metal framebuffer equality
-for every executed operation from event 0 through event 20 of one authenticated,
-sealed captured frame.
+for every event from event 0 through the campaign's configured target of one
+authenticated, sealed captured frame.
 
 The original EU4 OpenGL process is the only oracle.  The reconstructed OpenGL
 control is optional diagnostic evidence and is never the reference.  The
-independent checker `campaigns/eu4-m7-event20/accept.py` owns the verdict.
+configured target comes from the campaign's acceptance command
+(`--target-end N`); this objective is shared by every successive prefix
+milestone.  The independent checker owns the verdict.
 
 ## Governance
 
@@ -21,20 +23,24 @@ evidence gap and what the experiment will establish, prefer cheaper/narrower
 controls, and reuse a completed deterministic experiment instead of repeating
 it. A repeated failed hypothesis causes reassessment, not automatic termination.
 
+The operator deadline is authoritative only through
+`python3 -m automation.campaign_guard status --state $EU4_CAMPAIGN_STATE`.
+Never report a deadline stop unless that status shows no remaining time or a
+campaign action is refused with `kind=deadline`; an unsupported correction path
+or a missing observation is reported as its actual cause.  Diagnostic reports
+belong under `analysis/m7/reports/`.
+
 ## Evidence convention
 
-All live evidence for this campaign stays under
-
-    .local/m7/event20-final2/evidence/frame     (sealed original-GL frame)
-    .local/m7/event20-final2/evidence/shadow    (in-process Metal replay + checkpoints)
-
-The checker verifies the seal, the event stream, the observation file, the
-shader receipt binding, the published checkpoint request and every applicable
-colour channel of every observation.  The channel scope comes from the sealed
-attachment identity; a candidate cannot narrow it.  Do not copy, relabel or
-combine observations from another seal.  Do not edit the checker,
-`automation/gfx_prefix_check.py`, `automation/gfx_independent_replay.py`,
-`automation/gfx_observation.py` or `automation/m6_frame.py`.
+Use the trusted reference root and sealed frame recorded by the selected
+campaign sidecar.  The checker verifies the seal, the event stream, the
+observation file, the shader receipt binding, the published checkpoint request
+and every applicable colour channel of every observation.  The channel scope
+comes from the sealed attachment identity; a candidate cannot narrow it.  Do not
+copy, relabel or combine observations from another seal.  Do not edit the
+checker, `automation/gfx_prefix_check.py`,
+`automation/gfx_independent_replay.py`, `automation/gfx_observation.py` or
+`automation/m6_frame.py`.
 
 ## Sequence
 
@@ -64,13 +70,18 @@ combine observations from another seal.  Do not edit the checker,
    stop merely because an earlier correction exposed another divergence.
 7. If the evidence cannot support a causal correction, stop with
    `requires_additional_evidence` and name the exact missing observation.
+8. If the defect belongs to a component outside the candidate's authorized
+   scope (for example trusted shader translation or capture instrumentation),
+   report the genuine candidate-scope limitation and the exact component. Do
+   not compensate by changing unrelated renderer behavior; a correction belongs
+   in the component that owns the defect.
 
 ## Stop conditions
 
-Stop on any of: verified success for the complete event-0-through-20 scope;
-a genuine evidence gap that cannot currently be observed; an unavailable or
-unsafe environment; an explicit operator cancellation; or the operator's
-execution deadline. A first divergence does not end the campaign after a
-correction exposes the next one, and a repeated failed hypothesis is a reason to
-reassess rather than a quota stop. Do not merge, push to `main`, modify
-historical seals, or relax exactness.
+Stop on any of: verified success for the configured target scope; a genuine
+evidence gap that cannot currently be observed; an unavailable or unsafe
+environment; an explicit operator cancellation; or the operator's execution
+deadline as reported by `campaign_guard`. A first divergence does not end the
+campaign after a correction exposes the next one, and a repeated failed
+hypothesis is a reason to reassess rather than a quota stop. Do not merge, push
+to `main`, modify historical seals, or relax exactness.
