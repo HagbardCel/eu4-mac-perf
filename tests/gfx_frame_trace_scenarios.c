@@ -1055,6 +1055,37 @@ static void report_seal(const char *scenario, const seal_state *state) {
 
 /* A sealed 21-event prefix frame.  The synthetic readback is event-dependent,
    so every post-event observation is a distinct reference image. */
+/* A sparse late-event selection: 130 events, observations only at 118, 120
+   and 129.  No earlier post-event image is read back. */
+static int scenario_prefix_late(const char *directory) {
+    seal_state state;
+    memset(&state, 0, sizeof(state));
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_SEAL", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_MIN_DRAWS", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_MAX_DRAWS", "140", 1);
+    setenv("EU4_GFX_FRAME_TRACE_OBSERVE_EVENTS", "118,120,129", 1);
+    setenv("EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES", "1048576", 1);
+    eu4_gfx_frame_trace_test_reset_seal();
+    if (eu4_gfx_frame_sealed_subscribe(seal_test_callback, &state) != 0) {
+        return 3;
+    }
+    if (eu4_gfx_frame_trace_configure_from_env() <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    clear_one();
+    for (int index = 1; index <= 129; index++) {
+        draw(true, 0x1000);
+        draw(false, 0x1000);
+    }
+    finish_via_present();
+    report_seal("prefix-late", &state);
+    return state.fail ? 3 : 0;
+}
+
 static int scenario_prefix_seal(const char *directory) {
     seal_state state;
     memset(&state, 0, sizeof(state));
@@ -1246,6 +1277,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "prefix-seal") == 0) {
         return scenario_prefix_seal(directory);
+    }
+    if (strcmp(scenario, "prefix-late") == 0) {
+        return scenario_prefix_late(directory);
     }
     if (strcmp(scenario, "prefix-r32f") == 0) {
         return scenario_prefix_r32f(directory);

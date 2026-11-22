@@ -19,8 +19,8 @@ these; do not ask for a reset.
 
 All live evidence for this campaign stays under
 
-    .local/m7/event20/live/frame     (sealed original-GL frame)
-    .local/m7/event20/live/shadow    (in-process Metal replay + checkpoints)
+    .local/m7/event20-final2/evidence/frame     (sealed original-GL frame)
+    .local/m7/event20-final2/evidence/shadow    (in-process Metal replay + checkpoints)
 
 The checker verifies the seal, the event stream, the observation file, the
 shader receipt binding, the published checkpoint request and every applicable

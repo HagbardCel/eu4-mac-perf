@@ -645,11 +645,71 @@ int main(int argc, char **argv) {
         observation = 0;
     }
 
+    /* Unsupported attachment/readback configurations must fail closed before a
+       zero-initialized readback can be published. */
+    int negative = 1;
+    char negative_record[4096] = "";
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, c, 0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT1);
+    glReadBuffer(GL_COLOR_ATTACHMENT1);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", -1, negative_record,
+            sizeof(negative_record)) == 0) {
+        negative = 0;
+    }
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", -1, negative_record,
+            sizeof(negative_record)) == 0) {
+        negative = 0;
+    }
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, 0, 0);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", -1, negative_record,
+            sizeof(negative_record)) == 0) {
+        negative = 0;
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, c, 0);
+    GLuint cube = make_texture(GL_TEXTURE_CUBE_MAP);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, cube);
+    glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_RGBA8, 4, 4, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_CUBE_MAP_POSITIVE_X, cube, 0);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", -1, negative_record,
+            sizeof(negative_record)) == 0) {
+        negative = 0;
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, c, 0);
+    GLuint renderbuffer = 0;
+    glGenRenderbuffers(1, &renderbuffer);
+    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 4, 4);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                              GL_RENDERBUFFER, renderbuffer);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "resolve", -1, negative_record,
+            sizeof(negative_record)) == 0) {
+        negative = 0;
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, c, 0);
     printf("trace_state=%d pending=0x%x after=0x%x reference=%d "
            "checkpoint=%d depth=%d stencil=%d records=%d production=%d%d%d "
-           "observation=%d\n",
+           "observation=%d negative=%d\n",
            ok, pending, after, reference_ok, checkpoint_ok, depth_ok,
            stencil_ok, records_ok, production_none, production_depth,
-           production_both, observation);
-    return ok && observation ? 0 : 1;
+           production_both, observation, negative);
+    return ok && observation && negative ? 0 : 1;
 }

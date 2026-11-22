@@ -144,6 +144,12 @@ static void load_sampler_queries(void) {
 #ifndef GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE
 #define GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE 0x8217
 #endif
+#ifndef GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER 0x8CD4
+#endif
+#ifndef GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE
+#define GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE 0x8CD3
+#endif
 
 static struct {
     int configured;
@@ -297,6 +303,10 @@ static struct {
        performs no additional GPU readback and writes no prefix file. */
     int prefix_enabled;
     int prefix_end;
+    int prefix_sparse;
+    int prefix_event_count;
+    int prefix_events[FTRACE_MAX_PREFIX_EVENTS];
+    int prefix_depth_stencil;
     int prefix_count;
     int prefix_initial;
     int prefix_next_event;
@@ -1603,6 +1613,12 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
         }
     }
     const char *prefix_end = getenv("EU4_GFX_FRAME_TRACE_PREFIX_END");
+    const char *observe_events =
+        getenv("EU4_GFX_FRAME_TRACE_OBSERVE_EVENTS");
+    if (prefix_end != NULL && prefix_end[0] != 0 &&
+        observe_events != NULL && observe_events[0] != 0) {
+        return -1;
+    }
     if (prefix_end != NULL && prefix_end[0] != 0) {
         uint64_t value = 0;
         if (parse_u64(prefix_end, &value) != 0 ||
@@ -1616,6 +1632,45 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
         }
         g.prefix_enabled = 1;
         g.prefix_end = (int)value;
+    } else if (observe_events != NULL && observe_events[0] != 0) {
+        size_t selection_length = strlen(observe_events);
+        if (selection_length >= 4096 || observe_events[0] == ',' ||
+            observe_events[selection_length - 1] == ',' ||
+            strstr(observe_events, ",,") != NULL) {
+            return -1;
+        }
+        char selection_copy[4096];
+        snprintf(selection_copy, sizeof(selection_copy), "%s",
+                 observe_events);
+        char *save = NULL;
+        for (char *token = strtok_r(selection_copy, ",", &save); token != NULL;
+             token = strtok_r(NULL, ",", &save)) {
+            uint64_t value = 0;
+            if (parse_u64(token, &value) != 0 || value > (uint64_t)INT_MAX) {
+                return -1;
+            }
+            if (value >= (uint64_t)FTRACE_MAX_PREFIX_EVENTS ||
+                value >= (uint64_t)g.max_draws) {
+                return -1;
+            }
+            if (g.prefix_event_count >= FTRACE_MAX_PREFIX_EVENTS) {
+                return -1;
+            }
+            if (g.prefix_event_count > 0 &&
+                value <= (uint64_t)
+                    g.prefix_events[g.prefix_event_count - 1]) {
+                return -1;
+            }
+            g.prefix_events[g.prefix_event_count++] = (int)value;
+        }
+        if (g.prefix_event_count == 0) {
+            return -1;
+        }
+        g.prefix_enabled = 1;
+        g.prefix_sparse = 1;
+        g.prefix_end = g.prefix_events[g.prefix_event_count - 1];
+    }
+    if (g.prefix_enabled) {
         g.prefix_max_bytes = FTRACE_PREFIX_DEFAULT_MAX_BYTES;
         g.prefix_max_ns = FTRACE_PREFIX_MAX_NS;
         const char *prefix_bytes =
@@ -1637,6 +1692,10 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
             }
             g.prefix_max_ns = ns;
         }
+        const char *depth_stencil =
+            getenv("EU4_GFX_FRAME_TRACE_OBSERVE_DEPTH_STENCIL");
+        g.prefix_depth_stencil =
+            depth_stencil != NULL && strcmp(depth_stencil, "1") == 0;
     }
     if (timeout_ms != NULL) {
         uint64_t value = 0;
@@ -2919,6 +2978,17 @@ typedef struct {
     const char *pixel_format;
 } prefix_target_state;
 
+static int prefix_complete_locked(void) {
+    if (g.prefix_failed) {
+        return 0;
+    }
+    if (g.prefix_sparse) {
+        return g.prefix_event_count > 0 &&
+               g.prefix_count == g.prefix_event_count;
+    }
+    return g.prefix_initial && g.prefix_next_event == g.prefix_end + 1;
+}
+
 static void prefix_reset_locked(void) {
     if (g.prefix_observations != NULL) {
         fclose(g.prefix_observations);
@@ -3224,6 +3294,15 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
         out->framebuffer = (int)framebuffer;
         if (framebuffer == 0) {
+            GLint draw_buffer = 0, samples = 0;
+            glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
+            glGetIntegerv(GL_SAMPLES, &samples);
+            if (draw_buffer != GL_BACK || samples > 0) {
+                /* Only the single-sample back buffer has a defined readback
+                   contract here. */
+                fail_capture_locked("prefix_unsupported_target");
+                return -1;
+            }
             uint32_t drawable_width = 0, drawable_height = 0;
             if (eu4_gfx_gl_drawable_extent(&drawable_width, &drawable_height) == 0 &&
                 drawable_width > 0 && drawable_height > 0) {
@@ -3249,10 +3328,55 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
             out->depth_present = out->depth_bits > 0;
             out->stencil_present = out->stencil_bits > 0;
         } else {
+            GLint draw_buffer = 0, samples = 0;
+            glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
+            glGetIntegerv(GL_SAMPLES, &samples);
+            if (draw_buffer != GL_COLOR_ATTACHMENT0 || samples > 0 ||
+                glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) !=
+                    GL_FRAMEBUFFER_COMPLETE) {
+                fail_capture_locked("prefix_unsupported_target");
+                return -1;
+            }
             observation_attachment colour;
             query_attachment_identity(GL_COLOR_ATTACHMENT0, &colour);
             if (!colour.present ||
                 (colour.type != GL_TEXTURE && colour.type != GL_RENDERBUFFER)) {
+                fail_capture_locked("prefix_unsupported_target");
+                return -1;
+            }
+            if (colour.type == GL_RENDERBUFFER) {
+                /* The replay target registry is texture-keyed; a renderbuffer
+                   colour attachment cannot be given a distinct Metal target
+                   identity here.  Record it as unsupported rather than alias a
+                   texture that happens to share its numeric GL name. */
+                memset(out, 0, sizeof(*out));
+                out->framebuffer = (int)framebuffer;
+                out->color_type = GL_RENDERBUFFER;
+                out->color_name = colour.name;
+                out->width = colour.width;
+                out->height = colour.height;
+                out->unsupported_format = 1;
+                out->pixel_format = NULL;
+                if (out->width <= 0 || out->height <= 0) {
+                    fail_capture_locked("prefix_dimensions");
+                    return -1;
+                }
+                return 0;
+            }
+            if (!framebuffer_attachment_identity_supported()) {
+                fail_capture_locked("prefix_unsupported_target");
+                return -1;
+            }
+            GLint cube_face = 0, layer = 0;
+            glGetFramebufferAttachmentParameteriv(
+                GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE, &cube_face);
+            glGetFramebufferAttachmentParameteriv(
+                GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER, &layer);
+            if (cube_face != 0 || layer != 0) {
+                /* Only a plain 2D texture attachment has the recorded byte
+                   layout; cube/array/3D faces need a different readback. */
                 fail_capture_locked("prefix_unsupported_target");
                 return -1;
             }
@@ -3459,7 +3583,30 @@ static int prefix_emit_target_locked(int event, const char *timing,
         return 0;
     }
     int post = strcmp(timing, "post_event") == 0;
-    if (post) {
+    if (g.prefix_sparse) {
+        if (!post) {
+            /* A selected range has no proven initial-state anchor. */
+            fail_capture_locked("prefix_initial_invalid");
+            return -1;
+        }
+        int selected = 0;
+        for (int index = 0; index < g.prefix_event_count; index++) {
+            if (g.prefix_events[index] == event) {
+                selected = 1;
+                break;
+            }
+        }
+        if (!selected) {
+            return 0;
+        }
+        if (g.prefix_count >= g.prefix_event_count ||
+            g.prefix_events[g.prefix_count] != event) {
+            /* Selected events execute in order; a repeated or skipped entry
+               would make the selection ambiguous. */
+            fail_capture_locked("prefix_gap");
+            return -1;
+        }
+    } else if (post) {
         if (event != g.prefix_next_event) {
             fail_capture_locked("prefix_gap");
             return -1;
@@ -3488,7 +3635,10 @@ static int prefix_emit_target_locked(int event, const char *timing,
     }
     int depth_required = 0;
     int stencil_required = 0;
-    if (strcmp(kind, "draw") == 0) {
+    if (!g.prefix_depth_stencil) {
+        /* Colour equality is the asserted verdict; depth/stencil snapshots are
+           an explicitly enabled diagnostic and are not captured by default. */
+    } else if (strcmp(kind, "draw") == 0) {
         if (!g.test_only) {
             GLboolean depth_mask = GL_TRUE;
             GLint depth_test = 0, stencil_test = 0;
@@ -3529,7 +3679,8 @@ static int prefix_emit_target_locked(int event, const char *timing,
                                  ? (uint64_t)target.width * (uint64_t)target.height
                                  : 0;
     uint64_t projected = colour_bytes + depth_bytes + stencil_bytes;
-    if (projected == 0 || g.prefix_bytes > g.prefix_max_bytes ||
+    if ((projected == 0 && !unsupported_colour) ||
+        g.prefix_bytes > g.prefix_max_bytes ||
         projected > g.prefix_max_bytes - g.prefix_bytes) {
         fail_capture_locked("prefix_budget");
         return -1;
@@ -3672,6 +3823,12 @@ static int prefix_emit_target_locked(int event, const char *timing,
     } else if (target.framebuffer == 0) {
         snprintf(resource, sizeof(resource), "fb:0");
         snprintf(target_name, sizeof(target_name), "0");
+    } else if (target.color_type == GL_RENDERBUFFER) {
+        /* Renderbuffers and textures occupy different name spaces.  A
+           renderbuffer attachment is identified by its framebuffer, never by
+           a texture name that happens to share the numeric value. */
+        snprintf(resource, sizeof(resource), "fb:%d", target.framebuffer);
+        snprintf(target_name, sizeof(target_name), "%d", target.framebuffer);
     } else {
         snprintf(resource, sizeof(resource), "tex:%d", target.color_name);
         snprintf(target_name, sizeof(target_name), "%d", target.color_name);
@@ -3782,7 +3939,9 @@ static int prefix_emit_target_locked(int event, const char *timing,
     }
     if (post) {
         g.prefix_count++;
-        g.prefix_next_event = event + 1;
+        if (!g.prefix_sparse) {
+            g.prefix_next_event = event + 1;
+        }
     } else {
         g.prefix_initial = 1;
     }
@@ -4329,23 +4488,41 @@ static void write_cgl_drawable_state(FILE *file) {
    authoritative record; the manifest references it by digest, byte count and
    record count instead of duplicating every record. */
 static void write_prefix_manifest(FILE *file) {
-    int complete = g.prefix_initial && !g.prefix_failed &&
-                   g.prefix_next_event == g.prefix_end + 1;
+    int complete = prefix_complete_locked();
+    char end_text[32];
+    if (g.prefix_sparse) {
+        snprintf(end_text, sizeof(end_text), "null");
+    } else {
+        snprintf(end_text, sizeof(end_text), "%d", g.prefix_end);
+    }
     fprintf(file,
             ",\"prefix\":{\"schema\":\"gfx-observations/v1\","
-            "\"authority\":\"%s\","
-            "\"end\":%d,\"status\":\"%s\",\"count\":%d,"
+            "\"mode\":\"%s\",\"authority\":\"%s\","
+            "\"end\":%s,\"status\":\"%s\",\"count\":%d,"
             "\"post_event_count\":%d,\"initial\":%s,"
+            "\"depth_stencil\":%s,"
             "\"observation_file\":\"%s\","
             "\"observation_sha256\":\"%s\","
-            "\"observation_bytes\":%llu,"
+            "\"observation_bytes\":%llu,",
+            g.prefix_sparse ? "selected" : "prefix",
+            g.test_only ? "synthetic" : "authentic",
+            end_text, complete ? "complete" : "incomplete", g.prefix_count,
+            g.prefix_count,
+            (!g.prefix_sparse && g.prefix_initial) ? "true" : "false",
+            g.prefix_depth_stencil ? "true" : "false",
+            g.prefix_file, g.prefix_sha,
+            (unsigned long long)g.prefix_file_bytes);
+    if (g.prefix_sparse) {
+        fputs("\"events\":[", file);
+        for (int index = 0; index < g.prefix_event_count; index++) {
+            fprintf(file, "%s%d", index == 0 ? "" : ",",
+                    g.prefix_events[index]);
+        }
+        fputs("],", file);
+    }
+    fprintf(file,
             "\"budget\":{\"max_bytes\":%llu,\"used_bytes\":%llu,"
             "\"max_ns\":%llu,\"used_ns\":%llu}}",
-            g.test_only ? "synthetic" : "authentic",
-            g.prefix_end, complete ? "complete" : "incomplete", g.prefix_count,
-            g.prefix_count, g.prefix_initial ? "true" : "false",
-            g.prefix_file, g.prefix_sha,
-            (unsigned long long)g.prefix_file_bytes,
             (unsigned long long)g.prefix_max_bytes,
             (unsigned long long)g.prefix_bytes,
             (unsigned long long)g.prefix_max_ns,
@@ -5047,8 +5224,7 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
         } else {
             g.prefix_file_bytes = (uint64_t)prefix_stat.st_size;
         }
-        if (!g.prefix_initial || g.prefix_failed ||
-            g.prefix_next_event != g.prefix_end + 1) {
+        if (!prefix_complete_locked()) {
             fail_capture_locked("prefix_incomplete");
         }
     }
@@ -5377,7 +5553,8 @@ static void start_capture_at_frame(int next_frame) {
             g.prefix_observations = fopen(prefix_path, "w");
             if (g.prefix_observations == NULL) {
                 fail_capture_locked("prefix_open");
-            } else if (prefix_emit_locked(0, "pre_event", "initial") != 0) {
+            } else if (!g.prefix_sparse &&
+                       prefix_emit_locked(0, "pre_event", "initial") != 0) {
                 g.prefix_failed = 1;
             }
         }

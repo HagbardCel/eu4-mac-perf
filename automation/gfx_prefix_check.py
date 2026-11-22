@@ -139,6 +139,60 @@ def classify_prefix(events_out: list[dict], *, problems: list[str],
     }
 
 
+def classify_selection(events_out: list[dict], *, problems: list[str],
+                       selection: list[int]) -> dict:
+    """Classify independently selected post-event observations.
+
+    A selected set is never a prefix: unobserved events are simply not part of
+    the claim, and no initial-state anchor exists.  A divergent selected event
+    is the earliest selected divergence.
+    """
+    rows = {int(item["event"]): item for item in events_out
+            if isinstance(item.get("event"), int)}
+    matched: list[int] = []
+    first_divergence = None
+    unverified = None
+    excluded: list[int] = []
+    for event in selection:
+        row = rows.get(event)
+        if row is None:
+            unverified = event
+            break
+        status = row.get("status")
+        if status == "match":
+            matched.append(event)
+            continue
+        if status == "divergent" and row.get("authoritative", True):
+            first_divergence = event
+            break
+        if status == "unsupported_auxiliary":
+            excluded.append(event)
+            unverified = event
+            break
+        unverified = event
+        break
+    if problems or unverified is not None:
+        verdict = "UNSUPPORTED" if excluded and not problems else \
+            "INCOMPLETE_EVIDENCE"
+        status = "unsupported" if verdict == "UNSUPPORTED" else "incomplete"
+        first_divergence = None
+    elif first_divergence is not None:
+        verdict = "FIRST_DIVERGENCE"
+        status = "divergent"
+    else:
+        verdict = "EXACT_SELECTION"
+        status = "qualified_selection"
+    return {
+        "verdict": verdict,
+        "status": status,
+        "first_divergence": first_divergence,
+        "unverified_event": unverified,
+        "verified_prefix": None,
+        "verified_events": matched,
+        "excluded_events": excluded,
+    }
+
+
 def _tree_manifest(root: Path) -> list[dict]:
     files = []
     for path in sorted(Path(root).rglob("*")):
@@ -199,29 +253,60 @@ def resolve_trusted_reference(configured: str | Path | None,
         "record exists; configure the exact seal directory")
 
 
+def _path_overlap(left: Path, right: Path) -> bool:
+    left = left.resolve()
+    right = right.resolve()
+    return (left == right or left in right.parents
+            or right in left.parents)
+
+
 def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
                              *, source_note: str = "",
                              read_only: bool = True, copy: bool = True,
-                             validate: bool = True) -> dict:
+                             validate: bool = True,
+                             replace: bool = False) -> dict:
     """Copy a sealed frame outside the candidate workspace and bind its bytes.
 
-    The destination is a read-only, digest-bound qualification root.  The
-    trusted checker loads only this copy, so candidate rewrites of the original
-    worktree cannot change the reference after publication.
+    The destination must be disjoint from the source and outside the candidate
+    workspace.  Existing evidence is never recursively deleted: replacement
+    requires ``replace=True`` and moves the previous tree to a dated sibling.
+    ``read_only`` is a POSIX permission hardening, recorded as such; it is not a
+    claim that the filesystem itself is mounted read-only.
     """
     frame_dir = Path(frame_dir).expanduser().resolve()
     destination = Path(destination).expanduser().resolve()
+    if not frame_dir.is_dir():
+        raise PrefixCheckError(f"frame directory does not exist: {frame_dir}")
+    if _path_overlap(frame_dir, destination):
+        raise PrefixCheckError(
+            "trusted evidence destination overlaps the source frame")
     if validate:
-        # Admit only a complete sealed frame with a verified event stream and
-        # all referenced blobs before it can become trusted evidence.
         m6_frame.load_seal(frame_dir)
         m6_frame.load_trace(frame_dir, verify_blobs=True)
+    replaced_to = None
     if destination.exists():
-        shutil.rmtree(destination)
+        if not replace:
+            raise PrefixCheckError(
+                "trusted evidence destination already exists; pass replace to "
+                "publish a reviewed replacement")
+        if destination.is_symlink():
+            raise PrefixCheckError(
+                "trusted evidence destination is a symlink")
+        record = destination / "trusted-evidence.json"
+        if destination.is_dir() and not record.is_file():
+            raise PrefixCheckError(
+                "existing destination is not a trusted evidence root")
+        backup = destination.with_name(
+            f"{destination.name}.replaced-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}")
+        if backup.exists():
+            raise PrefixCheckError(
+                f"replacement backup already exists: {backup}")
+        os.replace(destination, backup)
+        replaced_to = str(backup)
     destination.mkdir(parents=True)
     if copy:
         target = destination / "frame"
-        shutil.copytree(frame_dir, target)
+        shutil.copytree(frame_dir, target, symlinks=True)
         frame_relative = "frame"
         recorded_frame = None
     else:
@@ -237,7 +322,7 @@ def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
         except PrefixCheckError:
             original_capture_dir = None
     record = {
-        "schema": "m7-trusted-evidence/v1",
+        "schema": "gfx-trusted-evidence/v1",
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source_note": source_note,
         "original_capture_dir": original_capture_dir,
@@ -245,10 +330,25 @@ def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
         "frame_path": recorded_frame,
         "files": files,
         "root_sha256": _root_digest(files),
+        "replaced_to": replaced_to,
+        "read_only": False,
     }
+    if read_only and copy:
+        # Explicit POSIX permission hardening, not a filesystem guarantee.
+        for path in sorted(target.rglob("*"), reverse=True):
+            try:
+                path.chmod(0o555 if path.is_dir() else 0o444)
+            except OSError:
+                pass
+        record.update({
+            "read_only": True,
+            "read_only_method": "posix_mode",
+            "permissions": {"directories": "0555", "files": "0444"},
+        })
+        record["writable_after_hardening"] = os.access(target, os.W_OK)
     (destination / "trusted-evidence.json").write_text(
         json.dumps(record, indent=2) + "\n")
-    if read_only:
+    if read_only and copy:
         try:
             destination.chmod(0o555)
         except OSError:
@@ -262,7 +362,8 @@ def verify_trusted_evidence(trusted_root: Path | str,
     trusted_root = Path(trusted_root).expanduser().resolve()
     record_path = trusted_root / "trusted-evidence.json"
     record = _read_json(record_path)
-    if record.get("schema") != "m7-trusted-evidence/v1":
+    if record.get("schema") not in (
+            "gfx-trusted-evidence/v1", "m7-trusted-evidence/v1"):
         raise PrefixCheckError("unexpected trusted-evidence schema")
     if record.get("frame_path"):
         expected_frame = Path(str(record["frame_path"])).expanduser().resolve()
@@ -362,31 +463,106 @@ def verify_candidate(workspace: Path | str,
 
 def _candidate_source_digests(workspace: Path) -> dict[str, str]:
     return replay_host_dependencies.relative_dependencies(
-        workspace, replay_host_dependencies.REPLAY_SOURCES)
+        workspace, replay_host_dependencies.REPLAY_SOURCES, strict=True)
+
+
+def _execution_environment(execution_dir: Path) -> dict:
+    """Environment for candidate replay execution.
+
+    EU4 evidence-location variables are removed so the candidate process is not
+    handed a path to authenticated reference evidence.  This is input
+    separation, not a sandbox: arbitrary native candidate code can still read
+    the filesystem.  The trusted checker therefore never passes reference
+    payloads as replay inputs.
+    """
+    home = execution_dir / "home"
+    tmp = execution_dir / "tmp"
+    home.mkdir(exist_ok=True)
+    tmp.mkdir(exist_ok=True)
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith("EU4_")}
+    environment["HOME"] = str(home)
+    environment["TMPDIR"] = str(tmp)
+    return environment
+
+
+def _cached_candidate_build(snapshot_root: Path, destination: Path,
+                            cache_root: Path) -> tuple[Path, dict]:
+    """Build or reuse a candidate host keyed by its complete source identity."""
+    identity = replay_host_dependencies.build_identity(snapshot_root)
+    cache_entry = cache_root / identity["fingerprint"]
+    metadata_path = cache_entry / "build.json"
+    cached_host = cache_entry / "gfx-frame-replay"
+    if metadata_path.is_file() and cached_host.is_file():
+        try:
+            metadata = _read_json(metadata_path)
+        except PrefixCheckError:
+            metadata = None
+        if (metadata is not None
+                and metadata.get("host_sha256") == _sha256(cached_host)):
+            shutil.copy2(cached_host, destination)
+            record = dict(metadata)
+            record.update({
+                "schema": "gfx-replay-host-candidate-build/v1",
+                "cache_hit": True,
+                "host_path": str(destination),
+                "host_sha256": _sha256(destination),
+            })
+            return destination, record
+    temporary = destination.with_name(destination.name + ".tmp")
+    record = replay_host_dependencies.build_snapshot_host(
+        snapshot_root, temporary)
+    os.replace(temporary, destination)
+    record["cache_hit"] = False
+    record["host_path"] = str(destination)
+    record["host_sha256"] = _sha256(destination)
+    cache_entry.mkdir(parents=True, exist_ok=True)
+    metadata = dict(record)
+    metadata["host_path"] = str(cached_host)
+    (cache_entry / "build.json.tmp").write_text(
+        json.dumps(metadata, indent=2) + "\n")
+    os.replace(cache_entry / "build.json.tmp", metadata_path)
+    if not cached_host.exists():
+        shutil.copy2(destination, cached_host)
+    return destination, record
 
 
 def _run_trusted_replay(frame_dir: Path, request: dict,
                         run_dir: Path | str | None = None, *,
+                        trace: dict | None = None,
                         candidate_workspace: Path | str | None = None,
-                        candidate_sidecar: Path | str | None = None) -> dict:
-    """Execute the production Metal replay from the infrastructure checkout.
+                        candidate_sidecar: Path | str | None = None,
+                        diagnostics: dict | None = None) -> dict:
+    """Execute one Metal replay in a fresh, self-contained execution directory.
 
-    The checker does not trust a candidate-authored replay.json, receipt or
-    output files.  It derives the request, translates the captured shaders with
-    the trusted infrastructure, runs the trusted replay host and compares the
-    files that host just wrote.
+    ``run_dir`` is a campaign output root.  Every call creates a unique child
+    that holds its own replay input, translation, candidate snapshot, host,
+    Metal outputs and receipts; a failed attempt is preserved.  Immutable
+    translation and candidate-build artifacts may be reused from the root's
+    cache when their input identity is unchanged.
     """
+    frame_dir = Path(frame_dir).expanduser().resolve()
+    if trace is None:
+        trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
     if run_dir is None:
-        run = Path(tempfile.mkdtemp(prefix="m7-prefix-check-"))
+        run_root = Path(tempfile.mkdtemp(prefix="gfx-observation-check-"))
     else:
-        run = Path(run_dir).expanduser().resolve()
-        run.mkdir(parents=True, exist_ok=True)
-    request_path = run / "checkpoint-request.json"
+        run_root = Path(run_dir).expanduser().resolve()
+        run_root.mkdir(parents=True, exist_ok=True)
+    execution_dir = Path(tempfile.mkdtemp(prefix="exec-", dir=run_root))
+    if diagnostics is not None:
+        diagnostics["execution_dir"] = str(execution_dir)
+    replay_input = execution_dir / "replay-input"
+    input_record = m6_frame.materialize_replay_input(
+        frame_dir, trace, replay_input)
+    request_path = execution_dir / "checkpoint-request.json"
     request_path.write_text(json.dumps(request, indent=2) + "\n")
-    shaders = run / "shaders"
+    shaders = execution_dir / "shaders"
+    translation_cache = run_root / "cache" / "translation"
     command = [
         sys.executable, "-m", "automation.m6_frame", "translate",
-        "--frame", str(frame_dir), "--out", str(shaders), "--force",
+        "--frame", str(frame_dir), "--out", str(shaders),
+        "--cache-dir", str(translation_cache),
     ]
     translated = subprocess.run(
         command, cwd=str(ROOT), capture_output=True, text=True,
@@ -397,17 +573,19 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
             + (translated.stderr.strip() or translated.stdout.strip())[-400:])
     candidate = None
     if candidate_workspace is not None:
-        candidate = verify_candidate(
-            candidate_workspace,
-            candidate_sidecar or (ROOT / "dsh" / "campaigns" / "m7-event20.json"))
+        if candidate_sidecar is None:
+            raise PrefixCheckError(
+                "trusted candidate execution requires an explicit sidecar")
+        candidate = verify_candidate(Path(candidate_workspace),
+                                     Path(candidate_sidecar))
         before = _candidate_source_digests(Path(candidate["workspace"]))
-        snapshot_root = run / "candidate-snapshot"
+        snapshot_root = execution_dir / "candidate-snapshot"
         snapshot = replay_host_dependencies.snapshot_sources(
             candidate["workspace"], snapshot_root)
-        host = run / "candidate-gfx-frame-replay"
+        host = execution_dir / "candidate-gfx-frame-replay"
         try:
-            candidate_build = replay_host_dependencies.build_snapshot_host(
-                snapshot_root, host)
+            host, candidate_build = _cached_candidate_build(
+                snapshot_root, host, run_root / "cache" / "hosts")
         except (OSError, subprocess.SubprocessError) as exc:
             raise PrefixCheckError(
                 f"candidate replay host build failed: {exc}") from exc
@@ -429,16 +607,18 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         except (m6_frame.FrameError, OSError, RuntimeError) as exc:
             raise PrefixCheckError(
                 f"trusted replay host build failed: {exc}") from exc
-    replay_dir = run / "metal"
+    replay_dir = execution_dir / "metal"
     replay_dir.mkdir()
     replay_command = [
-        str(host), "--frame", str(frame_dir), "--shaders", str(shaders),
+        str(host), "--frame", str(replay_input), "--shaders", str(shaders),
         "--out", str(replay_dir), "--checkpoints", str(request_path),
     ]
     started = time.time()
     completed = subprocess.run(
-        replay_command, cwd=str(ROOT), capture_output=True, text=True,
-        timeout=600, check=False)
+        replay_command, cwd=str(execution_dir),
+        env=_execution_environment(execution_dir),
+        capture_output=True, text=True, timeout=600, check=False)
+    finished = time.time()
     if completed.returncode != 0:
         raise PrefixCheckError(
             "trusted Metal replay failed: "
@@ -471,14 +651,16 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
             outputs.append({"file": path.name, "bytes": path.stat().st_size,
                             "sha256": _sha256(path)})
     execution = {
-        "schema": "m7-trusted-execution/v1",
+        "schema": "gfx-trusted-execution/v1",
         "mode": ("candidate-build-and-replay" if candidate is not None
                  else "checker-native-replay"),
         "candidate": candidate,
         "outputs": outputs,
+        "execution_dir": str(execution_dir),
         "started_epoch": started,
-        "finished_epoch": time.time(),
+        "finished_epoch": finished,
         "frame_dir": str(frame_dir),
+        "replay_input": input_record,
         "request_sha256": _sha256(replay_dir / "checkpoint-request.json"),
         "replay_host": str(host),
         "replay_host_sha256": _sha256(host),
@@ -486,18 +668,22 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         if (shaders / "shaders.json").is_file() else None,
         "replay_json_sha256": _sha256(replay_path),
         "receipt_sha256": _sha256(replay_dir / "shader-receipt.json"),
-        "request_sha256": _sha256(replay_dir / "checkpoint-request.json"),
         "status": replay.get("status"),
         "events": replay.get("events"),
         "encoded": replay.get("encoded"),
         "failed": replay.get("failed"),
         "command": replay_command,
+        "returncode": completed.returncode,
     }
+    record_path = execution_dir / "execution.json"
+    record_path.write_text(json.dumps(execution, indent=2) + "\n")
     (replay_dir / "trusted-execution.json").write_text(
         json.dumps(execution, indent=2) + "\n")
     return {
         "metal_dir": replay_dir,
         "request_path": replay_dir / "checkpoint-request.json",
+        "execution_dir": execution_dir,
+        "execution_record": record_path,
         "execution": execution,
     }
 
@@ -582,24 +768,34 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     prefix = graph.get("prefix") or {}
     result["prefix_status"] = prefix.get("status")
     result["prefix_end"] = prefix.get("end")
-    if prefix.get("status") != "complete":
-        problems.append("exact-prefix coverage is not complete")
+    mode = str(prefix.get("mode") or "prefix")
+    if prefix.get("status") not in ("complete", "selected"):
+        problems.append("observation coverage is not complete")
         problems.extend(str(problem) for problem in prefix.get("problems") or [])
         return _invalid_result(result, problems, status="incomplete")
-    end = int(prefix["end"])
-    require_end = end if require_end is None else int(require_end)
-    result["required_through"] = require_end
+    selection: list[int] = []
+    if mode == "prefix":
+        end = int(prefix["end"])
+        require_end = end if require_end is None else int(require_end)
+        result["required_through"] = require_end
+        if end < require_end:
+            problems.append(
+                f"capture prefix ends at event {end}, not {require_end}")
+    else:
+        end = None
+        selection = [int(value) for value in prefix.get("events") or []]
+        result["required_through"] = None
+        result["selection"] = selection
     result["initial_state"] = prefix.get("initial_state") or []
     result["state_coverage"] = prefix.get("state_coverage") or []
     result["prefix_coverage"] = {
         "status": prefix.get("status"),
+        "mode": mode,
         "end": end,
+        "events": selection,
         "post_events": len(prefix.get("post_events") or []),
         "excluded_events": prefix.get("excluded_events") or [],
     }
-    if end < require_end:
-        problems.append(
-            f"capture prefix ends at event {end}, not {require_end}")
     expected_request = gfx_frame_graph.checkpoint_request(graph)
     expected_canonical = json.dumps(
         expected_request, sort_keys=True, separators=(",", ":"))
@@ -616,13 +812,16 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                                       .resolve())
                                   if candidate_sidecar is not None else None),
         }
+        execution_diagnostics: dict = {}
         try:
             with campaign_guard.attempt("replays", evidence=evidence) as attempt:
                 try:
                     trusted = _run_trusted_replay(
                         frame_dir, expected_request, trusted_run_dir,
+                        trace=trace,
                         candidate_workspace=candidate_workspace,
-                        candidate_sidecar=candidate_sidecar)
+                        candidate_sidecar=candidate_sidecar,
+                        diagnostics=execution_diagnostics)
                 except (PrefixCheckError, OSError,
                         subprocess.TimeoutExpired) as exc:
                     if attempt is not None:
@@ -630,17 +829,31 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                     raise
         except campaign_guard.CampaignRefusal as exc:
             problems.append(f"trusted replay budget refused: {exc}")
+            result["failed_execution"] = execution_diagnostics
             return _invalid_result(
                 result, problems, status="invalid",
                 execution={"mode": "candidate-build-and-replay",
                            "status": "refused", "error": str(exc)})
         except (PrefixCheckError, OSError, subprocess.TimeoutExpired) as exc:
             problems.append(f"trusted Metal execution failed: {exc}")
+            result["failed_execution"] = execution_diagnostics
             return _invalid_result(
                 result, problems, status="invalid",
                 execution={"mode": "candidate-build-and-replay",
                            "status": "failed", "error": str(exc)})
         result["execution"] = trusted["execution"]
+        result["execution_dir"] = str(trusted["execution_dir"])
+        if trusted_record is not None:
+            try:
+                rechecked = verify_trusted_evidence(trusted_root, frame_dir)
+            except (PrefixCheckError, OSError) as exc:
+                problems.append(
+                    f"trusted evidence changed during execution: {exc}")
+            else:
+                if rechecked.get("root_sha256") != trusted_record.get(
+                        "root_sha256"):
+                    problems.append(
+                        "trusted evidence root digest changed during execution")
         metal_dir = trusted["metal_dir"]
         execution = trusted["execution"]
         problems.extend(verify_execution_outputs(execution, metal_dir))
@@ -754,7 +967,7 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
             problem = "unexpected result for an excluded event"
         elif observation is None:
             problem = "sealed observation is absent"
-        elif event > end:
+        elif mode == "prefix" and event > end:
             problem = "result is outside the verified coverage"
         else:
             scope = gfx_observation.format_scope(observation)
@@ -796,7 +1009,8 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
             row["status"] = "invalid"
             row["problem"] = problem
         events_out.append(row)
-    for event in range(end + 1):
+    expected_events = (range(end + 1) if mode == "prefix" else selection)
+    for event in expected_events:
         if event in seen:
             continue
         if event in excluded:
@@ -804,11 +1018,11 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                 "event": event,
                 "status": "unsupported_auxiliary",
                 "excluded": True,
-                "problem": "isolated auxiliary target with a non-comparable "
-                           "colour format; accounted for but not compared",
+                "problem": "auxiliary target with a non-comparable colour "
+                           "format; accounted for but not compared",
             })
             continue
-        problems.append(f"prefix event {event} has no reconciled result")
+        problems.append(f"event {event} has no reconciled result")
         events_out.append({
             "event": event,
             "status": "missing",
@@ -817,8 +1031,12 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     events_out.sort(key=lambda item: item["event"])
     result["events"] = events_out
     result["observed_events"] = len(events_out)
-    classification = classify_prefix(
-        events_out, problems=problems, end=end, require_end=require_end)
+    if mode == "prefix":
+        classification = classify_prefix(
+            events_out, problems=problems, end=end, require_end=require_end)
+    else:
+        classification = classify_selection(
+            events_out, problems=problems, selection=selection)
     result.update(classification)
     result["exact"] = classification["verdict"] == "EXACT_PREFIX"
     result["problems_count"] = len(problems)
@@ -834,6 +1052,7 @@ def _main(argv: list[str]) -> int:
     prepare.add_argument("--destination", required=True)
     prepare.add_argument("--note", default="")
     prepare.add_argument("--no-copy", action="store_true")
+    prepare.add_argument("--replace", action="store_true")
     verify = sub.add_parser("verify", help="verify a trusted reference root")
     verify.add_argument("--root", required=True)
     verify.add_argument("--frame", required=True)
@@ -841,9 +1060,9 @@ def _main(argv: list[str]) -> int:
     if args.command == "prepare":
         record = prepare_trusted_evidence(
             args.frame, args.destination, source_note=args.note,
-            copy=not args.no_copy)
+            copy=not args.no_copy, replace=args.replace)
         print(json.dumps({
-            "schema": "m7-trusted-evidence-prepared/v1",
+            "schema": "gfx-trusted-evidence-prepared/v1",
             "destination": str(Path(args.destination).expanduser().resolve()),
             "frame_relative": record.get("frame_relative"),
             "frame_path": record.get("frame_path"),
@@ -853,7 +1072,7 @@ def _main(argv: list[str]) -> int:
         return 0
     record = verify_trusted_evidence(args.root, args.frame)
     print(json.dumps({
-        "schema": "m7-trusted-evidence-verified/v1",
+        "schema": "gfx-trusted-evidence-verified/v1",
         "root": str(Path(args.root).expanduser().resolve()),
         "root_sha256": record.get("root_sha256"),
         "file_count": len(record.get("files") or []),

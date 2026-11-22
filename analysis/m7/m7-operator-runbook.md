@@ -73,14 +73,16 @@ You are validating the M7 autonomous OpenGL-to-Metal reconstruction workflow. Th
 ```fish
 python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator-offline.json
 ls -la /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1
-cat /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1/metal/trusted-execution.json
+cat /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1/exec-*/metal/trusted-execution.json
 ls -lt /Users/fabian/.local/share/eu4-dsh/logs | head
 ls -lt /Users/fabian/.local/share/eu4-dsh/sessions | head
 ```
 
 Checker output in the DSH transcript is the authoritative validator response.
-`trusted-execution.json` must name the candidate revision, source digest,
-compiled host SHA-256 and output digests.
+`trusted-execution.json` must name the execution directory, candidate
+revision, source digest, compiled host SHA-256 and output digests.  Every
+validation creates a new `exec-*` child under the checker run root; previous
+attempts are retained for diagnosis.
 
 ### Stop safely
 
@@ -116,13 +118,15 @@ INDEPENDENTLY APPROVED.**
 | Item | Absolute path |
 | --- | --- |
 | Sidecar | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20.json` (set `EU4_M7_EVENT20_TRUSTED_ROOT` to this run's trusted seal) |
-| Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json` |
-| Launch counter | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/run/live-launch.json` |
-| Candidate worktree / workspace | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/workspace` |
-| Capture evidence | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/evidence` |
-| Trusted reference | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/trusted/seal` |
-| Checker outputs | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/checker-1` |
+| Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/state-operator-live.json` |
+| Launch counter | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-final2/run/live-launch.json` |
+| Candidate worktree / workspace | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-final2/workspace` |
+| Capture evidence | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/evidence` |
+| Trusted reference | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/trusted/seal` |
+| Checker outputs | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/checker-1` |
 | Campaign source | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/campaigns/eu4-m7-event20/campaign.json` |
+| Candidate baseline | `6619f13a753bb2183b14655392dacc4436a34435` (sidecar and campaign pin agree) |
+| Preserved trusted reference | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-copy/47590918` (read-only; the default sidecar root) |
 
 Budgets: **1 EU4 launch, 1 sealed frame, 1 shadow execution, 2 replays,
 1 correction evaluation, 1800 s, 0 automatic merges.** Do not reset a consumed
@@ -136,7 +140,7 @@ pgrep -fl 'eu4.app'
 shasum -a 256 "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG/settings.txt"
 python3.14 -c "from automation import gfx_display; d=gfx_display.find_display('EU4 Test'); print(d); raise SystemExit(0 if d is not None else 1)"
 env EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/preflight.sh
-python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json
+python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/state-operator-live.json
 ```
 
 Expected settings SHA-256 before capture:
@@ -150,7 +154,7 @@ Initialize the fresh live state immediately before capture. The launch counter
 already exists with `used=0, limit=1`.
 
 ```fish
-/opt/homebrew/opt/python@3.14/bin/python3.14 -m automation.campaign_guard ensure --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json --budget eu4_launches=1 --budget sealed_frames=1 --budget shadow_executions=1 --budget replays=2 --budget corrections=1 --budget wall_clock_seconds=1800
+/opt/homebrew/opt/python@3.14/bin/python3.14 -m automation.campaign_guard ensure --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/state-operator-live.json --budget eu4_launches=1 --budget sealed_frames=1 --budget shadow_executions=1 --budget replays=2 --budget corrections=1 --budget wall_clock_seconds=1800
 ```
 
 `ensure` is idempotent while the state is unused. If the code head changed
@@ -164,7 +168,7 @@ after the last anchor, refresh it explicitly:
 
 ```fish
 cd /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-env EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 /opt/homebrew/opt/python@3.14/bin/python3.14 -m automation.m6_frame capture --output /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/evidence --campaign-run-root /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/run --callers 0x10d52fc,0x1486ad9 --min-draws 8 --max-draws 512 --duration 120 --timeout 300 --prefix-end 20 --prefix-max-bytes 700000000 --prefix-max-ns 10000000000 --seal --shadow --background --shadow-timeout-ms 360000 --shadow-wait-ms 360000 --seal-timeout-ms 600000
+env EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/state-operator-live.json EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 /opt/homebrew/opt/python@3.14/bin/python3.14 -m automation.m6_frame capture --output /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/evidence --campaign-run-root /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-final2/run --callers 0x10d52fc,0x1486ad9 --min-draws 8 --max-draws 512 --duration 120 --timeout 300 --prefix-end 20 --prefix-max-bytes 700000000 --prefix-max-ns 10000000000 --seal --shadow --background --shadow-timeout-ms 360000 --shadow-wait-ms 360000 --seal-timeout-ms 600000
 ```
 
 The harness must terminate the owned EU4 process and restore `settings.txt`
@@ -175,28 +179,31 @@ the seal is complete.
 ### Admit the trusted reference
 
 ```fish
-python3.14 -m automation.gfx_prefix_check prepare --frame /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/evidence/frame --destination /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/trusted/seal --note "live M7 event-20 seal"
-python3.14 -m automation.gfx_prefix_check verify --root /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/trusted/seal --frame /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/trusted/seal/frame
+python3.14 -m automation.gfx_prefix_check prepare --frame /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/evidence/frame --destination /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/trusted/seal --note "live M7 event-20 seal"
+python3.14 -m automation.gfx_prefix_check verify --root /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/trusted/seal --frame /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/trusted/seal/frame
 ```
 
 The copy must be outside the candidate workspace and the verify command must
-report its root SHA-256 and file count.
+report its root SHA-256 and file count.  `prepare` refuses a destination that
+overlaps the frame and requires `--replace` for an existing evidence root; the
+previous root is retained as a dated sibling.  The read-only flag is POSIX
+permission hardening, not a read-only filesystem guarantee.
 
 ### Launch DSH and paste the goal
 
 ```fish
 cd /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-env EU4_M7_EVENT20_TRUSTED_ROOT=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/trusted/seal EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json EU4_M7_CHECKER_RUN_DIR=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/checker-1 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/run.sh --campaign /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20.json --campaign-state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json
+env EU4_M7_EVENT20_TRUSTED_ROOT=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/trusted/seal EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/state-operator-live.json EU4_M7_CHECKER_RUN_DIR=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/checker-1 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/run.sh --campaign /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20.json --campaign-state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/state-operator-live.json
 ```
 
 Workspace expected in DSH:
 
-`/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/workspace`
+`/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-final2/workspace`
 
 Goal to paste:
 
 ```text
-You are executing the M7 event-20 exact-prefix campaign against the sealed original-EU4-OpenGL reference at /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/trusted/seal. The independent checker is campaigns/eu4-m7-event20/accept.py. Work autonomously across native DSH goal rounds. Diagnose the earliest divergence using the sealed evidence, propose at most three bounded hypotheses, modify the smallest candidate renderer component, run focused tests, and submit the result to the trusted checker. The checker builds and executes your candidate renderer against the immutable reference; candidate-authored screenshots or reports are not evidence. Compare every event 0 through 20, including the R32F payload at event 11. Stop at the first uncorrected divergence. Do not modify reference evidence, the checker, campaign limits or receipts. Do not merge. If the correction cannot be justified or the budget is exhausted, stop with requires_additional_evidence and the exact missing observation.
+You are executing the M7 event-20 exact-prefix campaign against the sealed original-EU4-OpenGL reference at /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/trusted/seal. The independent checker is campaigns/eu4-m7-event20/accept.py. Work autonomously across native DSH goal rounds. Diagnose the earliest divergence using the sealed evidence, propose at most three bounded hypotheses, modify the smallest candidate renderer component, run focused tests, and submit the result to the trusted checker. The checker builds and executes your candidate renderer against the immutable reference; candidate-authored screenshots or reports are not evidence. Compare every event 0 through 20, including the R32F payload at event 11. Stop at the first uncorrected divergence. Do not modify reference evidence, the checker, campaign limits or receipts. Do not merge. If the correction cannot be justified or the budget is exhausted, stop with requires_additional_evidence and the exact missing observation.
 ```
 
 ### Expected outcome and first-divergence handling
@@ -223,9 +230,9 @@ exactly. A green `M7_AUTONOMOUS_READY` gate does not imply this.
 ### Evidence and stop
 
 - Campaign status:
-  `python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json`
-- Checker receipt: `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/checker-1/metal/trusted-execution.json`
+  `python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/state-operator-live.json`
+- Checker receipt: `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/checker-1/exec-*/metal/trusted-execution.json`
 - DSH logs/sessions: `/Users/fabian/.local/share/eu4-dsh/logs`, `/Users/fabian/.local/share/eu4-dsh/sessions`
 - Explicit stop:
-  `python3.14 -m automation.campaign_guard stop --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json --reason blocked`
+  `python3.14 -m automation.campaign_guard stop --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-final2/state-operator-live.json --reason blocked`
 - Do not merge. Request independent review of the exact head.

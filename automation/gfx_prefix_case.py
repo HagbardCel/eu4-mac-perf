@@ -32,25 +32,6 @@ def _sha(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _iter_blob_members(value):
-    if isinstance(value, dict):
-        if isinstance(value.get("file"), str) and value.get("file"):
-            yield value
-        for item in value.values():
-            yield from _iter_blob_members(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _iter_blob_members(item)
-
-
-def _event_blob_names(event: dict) -> set[str]:
-    names = {member["file"] for member in _iter_blob_members(event)}
-    for attribute in event.get("attributes") or []:
-        if isinstance(attribute, dict) and attribute.get("data"):
-            names.add(attribute["data"])
-    return {name for name in names if name}
-
-
 def build_prefix_frame(frame_dir: Path | str, end: int,
                        destination: Path | str) -> dict:
     """Copy events 0..end and every referenced blob into a derived frame."""
@@ -64,7 +45,11 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     if end >= len(events):
         raise PrefixCaseError("prefix end is beyond the event stream")
     prefix = m6_frame.load_prefix_observations(trace, frame_dir)
-    if prefix is None or prefix["end"] < end:
+    if prefix is None or prefix.get("mode") != "prefix":
+        raise PrefixCaseError(
+            "frame has no contiguous prefix; a derived case cannot promote "
+            "selected checkpoints")
+    if prefix["end"] < end:
         raise PrefixCaseError("frame has no complete prefix through the end")
     selected = events[:end + 1]
     post = prefix["post_events"][:end + 1]
@@ -74,11 +59,9 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     if destination.exists():
         shutil.rmtree(destination)
     (destination / "blobs").mkdir(parents=True)
-    blob_names: set[str] = set()
-    for event in selected:
-        blob_names |= _event_blob_names(event)
+    blob_names = m6_frame.event_blob_names(selected)
     for record in [initial, *post]:
-        blob_names |= _event_blob_names(record)
+        blob_names |= m6_frame.event_blob_names([record])
     for name in sorted(blob_names):
         source = frame_dir / "blobs" / name
         if not source.is_file():
@@ -207,7 +190,7 @@ def build_case(frame_dir: Path | str, end: int,
         derived, None, require_end=end, trusted_execution=True)
     case = {
         "schema": SCHEMA,
-        "case_id": f"m7-prefix-{end}-{frame['derived_from']['original_session_id']}",
+        "case_id": f"gfx-prefix-{end}-{frame['derived_from']['original_session_id']}",
         "frame": frame,
         "checker": {
             "verdict": result.get("verdict"),

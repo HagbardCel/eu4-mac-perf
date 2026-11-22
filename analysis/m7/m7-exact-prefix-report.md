@@ -88,14 +88,56 @@ consolidation: `FIRST_DIVERGENCE` at event 1, event 0 RGB, events 10/12–17 RGB
 event 11 unsupported, events 18–20 divergent. The legacy observation schema and
 manifest-embedded records remain readable.
 
-## Trusted candidate execution
+## Trusted candidate execution and boundary
 
-Retained unchanged in substance: candidate worktree and allowed-path
-verification, dependency snapshot, build from the actual candidate renderer
-sources, source/compiler/build/host digests, immutable copied reference outside
-the candidate workspace, post-execution output rehashing, and one charged replay
-reservation. Candidate-authored `replay.json`, receipts and pixels are never
-authority.
+Retained: candidate worktree and allowed-path verification, dependency snapshot,
+build from the actual candidate renderer sources, source/compiler/build/host
+digests, immutable copied reference outside the candidate workspace,
+post-execution output rehashing, and one charged replay reservation.
+Candidate-authored `replay.json`, receipts and pixels are never authority.
+
+The checker now materializes a **reference-free replay input** for the
+candidate: only the manifest, event stream and blobs the events consume as
+renderer inputs. Final reference images, default-checkpoint images and
+observation payloads are omitted; the shader translation runs in trusted
+infrastructure against the original frame and supplies only translated shader
+artifacts. The candidate also receives no `EU4_*` evidence-location
+environment and runs with its own execution directory as `cwd`.
+
+The candidate still controls the native renderer and its GPU readback loop.
+This is an input-separation boundary, **not a sandbox**: arbitrary native
+candidate code can read the host filesystem and could fabricate output bytes.
+What it cannot obtain from its inputs is the authenticated expected payload.
+An output payload that is also a legitimate renderer input (for example a
+texture later sampled by the frame) is indistinguishable at this boundary and
+is recorded as `shared_input_outputs` in the execution record.
+
+Quoted source includes must resolve inside the candidate checkout; an absolute
+or escaping include is rejected as unattested rather than compiled from the
+host. System/SDK headers remain part of the trusted toolchain identity.
+
+Evidence of the boundary: `tests.test_m7_event20_prefix.
+CandidateTrustBoundaryTests` compiles a modified candidate whose checkpoint
+writer attempts to copy `blobs/<reference_file>`, executes it through the real
+candidate-build path, and asserts the attempt is prevented and no marker is
+written. A second test performs two validations with different candidate
+revisions under one campaign root: new execution directories, new host digest,
+new pixels and new provenance.
+
+## Repeated correction rounds
+
+`_run_trusted_replay` treats its configured directory as a campaign output
+root. Every validation creates a unique `exec-*` child containing its replay
+input, checkpoint request, shaders, candidate snapshot, host, Metal outputs,
+receipt and `execution.json`. Nothing from a previous round is reused as a
+result path. Failed attempts are retained and their execution directory is
+recorded in `failed_execution.execution_dir`.
+
+Translation is reused through the existing content-keyed translation cache;
+candidate hosts are cached by their complete source/compiler identity. A
+changed candidate source therefore rebuilds, and an unchanged one reuses the
+cached host only after verifying its digest. Replay budget accounting remains
+one reservation per validation, with nested calls joining it.
 
 | Check | State |
 | --- | --- |
@@ -117,6 +159,11 @@ The same `gfx_prefix_check.evaluate` and reconciliation path is exercised by:
   `require_end` equal to that fixture's own end. The generic verdict is
   `EXACT_PREFIX` (or the correct divergence), with `authority=synthetic`; it
   qualifies the mechanism and never original-frame equivalence.
+* **Selected late events:** a 130-event synthetic sealed frame selects events
+  118, 120 and 129 only. The observation file contains three colour payloads
+  and no initial state; the checker returns `EXACT_SELECTION`, never
+  `EXACT_PREFIX`, and a mutation classifies as `FIRST_DIVERGENCE` at the
+  selected event. The same native readback, record and reconciler are used.
 * **Derived reproduction:** `gfx_prefix_case.build_prefix_frame` cuts a
   contiguous prefix and re-validates dependency coverage on the derived frame;
   the result is labelled `derived_from … not the original full seal` and
@@ -125,6 +172,19 @@ The same `gfx_prefix_check.evaluate` and reconciliation path is exercised by:
 Unsupported events or absent observations cannot produce exactness: a missing,
 duplicated, substituted, foreign or unobservable operation yields
 `INCOMPLETE_EVIDENCE` or `UNSUPPORTED`, never `EXACT_PREFIX`.
+
+## Exactness contract
+
+The asserted verdict is **colour-payload exactness** for the observed
+attachment. The checker compares the applicable colour channels derived from
+the sealed attachment identity; it does not compare captured depth/stencil
+payloads with Metal depth/stencil attachments. Depth/stencil snapshots are off
+by default and enabled only by
+`EU4_GFX_FRAME_TRACE_OBSERVE_DEPTH_STENCIL=1` as diagnostics. On the preserved
+seal, the old observations contained 162,134,784 colour bytes and 142,218,496
+depth/stencil bytes; the new default saves 46.7% of the captured observation
+bytes (and the corresponding readbacks for 17 of 22 observations). Colour
+equality is not a claim of full backend-state parity.
 
 ## Verdicts
 
@@ -139,7 +199,9 @@ duplicated, substituted, foreign or unobservable operation yields
 * `INCOMPLETE_EVIDENCE` – missing/invalid/unverified evidence (including a
   mismatch hidden behind an unverified earlier event);
 * `UNSUPPORTED` – coverage is complete but an explicitly excluded auxiliary
-  operation prevents an exactness claim.
+  operation prevents an exactness claim;
+* `EXACT_SELECTION` – every independently selected post-event observation
+  matched, with no initial-state anchor and no prefix claim.
 
 `EVENT20_EXACT` exists only in `campaigns/eu4-m7-event20/accept.py` and is
 derived from an authentic `EXACT_PREFIX` through event 20.
@@ -165,6 +227,27 @@ The derived reproduction case (56 files, 75,456,851 bytes, root
 under `.local/m7/event20/case-prefix` and is regenerable with
 `automation.gfx_prefix_case`.
 
+## Validation
+
+* Focused: `tests.test_m6_frame`, `tests.test_gfx_frame_graph`,
+  `tests.test_gfx_independent_replay`, `tests.test_m7_event20_prefix`,
+  `tests.test_replay_host_dependencies`, `tests.test_m7_shadow_receipt` and
+  `tests.test_m7_continuous_replay`: 362+ tests, 0 failures.
+* Compiled candidate boundary: `CandidateTrustBoundaryTests` performs two real
+  candidate-source builds and Metal replays under one campaign root.  The
+  copying attack is prevented; execution directories, host digests and pixels
+  differ between revisions; translation is reused from the content cache.
+* Native: `TraceStateHostTests` asserts state restoration, sentinel-error
+  preservation and fail-closed unsupported draw-buffer, incomplete-framebuffer,
+  cube-map and renderbuffer configurations (`observation=1 negative=1`).
+* Selected late events: `prefix-late` selects 118, 120 and 129 of 130 events,
+  captures three payloads (192 bytes, no depth/stencil) and returns
+  `EXACT_SELECTION`, never `EXACT_PREFIX`.
+* Legacy seal re-evaluation (offline, existing Metal outputs): unchanged
+  `FIRST_DIVERGENCE` at event 1, prefix `[0, 0]`, authentic authority.
+* Final offline gate `20261122T105458Z-321033cc`: 4,463 ran / 4,427 executed /
+  36 skipped / 0 failures / 0 errors, 759.4 s.
+
 ## Limitations
 
 * The event-1 divergence (`tex:433`, 23 px, max 1) is not root-caused.
@@ -172,6 +255,19 @@ under `.local/m7/event20/case-prefix` and is regenerable with
   and covered by synthetic/native tests.
 * A driver/context without `GL_ARB_framebuffer_object` cannot report attachment
   component identity; such a target is `unsupported`, not normalized.
+* Unsupported native configurations fail closed: non-`GL_BACK` default draw
+  buffer, multisampled targets, non-complete framebuffers, draw buffers other
+  than `GL_COLOR_ATTACHMENT0`, cube/array/3D texture attachments and
+  renderbuffer colour attachments. A renderbuffer is identified as `fb:<n>`,
+  never as a texture that shares its numeric GL name.
+* Candidate code is not sandboxed. The boundary removes authenticated expected
+  pixels from its inputs and keeps acceptance provenance in trusted code; it
+  does not prevent arbitrary native code from fabricating plausible outputs.
 * Default-framebuffer observations rely on the drawable extent reported by the
   host hook; a context that exposes neither extent nor viewport fails closed.
+* Depth/stencil payloads are not part of the equality claim and are not
+  compared with Metal depth/stencil; they remain opt-in diagnostics.  A future
+  migration that needs depth parity must add a format-aware comparison.
+* Selected observation sets qualify only the selected checkpoints; they never
+  establish a contiguous prefix or initial-state equivalence.
 * Independent review of the final head is still required before merge.

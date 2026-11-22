@@ -1244,6 +1244,70 @@ def _event_output_resource(event: dict) -> str | None:
     return None
 
 
+def _selected_coverage(prefix: dict, events: list[dict],
+                       resources: dict) -> dict:
+    """Validate selected post-event observations without claiming a prefix."""
+    problems: list[str] = []
+    selection = [int(value) for value in prefix.get("events") or []]
+    post = prefix.get("post_events") or []
+    by_event: dict[int, dict] = {}
+    excluded_events: list[int] = []
+    for record in post:
+        event_index = record.get("event")
+        if not isinstance(event_index, int) or isinstance(event_index, bool):
+            problems.append("selected observation has an invalid event index")
+            continue
+        if event_index in by_event:
+            problems.append(f"selected event {event_index} is observed twice")
+            continue
+        by_event[event_index] = record
+    if by_event.keys() != set(selection):
+        problems.append("selected observations do not match the selection")
+    for event_index in selection:
+        if event_index < 0 or event_index >= len(events):
+            problems.append(
+                f"selected event {event_index} is outside the event stream")
+            continue
+        record = by_event.get(event_index)
+        if record is None:
+            problems.append(
+                f"selected event {event_index} has no post-event observation")
+            continue
+        event = events[event_index]
+        expected = _event_output_resource(event)
+        if expected is None:
+            problems.append(
+                f"selected event {event_index} has no identified output "
+                "resource")
+            continue
+        if record.get("resource") != expected:
+            problems.append(
+                f"selected event {event_index} observes "
+                f"{record.get('resource')!r}, not {expected!r}")
+        if record.get("kind") != event.get("kind"):
+            problems.append(
+                f"selected event {event_index} kind disagrees with the stream")
+        colour = record.get("color") or {}
+        if colour.get("status") != "unsupported_format":
+            problems.extend(
+                f"selected event {event_index}: {problem}"
+                for problem in format_scope(record)["problems"])
+        else:
+            excluded_events.append(event_index)
+    return {
+        "status": "invalid" if problems else "selected",
+        "mode": "selected",
+        "end": None,
+        "events": selection,
+        "post_events": post,
+        "initial": None,
+        "initial_state": [],
+        "state_coverage": [],
+        "excluded_events": sorted(excluded_events),
+        "problems": problems,
+    }
+
+
 def prefix_coverage(trace: dict, events: list[dict],
                     resources: dict) -> dict:
     """Validate opt-in exact-prefix coverage against the captured event stream.
@@ -1259,6 +1323,8 @@ def prefix_coverage(trace: dict, events: list[dict],
     if prefix is None:
         return {"status": "absent", "end": None, "post_events": [],
                 "initial": None, "excluded_events": [], "problems": []}
+    if prefix.get("mode") == "selected":
+        return _selected_coverage(prefix, events, resources)
     problems: list[str] = []
     end = prefix["end"]
     post = prefix["post_events"]
@@ -1691,7 +1757,7 @@ def prefix_checkpoint_plan(graph: dict) -> list[dict]:
     after the event executed, never before it.
     """
     prefix = graph.get("prefix") or {}
-    if prefix.get("status") != "complete":
+    if prefix.get("status") not in ("complete", "selected"):
         return []
     resources = graph.get("resources") or {}
     plan: list[dict] = []

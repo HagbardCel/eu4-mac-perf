@@ -958,6 +958,7 @@ class TraceStateHostTests(unittest.TestCase):
         self.assertIn("records=1", ran.stdout)
         self.assertIn("production=111", ran.stdout)
         self.assertIn("observation=1", ran.stdout)
+        self.assertIn("negative=1", ran.stdout)
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")
@@ -1644,6 +1645,29 @@ class CaptureBudgetTests(unittest.TestCase):
                         seen["env_extra"].get(
                             "EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES"),
                         "12345")
+
+    def test_observe_events_selection_is_validated(self):
+        self.assertIsNone(m6_frame.observation_selection_error(
+            "118,120,129", 140))
+        for value, message in (
+                ("118,,120", "empty"),
+                ("a", "non-integer"),
+                ("120,118", "strictly increasing"),
+                ("118,118", "strictly increasing"),
+                ("4096", "hard bound")):
+            self.assertIn(message,
+                          m6_frame.observation_selection_error(value, 512))
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture",
+             "--observe-events", "118,120,129",
+             "--prefix-max-bytes", "1048576",
+             "--prefix-max-ns", "1000000000"])
+        self.assertIsNone(m6_frame.checkpoint_options_error(args))
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture",
+             "--observe-events", "118", "--prefix-end", "20"])
+        self.assertIn("mutually exclusive",
+                      m6_frame.checkpoint_options_error(args))
 
     def test_checkpoint_options_refuse_both_selection_forms(self):
         args = m6_frame._parser().parse_args(

@@ -64,8 +64,15 @@ def _relative(path: Path, root: Path) -> str | None:
 
 
 def dependency_paths(root: Path | str = ROOT,
-                     sources=REPLAY_SOURCES) -> dict[str, Path]:
-    """Return the source/header closure keyed by checkout-relative path."""
+                     sources=REPLAY_SOURCES,
+                     *, strict: bool = False) -> dict[str, Path]:
+    """Return the source/header closure keyed by checkout-relative path.
+
+    ``strict`` is used for a candidate build: every quoted include must resolve
+    inside the candidate checkout.  An absolute or escaping include otherwise
+    compiles from the host filesystem and is not covered by the snapshot/file
+    digests.
+    """
     root = Path(root).resolve()
     bench = root / "benchmark"
     seen: dict[Path, str] = {}
@@ -91,17 +98,25 @@ def dependency_paths(root: Path | str = ROOT,
             candidate = (path.parent / match.group(1)).resolve()
             if not candidate.is_file():
                 candidate = (bench / match.group(1)).resolve()
-            if candidate.is_file() and _relative(candidate, root) is not None:
+            relative_include = (_relative(candidate, root)
+                                if candidate.is_file() else None)
+            if relative_include is not None:
                 pending.append(candidate)
+            elif strict:
+                raise OSError(
+                    f"unattested source include {match.group(1)!r} in "
+                    f"{_relative(path, root) or path}")
     return {relative: path for path, relative in sorted(
         seen.items(), key=lambda item: item[1])}
 
 
 def relative_dependencies(root: Path | str = ROOT,
-                          sources=REPLAY_SOURCES) -> dict[str, str]:
+                          sources=REPLAY_SOURCES, *, strict: bool = False
+                          ) -> dict[str, str]:
     """Hash the authoritative dependency closure."""
     return {relative: _sha256(path)
-            for relative, path in dependency_paths(root, sources).items()}
+            for relative, path in dependency_paths(
+                root, sources, strict=strict).items()}
 
 
 def compiler_identity(compiler: str | None = None) -> dict:
@@ -137,11 +152,12 @@ def build_command(output: Path | str, sources=REPLAY_SOURCES,
 
 
 def build_identity(root: Path | str = ROOT, sources=REPLAY_SOURCES,
-                   flags=None, *, compiler: str | None = None) -> dict:
+                   flags=None, *, compiler: str | None = None,
+                   strict: bool = False) -> dict:
     """Hash all inputs that can change the replay-host binary."""
     flags = BUILD_FLAGS if flags is None else flags
     root = Path(root).resolve()
-    dependencies = relative_dependencies(root, sources)
+    dependencies = relative_dependencies(root, sources, strict=strict)
     environment = {key: os.environ.get(key)
                    for key in BUILD_ENV_KEYS if os.environ.get(key) is not None}
     value = {
@@ -169,7 +185,7 @@ def snapshot_sources(root: Path | str, destination: Path | str,
     destination = Path(destination).resolve()
     if destination.exists():
         shutil.rmtree(destination)
-    dependencies = dependency_paths(root, sources)
+    dependencies = dependency_paths(root, sources, strict=True)
     if not dependencies:
         raise OSError("candidate renderer dependency closure is empty")
     for relative, path in dependencies.items():
@@ -205,7 +221,7 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
             (completed.stderr or completed.stdout or
              "replay host build failed").strip()[-4000:])
     identity = build_identity(snapshot_root, sources=REPLAY_SOURCES,
-                              compiler=compiler)
+                              compiler=compiler, strict=True)
     return {
         "schema": "gfx-replay-host-candidate-build/v1",
         "command": command,

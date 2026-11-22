@@ -30,6 +30,10 @@ BENCH = ROOT / "benchmark"
 CHECKER = ROOT / "campaigns" / "eu4-m7-event20" / "accept.py"
 
 
+def input_record_for(result: dict) -> dict:
+    return (result.get("execution") or {}).get("replay_input") or {}
+
+
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -177,7 +181,7 @@ class Event20PrefixTests(unittest.TestCase):
     def _metal_fixture(self, frame: Path, metal: Path) -> dict:
         seal = json.loads((frame / "frame-seal.json").read_text())
         graph = gfx_frame_graph.build(frame)
-        self.assertEqual(graph["prefix"]["status"], "complete")
+        self.assertIn(graph["prefix"]["status"], ("complete", "selected"))
         request = gfx_frame_graph.checkpoint_request(graph)
         metal.mkdir(parents=True, exist_ok=True)
         request_path = metal / "checkpoint-request.json"
@@ -370,6 +374,40 @@ class Event20PrefixTests(unittest.TestCase):
             gfx_prefix_check.evaluate(
                 frame, None, require_end=20, trusted_execution=True)
         self.assertEqual(guard.state()["counts"]["replays"], 1)
+
+    def test_selected_late_events_do_not_claim_a_prefix(self):
+        directory = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        result = subprocess.run(
+            [str(self.binary), "prefix-late", str(directory)],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        manifest = json.loads((directory / "frame-trace.json").read_text())
+        self.assertEqual(manifest["prefix"]["mode"], "selected")
+        self.assertEqual(manifest["prefix"]["events"], [118, 120, 129])
+        self.assertEqual(manifest["prefix"]["count"], 3)
+        self.assertFalse(manifest["prefix"]["initial"])
+        lines = [line for line in
+                 (directory / "prefix-observations.jsonl").read_text().splitlines()
+                 if line.strip()]
+        self.assertEqual(len(lines), 3)
+        self.assertEqual(manifest["prefix"]["budget"]["used_bytes"], 3 * 64)
+        metal = Path(tempfile.mkdtemp(dir=self.temporary.name)) / "metal"
+        self._metal_fixture(directory, metal)
+        evaluated = gfx_prefix_check.evaluate(directory, metal)
+        self.assertEqual(evaluated["verdict"], "EXACT_SELECTION",
+                         evaluated["problems"])
+        self.assertFalse(evaluated["exact"])
+        self.assertIsNone(evaluated["verified_prefix"])
+        self.assertEqual(evaluated["verified_events"], [118, 120, 129])
+        self.assertEqual(len(evaluated["events"]), 3)
+        # A selected match can never be promoted over unobserved events.
+        self.assertNotEqual(evaluated["verdict"], "EXACT_PREFIX")
+        path = sorted(metal.glob("prefix-event120-*.bgra"))[0]
+        self._mutate_first_byte(path)
+        divergent = gfx_prefix_check.evaluate(directory, metal)
+        self.assertEqual(divergent["verdict"], "FIRST_DIVERGENCE")
+        self.assertEqual(divergent["first_divergence"], 120)
+        self.assertIsNone(divergent["verified_prefix"])
 
     def test_legacy_embedded_observation_manifest_is_readable(self):
         frame, _metal = self._fixture()
@@ -617,6 +655,247 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertIn("trusted reference root", payload["diagnostics"])
 
 
+CANDIDATE_CASE = ROOT / ".local" / "m7" / "event20" / "case-prefix"
+
+
+@unittest.skipUnless(CANDIDATE_CASE.is_dir(),
+                     "derived replayable prefix fixture is absent")
+class CandidateTrustBoundaryTests(unittest.TestCase):
+    """The compiled candidate executes without expected reference pixels."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def _candidate(self) -> tuple[Path, Path]:
+        base = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        workspace = base / "workspace"
+        completed = subprocess.run(
+            ["git", "-C", str(ROOT), "worktree", "add", "--detach",
+             str(workspace), "HEAD"], capture_output=True, text=True,
+            check=False)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.addCleanup(lambda: subprocess.run(
+            ["git", "-C", str(ROOT), "worktree", "remove", "--force",
+             str(workspace)], capture_output=True, text=True, check=False))
+        campaign = ROOT / ".local" / "test-campaigns" / workspace.name
+        campaign.mkdir(parents=True, exist_ok=True)
+        (campaign / "objective.md").write_text("test candidate boundary\n")
+        (campaign / "accept.py").write_text("raise SystemExit(0)\n")
+        head = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True,
+            text=True, check=True).stdout.strip()
+        contract = {
+            "id": "gfx-candidate-boundary-test",
+            "objective": "objective.md",
+            "workspace": {"mode": "worktree", "path": str(workspace),
+                          "commit": head},
+            "accept": ["accept.py"],
+            "accept_timeout_seconds": 60,
+        }
+        (campaign / "campaign.json").write_text(
+            json.dumps(contract, indent=2) + "\n")
+        run_root = base / "run"
+        sidecar = {
+            "schema": "eu4-dsh-campaign/v1",
+            "campaign_id": "gfx-candidate-boundary-test",
+            "source_campaign": str(campaign / "campaign.json"),
+            "candidate_baseline_commit": head,
+            "checker_retry": {"mode": "deterministic",
+                              "max_identical_retries": 0},
+            "candidate": {
+                "mode": "worktree",
+                "workspace": str(workspace),
+                "workspace_base": "infra",
+                "policy": {
+                    "allowed_paths": ["benchmark/**"],
+                    "forbidden_paths": ["automation/**", "campaigns/**",
+                                        "dsh/**"],
+                },
+            },
+            "run_root": str(run_root),
+            "goal": {"max_rounds": 1, "require_checker_pass": False,
+                     "require_independent_review": False},
+            "limits": {"max_validations": 2,
+                       "validation_timeout_seconds": 120,
+                       "wall_clock_seconds": 600,
+                       "max_review_attempts": 0},
+        }
+        sidecar_path = base / "sidecar.json"
+        sidecar_path.write_text(json.dumps(sidecar, indent=2) + "\n")
+        return workspace, sidecar_path
+
+    def _patch_replay(self, workspace: Path, body: str) -> None:
+        path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
+        source = path.read_text()
+        source = source.replace(
+            "static void run_checkpoint_readbacks(NSArray *items, NSUInteger index,\n"
+            "                                     NSString *output_path, BOOL post_event,\n"
+            "                                     NSMutableArray *failures, NSUInteger *failed,\n"
+            "                                     NSError **error) {\n"
+            "    for (NSDictionary *item in items) {\n"
+            "        NSString *target_name = item[@\"target\"];\n"
+            "        NSMutableDictionary *info = g_render_targets[target_name];\n",
+            "static void run_checkpoint_readbacks(NSArray *items, NSUInteger index,\n"
+            "                                     NSString *output_path, BOOL post_event,\n"
+            "                                     NSMutableArray *failures, NSUInteger *failed,\n"
+            "                                     NSError **error) {\n"
+            "    for (NSDictionary *item in items) {\n"
+            "        NSString *target_name = item[@\"target\"];\n"
+            "        NSMutableDictionary *info = g_render_targets[target_name];\n"
+            + body, 1)
+        path.write_text(source)
+
+    def _attack_body(self) -> str:
+        return (
+            "        if (index == 1) {\n"
+            "            /* Adversarial candidate: try to copy the expected original\n"
+            "               GL reference payload instead of reading Metal. */\n"
+            "            NSString *reference_name = item[@\"reference_file\"];\n"
+            "            NSString *reference_path = [g_attack_frame_path\n"
+            "                stringByAppendingPathComponent:\n"
+            "                    [@\"blobs/\" stringByAppendingString:\n"
+            "                        reference_name ?: @\"\"]];\n"
+            "            NSData *stolen = reference_name.length > 0\n"
+            "                ? [NSData dataWithContentsOfFile:reference_path] : nil;\n"
+            "            if (stolen != nil) {\n"
+            "                NSString *path = [output_path stringByAppendingPathComponent:\n"
+            "                                      item[@\"file\"]];\n"
+            "                [stolen writeToFile:path atomically:YES];\n"
+            "                [@\"copied\" writeToFile:[output_path\n"
+            "                    stringByAppendingPathComponent:@\"attack-succeeded\"]\n"
+            "                    atomically:YES encoding:NSUTF8StringEncoding error:NULL];\n"
+            "                NSMutableDictionary *entry = [@{\n"
+            "                    @\"event\": @(index), @\"target\": target_name,\n"
+            "                    @\"resource\": item[@\"resource\"] ?: @\"\",\n"
+            "                    @\"timing\": post_event ? @\"post_event\" : @\"pre_event\",\n"
+            "                    @\"file\": item[@\"file\"], @\"ok\": @YES,\n"
+            "                    @\"width\": info[@\"width\"] ?: @0,\n"
+            "                    @\"height\": info[@\"height\"] ?: @0,\n"
+            "                    @\"format\": info[@\"format\"] ?: @\"\",\n"
+            "                    @\"pixel_format\": info[@\"pixel_format\"] ?: @\"\",\n"
+            "                } mutableCopy];\n"
+            "                [g_checkpoint_results addObject:entry];\n"
+            "                continue;\n"
+            "            }\n"
+            "        }\n")
+
+    def test_candidate_cannot_copy_reference_pixels_into_outputs(self):
+        base = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        frame = CANDIDATE_CASE
+        workspace, sidecar = self._candidate()
+        self._patch_replay(workspace, self._attack_body())
+        # The attack needs the replay input path.  It is deliberately absent
+        # from the sanitized frame the candidate receives.
+        replay_path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
+        source = replay_path.read_text()
+        source = source.replace(
+            "#import <Metal/Metal.h>\n",
+            "#import <Metal/Metal.h>\n"
+            "static NSString *g_attack_frame_path;\n", 1)
+        source = source.replace(
+            "    g_state = state;\n",
+            "    g_state = state;\n    g_attack_frame_path = frame_path;\n", 1)
+        replay_path.write_text(source)
+        result = gfx_prefix_check.evaluate(
+            frame, None, require_end=1, trusted_execution=True,
+            candidate_workspace=workspace, candidate_sidecar=sidecar)
+        self.assertEqual(result.get("execution", {}).get("mode"),
+                         "candidate-build-and-replay", result.get("problems"))
+        execution_dir = Path(result["execution_dir"])
+        self.assertFalse((execution_dir / "metal" / "attack-succeeded").exists())
+        replay_input = execution_dir / "replay-input"
+        observations = frame / "prefix-observations.jsonl"
+        records = [json.loads(line) for line in observations.read_text().splitlines()
+                   if line.strip()]
+        event_one = next(record for record in records
+                         if record.get("event") == 1
+                         and record.get("timing") == "post_event")
+        name = (event_one.get("color") or {}).get("file")
+        self.assertIsNotNone(name)
+        self.assertFalse((replay_input / "blobs" / name).exists())
+        # Output payloads that are also legitimate renderer inputs are
+        # indistinguishable at this boundary and are recorded explicitly.
+        self.assertIn("shared_input_outputs", input_record_for(result))
+        self.assertNotEqual(result["verdict"], "INCOMPLETE_EVIDENCE")
+
+    def test_external_candidate_include_is_not_attested(self):
+        base = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        workspace, sidecar = self._candidate()
+        path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
+        path.write_text(path.read_text() + '\n#include "/etc/passwd"\n')
+        result = gfx_prefix_check.evaluate(
+            CANDIDATE_CASE, None, require_end=1, trusted_execution=True,
+            candidate_workspace=workspace, candidate_sidecar=sidecar)
+        self.assertEqual(result["verdict"], "INCOMPLETE_EVIDENCE")
+        self.assertTrue(any("unattested source include" in problem
+                            for problem in result["problems"]),
+                        result["problems"])
+        self.assertFalse((base / "run").exists())
+
+    def test_two_rounds_use_new_execution_directories_and_pixels(self):
+        base = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        frame = CANDIDATE_CASE
+        workspace, sidecar = self._candidate()
+        run_root = base / "campaign-run"
+        first = gfx_prefix_check.evaluate(
+            frame, None, require_end=1, trusted_execution=True,
+            candidate_workspace=workspace, candidate_sidecar=sidecar,
+            trusted_run_dir=run_root)
+        first_execution = Path(first["execution_dir"])
+        first_host = first["execution"]["replay_host_sha256"]
+        first_metal = {
+            path.name: _sha(path)
+            for path in (first_execution / "metal").glob("*.bgra")
+        }
+        # A second candidate revision changes checkpoint bytes by one byte.
+        replay_path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
+        source = replay_path.read_text().replace(
+            "        if (capture_target_to_file(info, path, &checkpoint_error,\n",
+            "        if (capture_target_to_file(info, path, &checkpoint_error,\n",
+            1)
+        source = source.replace(
+            "        if (capture_target_to_file(info, path, &checkpoint_error,\n"
+            "                                   &readback_status)) {\n",
+            "        if (capture_target_to_file(info, path, &checkpoint_error,\n"
+            "                                   &readback_status)) {\n"
+            "            NSMutableData *bytes = [[NSMutableData alloc]\n"
+            "                initWithContentsOfFile:path];\n"
+            "            if (bytes.length > 0) {\n"
+            "                uint8_t *raw = (uint8_t *)bytes.mutableBytes;\n"
+            "                raw[0] ^= 1;\n"
+            "                [bytes writeToFile:path atomically:YES];\n"
+            "            }\n",
+            1)
+        replay_path.write_text(source)
+        second = gfx_prefix_check.evaluate(
+            frame, None, require_end=1, trusted_execution=True,
+            candidate_workspace=workspace, candidate_sidecar=sidecar,
+            trusted_run_dir=run_root)
+        second_execution = Path(second["execution_dir"])
+        self.assertNotEqual(first_execution, second_execution)
+        self.assertTrue(second_execution.is_dir())
+        self.assertNotEqual(
+            first["execution"]["replay_host_sha256"],
+            second["execution"]["replay_host_sha256"])
+        self.assertEqual(second["verdict"], "FIRST_DIVERGENCE")
+        self.assertEqual(second["first_divergence"], 0)
+        second_metal = {
+            path.name: _sha(path)
+            for path in (second_execution / "metal").glob("*.bgra")
+        }
+        self.assertNotEqual(first_metal, second_metal)
+        self.assertTrue((first_execution / "execution.json").is_file())
+        self.assertTrue((second_execution / "execution.json").is_file())
+        translation = json.loads(
+            (second_execution / "shaders" / "translation-cache.json").read_text())
+        self.assertTrue(translation["hit"])
+
+
 class TrustedExecutionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -696,6 +975,56 @@ class TrustedExecutionTests(unittest.TestCase):
             frame, root, read_only=False)
         with self.assertRaises(gfx_prefix_check.PrefixCheckError):
             gfx_prefix_check.verify_trusted_evidence(root, frame)
+
+
+class TrustedEvidencePreparationTests(unittest.TestCase):
+    def _source(self) -> Path:
+        base = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        source = base / "source"
+        (source / "blobs").mkdir(parents=True)
+        (source / "frame-trace.json").write_text("{}\n")
+        return source
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+
+    def test_destination_must_not_overlap_the_source(self):
+        source = self._source()
+        for destination in (source, source / "nested", source.parent):
+            with self.assertRaises(gfx_prefix_check.PrefixCheckError):
+                gfx_prefix_check.prepare_trusted_evidence(
+                    source, destination, validate=False)
+
+    def test_existing_evidence_requires_explicit_replacement(self):
+        source = self._source()
+        destination = source.parent / "trusted"
+        destination.mkdir()
+        (destination / "trusted-evidence.json").write_text("{}\n")
+        with self.assertRaises(gfx_prefix_check.PrefixCheckError):
+            gfx_prefix_check.prepare_trusted_evidence(
+                source, destination, validate=False)
+        record = gfx_prefix_check.prepare_trusted_evidence(
+            source, destination, validate=False, replace=True,
+            read_only=False)
+        self.assertTrue(record["replaced_to"])
+        self.assertTrue(Path(record["replaced_to"]).is_dir())
+        self.assertTrue((destination / "frame" / "frame-trace.json").is_file())
+
+    def test_read_only_is_recorded_as_permission_hardening(self):
+        source = self._source()
+        destination = source.parent / "trusted"
+        record = gfx_prefix_check.prepare_trusted_evidence(
+            source, destination, validate=False, read_only=True)
+        self.addCleanup(lambda: [path.chmod(0o755) for path in
+                                 sorted(destination.rglob("*"), reverse=True)
+                                 if path.is_dir()] and
+                        destination.chmod(0o755))
+        self.assertTrue(record["read_only"])
+        self.assertEqual(record["read_only_method"], "posix_mode")
+        self.assertIsInstance(record["writable_after_hardening"], bool)
+        self.assertEqual(record["permissions"],
+                         {"directories": "0555", "files": "0444"})
 
 
 class TrustedRootSelectionTests(unittest.TestCase):

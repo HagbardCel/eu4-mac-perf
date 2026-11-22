@@ -332,7 +332,9 @@ def _invalid_checkpoint(item: dict, graph: dict, reason: str,
                         *, requested: bool) -> dict:
     target = str(item.get("target"))
     event = item.get("event")
-    resource_id = "fb:0" if target == "0" else f"tex:{target}"
+    resource_id = str(item.get("resource") or "")
+    if not resource_id:
+        resource_id = "fb:0" if target == "0" else f"tex:{target}"
     resource = (graph.get("resources") or {}).get(resource_id) or {}
     return {
         "event": event,
@@ -482,8 +484,21 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
                              "target": key[1], "timing": key[2]})
             continue
         target = key[1]
-        expected_resource = "fb:0" if target == "0" else f"tex:{target}"
-        if str(item.get("resource") or expected_resource) != expected_resource:
+        resources = graph.get("resources") or {}
+        declared_resource = str(item.get("resource") or "")
+        if not declared_resource:
+            expected_resource = "fb:0" if target == "0" else f"tex:{target}"
+        elif target == "0":
+            expected_resource = "fb:0"
+        elif declared_resource == f"tex:{target}":
+            expected_resource = declared_resource
+        elif declared_resource.startswith("fb:") and \
+                declared_resource in resources:
+            # A renderbuffer-backed framebuffer has its own resource identity.
+            expected_resource = declared_resource
+        else:
+            expected_resource = f"tex:{target}"
+        if declared_resource and declared_resource != expected_resource:
             problems.append({
                 "kind": "substituted_request", "event": key[0],
                 "target": key[1], "timing": key[2],
@@ -533,7 +548,12 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
                 requested=True))
             continue
         item = rows[0]
-        expected_resource = "fb:0" if target == "0" else f"tex:{target}"
+        resources = graph.get("resources") or {}
+        declared_resource = str(wanted.get("resource") or "")
+        if declared_resource:
+            expected_resource = declared_resource
+        else:
+            expected_resource = "fb:0" if target == "0" else f"tex:{target}"
         if item.get("target") is not None and str(item.get("target")) != target:
             problems.append({"kind": "substituted_result", "event": event,
                              "target": target,
@@ -643,7 +663,7 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
         if expected_reference_sha and reference_sha != expected_reference_sha:
             fail("captured reference sha256 does not match the request")
             continue
-        resource_id = "fb:0" if target == "0" else f"tex:{target}"
+        resource_id = expected_resource
         resource = (graph.get("resources") or {}).get(resource_id) or {}
         captured_format = _normalize_format(resource.get("format"))
         reported_format = _normalize_format(item.get("format"))
@@ -2450,7 +2470,8 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
         receipt = None
     if receipt is not None:
         bindings.append("shader-receipt")
-        if receipt.get("schema") != "m7-shadow-shader-receipt/v1":
+        if receipt.get("schema") not in (
+                "gfx-shader-receipt/v1", "m7-shadow-shader-receipt/v1"):
             problems.append(_checkpoint_problem(
                 "receipt_schema",
                 "shader receipt schema is invalid",

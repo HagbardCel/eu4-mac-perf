@@ -662,6 +662,56 @@ class DefaultCheckpointGraphTests(unittest.TestCase):
                             for reason in graph["reasons"]), graph["reasons"])
 
 
+class ResourceNamespaceTests(unittest.TestCase):
+    def test_texture_and_renderbuffer_names_do_not_alias(self):
+        events = [
+            {"kind": "clear", "target": {
+                "framebuffer": 6,
+                "color_attachment": {"type": "texture", "name": 5,
+                                     "level": 0, "internal_format": "RGBA8"}}},
+            {"kind": "clear", "target": {
+                "framebuffer": 7,
+                "color_attachment": {"type": "renderbuffer", "name": 5}}},
+        ]
+        resources = {
+            "tex:5": {"producers": [{"event": 0}], "consumers": [],
+                      "origin": "renderer_generated"},
+            "fb:7": {"producers": [{"event": 1}], "consumers": [],
+                     "origin": "renderer_generated"},
+        }
+        trace = {"_prefix": {
+            "mode": "selected", "status": "complete", "end": None,
+            "events": [0, 1], "initial": None,
+            "post_events": [
+                {"event": 0, "timing": "post_event", "kind": "clear",
+                 "resource": "tex:5", "target_name": "5",
+                 "pixel_format": "RGBA8", "alpha_applicable": True,
+                 "target_identity": {"internal_format": 0x8058,
+                                     "alpha_bits": 8},
+                 "color": {"status": "captured", "file": "a.bgra",
+                           "sha256": "0" * 64, "bytes": 64,
+                           "pixel_format": "RGBA8"}},
+                {"event": 1, "timing": "post_event", "kind": "clear",
+                 "resource": "fb:7", "target_name": "7",
+                 "color": {"status": "unsupported_format"}},
+            ],
+        }}
+        coverage = gfx_frame_graph.prefix_coverage(trace, events, resources)
+        self.assertEqual(coverage["status"], "selected", coverage["problems"])
+        self.assertEqual(coverage["excluded_events"], [1])
+        self.assertNotIn("fb:5", resources)
+        self.assertNotIn("tex:7", resources)
+        # A forged texture identity for the renderbuffer event is rejected.
+        forged = json.loads(json.dumps(trace))
+        forged["_prefix"]["post_events"][1]["resource"] = "tex:5"
+        forged["_prefix"]["post_events"][1]["target_name"] = "5"
+        broken = gfx_frame_graph.prefix_coverage(forged, events, resources)
+        self.assertEqual(broken["status"], "invalid")
+        self.assertTrue(any("fb:7" in problem
+                            for problem in broken["problems"]),
+                        broken["problems"])
+
+
 class ReplayContractTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
