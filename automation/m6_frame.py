@@ -227,33 +227,68 @@ def iter_blob_members(value):
             yield from iter_blob_members(item)
 
 
-def event_input_blob_names(events) -> set[str]:
+def _producer_writes_color(producer: dict) -> bool:
+    """Whether a graph producer can make its resource current for sampling.
+
+    Mirrors ``g_frame_written`` in ``benchmark/eu4_gfx_frame_replay.mm``:
+    draws and copy/resolve destinations write colour; a clear counts only when
+    its flags include a colour write.
+    """
+    kind = producer.get("kind")
+    if kind in ("draw", "resolve", "copy"):
+        return True
+    if kind == "clear":
+        return "color" in (producer.get("writes") or [])
+    return False
+
+
+def _texture_is_generated(events, index: int, texture: dict,
+                          resources: dict) -> bool:
+    key = f"tex:{texture.get('name')}"
+    return any(
+        isinstance(producer.get("event"), int)
+        and producer["event"] < index
+        and _producer_writes_color(producer)
+        for producer in (resources.get(key) or {}).get("producers") or [])
+
+
+def event_input_blob_names(events, graph: dict | None = None) -> set[str]:
     """Explicit inventory of blobs the replay reads as renderer inputs.
 
     Event records also carry expected-output and provenance fields; only the
     paths the replay actually consumes are copied into a candidate input frame.
+    A captured texture payload is skipped when its actual consumer samples an
+    earlier in-frame Metal colour producer.  The same file is still included
+    when another consumed input role (attribute, index, seed, uniform or
+    external texture) uses it.  ``graph`` supplies producer identities; without
+    it every captured texture remains an input.
+
+    Full-frame replay reads no ``source_image``, no ``pre_image`` (that is
+    isolated-event-only) and no original GLSL ``program.shaders``; translated
+    shader artifacts are supplied separately.  Those entries are therefore not
+    candidate inputs.
     """
+    resources = (graph or {}).get("resources") or {}
     names: set[str] = set()
 
     def add(value) -> None:
         if isinstance(value, dict) and isinstance(value.get("file"), str)                 and value["file"]:
             names.add(Path(value["file"]).name)
 
-    for event in events:
+    for index, event in enumerate(events):
         add(event.get("seed"))
-        add(event.get("pre_image"))
-        add(event.get("source_image"))
         for attribute in event.get("attributes") or []:
             if isinstance(attribute, dict) and isinstance(
                     attribute.get("data"), str) and attribute["data"]:
                 names.add(Path(attribute["data"]).name)
         add(event.get("indices"))
         program = event.get("program") or {}
-        for shader in program.get("shaders") or []:
-            add(shader)
         for uniform in program.get("uniforms") or []:
             add(uniform)
         for texture in event.get("textures") or []:
+            if not isinstance(texture, dict) or _texture_is_generated(
+                    events, index, texture, resources):
+                continue
             for level in texture.get("levels") or []:
                 add(level)
                 add(level.get("compressed") if isinstance(level, dict) else None)
@@ -352,9 +387,58 @@ def expected_output_blobs(trace: dict) -> list[dict]:
     return entries
 
 
-def _input_blob_entries(events, frame_dir: Path | None) -> list[dict]:
+def _seed_replaced_before_first_draw(events, index: int,
+                                     graph: dict | None) -> bool:
+    """Whether an earlier full colour clear makes the first draw's seed unused.
+
+    The graph records the first draw's seed as a frame-boundary observation.
+    When the same resource was fully colour-cleared earlier in this frame, the
+    clear overwrites it before any sampling, so the captured seed is not
+    previous-frame state the replay needs.
+    """
+    seed = events[index].get("seed")
+    if not isinstance(seed, dict) or not seed.get("file"):
+        return False
+    resources = (graph or {}).get("resources") or {}
+    for resource in resources.values():
+        boundary = resource.get("boundary") or {}
+        if (boundary.get("event") == index
+                and boundary.get("file") == seed.get("file")):
+            return any(
+                isinstance(producer.get("event"), int)
+                and producer["event"] < index
+                and producer.get("cleared")
+                and (producer.get("coverage") or {}).get("color_full")
+                for producer in resource.get("producers") or [])
+    return False
+
+
+def _sanitized_events(trace: dict, graph: dict | None) -> list[dict]:
+    """Event records the candidate replay consumes.
+
+    The native host uploads only the first draw's seed.  Seeds on later draws
+    are never consumed, and a first-draw seed already replaced by an earlier
+    full colour clear is redundant; dropping both avoids copying payloads the
+    replay cannot use.
+    """
+    events = [{key: value for key, value in event.items()
+               if key != "default_checkpoint"}
+              for event in trace.get("_events") or []]
+    first_draw = next((index for index, event in enumerate(events)
+                       if event.get("kind") == "draw"), None)
+    for index, event in enumerate(events):
+        if "seed" not in event:
+            continue
+        if index != first_draw or _seed_replaced_before_first_draw(
+                events, index, graph):
+            event.pop("seed", None)
+    return events
+
+
+def _input_blob_entries(events, frame_dir: Path | None,
+                        graph: dict | None = None) -> list[dict]:
     entries = []
-    for name in sorted(event_input_blob_names(events)):
+    for name in sorted(event_input_blob_names(events, graph)):
         entry = {"file": name, "sha256": None}
         if frame_dir is not None:
             path = Path(frame_dir) / "blobs" / name
@@ -365,19 +449,19 @@ def _input_blob_entries(events, frame_dir: Path | None) -> list[dict]:
 
 
 def replay_input_overlap(trace: dict,
-                         frame_dir: Path | str | None = None) -> list[dict]:
+                         frame_dir: Path | str | None = None, *,
+                         graph: dict | None = None) -> list[dict]:
     """Expected outputs whose bytes remain accessible as renderer inputs.
 
     Matching is by content digest, not filename, so a copied payload under a
-    different name is still reported.  Every accessible expected output is
-    listed; ``affects_claim`` later depends on its role and timing.
+    different name is still reported.  Inputs the replay regenerates from an
+    earlier in-frame producer are not accessible inputs and are not reported;
+    pass the same ``graph`` used for materialization so both agree.
     """
-    events = [{key: value for key, value in event.items()
-               if key != "default_checkpoint"}
-              for event in trace.get("_events") or []]
+    events = _sanitized_events(trace, graph)
     expected = expected_output_blobs(trace)
     overlaps = []
-    for item in _input_blob_entries(events, frame_dir):
+    for item in _input_blob_entries(events, frame_dir, graph):
         digest = item.get("sha256")
         matches = [entry for entry in expected
                    if digest is not None and entry.get("sha256") == digest]
@@ -399,25 +483,27 @@ def replay_input_overlap(trace: dict,
 
 
 def materialize_replay_input(frame_dir: Path | str, trace: dict,
-                             destination: Path | str) -> dict:
+                             destination: Path | str, *,
+                             graph: dict | None = None) -> dict:
     """Create a replay input frame without expected output pixels.
 
     The sanitized event representation is built first, then its explicit input
     inventory is derived from that representation.  Expected outputs are never
     copied, even when the same bytes are available under another input name;
-    overlap is reported by content digest.
+    overlap is reported by content digest.  Texture payloads that an earlier
+    in-frame event regenerates are omitted: the renderer samples its own
+    render target, so accepting the captured bytes would both be redundant and
+    make the checkpoint non-independent.  Pass ``graph`` from
+    :func:`gfx_frame_graph.build` to derive that provenance.
     """
     frame_dir = Path(frame_dir).resolve()
     destination = Path(destination).resolve()
     events = trace.get("_events") or []
     if not events:
         raise FrameError("replay input frame has no events")
-    sanitized_events = []
-    for event in events:
-        sanitized_events.append({key: value for key, value in event.items()
-                                 if key != "default_checkpoint"})
-    inputs = event_input_blob_names(sanitized_events)
-    overlap = replay_input_overlap(trace, frame_dir)
+    sanitized_events = _sanitized_events(trace, graph)
+    inputs = event_input_blob_names(sanitized_events, graph)
+    overlap = replay_input_overlap(trace, frame_dir, graph=graph)
     destination.mkdir(parents=True, exist_ok=True)
     blobs = destination / "blobs"
     blobs.mkdir(exist_ok=True)

@@ -65,15 +65,13 @@ def main(argv: list[str]) -> int:
     events = result.get("events") or []
     authority = (result.get("evidence") or {}).get("authority")
     exact = (
-        result.get("verdict") == "EXACT_PREFIX"
+        result.get("qualified") is True
         and result.get("verified_prefix") == {
             "start": 0, "end": EXPECTED_END}
-        and result.get("problems_count") == 0
         and not result.get("excluded_events")
         and len(events) == EXPECTED_END + 1
         and all(entry.get("status") == "match" for entry in events)
         and authority in ("derived", "synthetic")
-        and result.get("independent_equality") is True
     )
     if exact:
         return _emit(
@@ -83,7 +81,7 @@ def main(argv: list[str]) -> int:
             "not original-frame equivalence)",
             result)
     if (result.get("verdict") == "EXACT_PREFIX"
-            and result.get("independent_equality") is not True):
+            and result.get("qualified") is not True):
         return _emit(
             "inconclusive",
             "the offline pixel match is not independently attributable: "

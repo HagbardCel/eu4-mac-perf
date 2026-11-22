@@ -931,7 +931,8 @@ class ReplayInputSanitizationTests(unittest.TestCase):
             frame = _Path(temporary) / "frame"
             (frame / "blobs").mkdir(parents=True)
             for name in ("input.bin", "expected.bin", "shared.bin",
-                         "source.bin", "cube-face.bin", "compressed.bin",
+                         "source.bin", "pre.bin", "shader.bin", "uniform.bin",
+                         "cube-face.bin", "compressed.bin",
                          "frame-reference.bgra"):
                 (frame / "blobs" / name).write_bytes(name.encode())
             shared_sha = hashlib.sha256(b"shared.bin").hexdigest()
@@ -942,7 +943,12 @@ class ReplayInputSanitizationTests(unittest.TestCase):
                                         "sha256": expected_sha},
                  "unrelated": {"file": "expected.bin"},
                  "source_image": {"file": "source.bin"},
+                 "pre_image": {"file": "pre.bin"},
                  "attributes": [{"data": "input.bin"}],
+                 "program": {
+                     "shaders": [{"file": "shader.bin"}],
+                     "uniforms": [{"file": "uniform.bin"}],
+                 },
                  "textures": [{"levels": [{
                      "file": "shared.bin",
                      "compressed": {"file": "compressed.bin"},
@@ -970,9 +976,12 @@ class ReplayInputSanitizationTests(unittest.TestCase):
             copied = {path.name for path in (destination / "blobs").iterdir()}
             self.assertIn("input.bin", copied)
             self.assertIn("shared.bin", copied)
-            self.assertIn("source.bin", copied)
+            self.assertIn("uniform.bin", copied)
             self.assertIn("cube-face.bin", copied)
             self.assertIn("compressed.bin", copied)
+            self.assertNotIn("source.bin", copied)
+            self.assertNotIn("pre.bin", copied)
+            self.assertNotIn("shader.bin", copied)
             self.assertNotIn("expected.bin", copied)
             self.assertNotIn("frame-reference.bgra", copied)
             self.assertEqual(record["shared_input_outputs"][0]["file"],
@@ -984,6 +993,118 @@ class ReplayInputSanitizationTests(unittest.TestCase):
                          (destination / "frame-events.jsonl").read_text()
                          .splitlines() if line.strip()]
             self.assertNotIn("default_checkpoint", sanitized[0])
+
+
+class ReplayInputProvenanceTests(unittest.TestCase):
+    def _frame(self, root: Path) -> tuple[Path, dict, dict]:
+        frame = root / "frame"
+        (frame / "blobs").mkdir(parents=True)
+        payload = b"renderer-generated-payload"
+        generated = _write_blob(frame, "generated.bin", payload)
+        expected = _write_blob(frame, "expected.bin", payload)
+        events = [
+            {"kind": "clear",
+             "target": {"color_attachment": {"type": "texture", "name": 431}}},
+            {"kind": "draw", "index": 0, "target": {"framebuffer": 0},
+             "textures": [{"name": 431, "levels": [{
+                 "file": generated["file"],
+                 "sha256": generated["sha256"]}]}]},
+        ]
+        trace = {
+            "_events": events,
+            "_prefix": {"post_events": [{
+                "event": 0, "timing": "post_event", "resource": "tex:431",
+                "color": expected}]},
+            "frame": {"width": 1, "height": 1},
+        }
+        graph = {"resources": {"tex:431": {
+            "producers": [{"event": 0, "kind": "clear",
+                           "writes": ["color"]}],
+            "consumers": [{"event": 1}]}}}
+        return frame, trace, graph
+
+    def test_in_frame_generated_texture_is_not_a_candidate_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            record = m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            self.assertFalse(
+                (root / "replay-input" / "blobs" / "generated.bin").exists())
+            self.assertEqual(record["shared_input_outputs"], [])
+
+    def test_generated_texture_filename_needed_by_another_role_is_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            trace["_events"][1]["attributes"] = [{
+                "data": "generated.bin", "sha256": "0" * 64}]
+            m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            self.assertTrue(
+                (root / "replay-input" / "blobs" / "generated.bin").is_file())
+
+    def test_depth_only_clear_does_not_generate_the_sampled_color_texture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            graph["resources"]["tex:431"]["producers"][0].update({
+                "writes": ["depth"]})
+            record = m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            self.assertTrue(
+                (root / "replay-input" / "blobs" / "generated.bin").is_file())
+            self.assertTrue(record["shared_input_outputs"])
+
+    def test_required_first_draw_seed_is_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            seed = _write_blob(frame, "seed.bin", b"previous-frame")
+            trace["_events"][1]["seed"] = seed
+            m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            self.assertTrue(
+                (root / "replay-input" / "blobs" / "seed.bin").is_file())
+
+    def test_seed_overwritten_by_an_earlier_full_clear_is_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            seed = trace["_prefix"]["post_events"][0]["color"]
+            trace["_events"][1]["seed"] = seed
+            graph["resources"]["tex:431"]["boundary"] = {
+                "event": 1, "file": seed["file"]}
+            graph["resources"]["tex:431"]["producers"][0].update({
+                "cleared": True, "coverage": {"color_full": True},
+                "writes": ["color"]})
+            record = m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            self.assertFalse(
+                (root / "replay-input" / "blobs" / seed["file"]).exists())
+            self.assertEqual(record["shared_input_outputs"], [])
+            sanitized = [
+                json.loads(line) for line in
+                (root / "replay-input" / "frame-events.jsonl").read_text()
+                .splitlines() if line.strip()]
+            self.assertNotIn("seed", sanitized[1])
+
+    def test_seed_on_a_later_draw_is_not_copied(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            trace["_events"].append({
+                "kind": "draw", "index": 1, "target": {"framebuffer": 0},
+                "seed": trace["_prefix"]["post_events"][0]["color"]})
+            m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            sanitized = [
+                json.loads(line) for line in
+                (root / "replay-input" / "frame-events.jsonl").read_text()
+                .splitlines() if line.strip()]
+            self.assertNotIn("seed", sanitized[2])
+            self.assertFalse(
+                (root / "replay-input" / "blobs" / "expected.bin").exists())
 
 
 class ReplayInputOverlapTests(unittest.TestCase):

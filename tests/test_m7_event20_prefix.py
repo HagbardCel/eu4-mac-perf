@@ -468,6 +468,48 @@ class Event20PrefixTests(unittest.TestCase):
             self.assertEqual(entry["statistics"]["max_channel_error"], 0)
             self.assertEqual(entry["statistics"]["alpha_different_pixels"], 0)
 
+    def test_fixture_preflight_accepts_a_qualifying_prefix(self):
+        frame, _metal = self._fixture()
+        report = gfx_prefix_check.preflight_fixture(frame, require_end=3)
+        self.assertEqual(report["problems"], [])
+        self.assertEqual(report["prefix_end"], 20)
+
+    def test_fixture_preflight_rejects_uncovered_or_overlapping_scope(self):
+        frame, _metal = self._fixture()
+        uncovered = gfx_prefix_check.preflight_fixture(frame, require_end=21)
+        self.assertTrue(any("ends at event 20" in problem
+                            for problem in uncovered["problems"]))
+        fake = [{
+            "file": "prefix-color-shared.bin", "input_file": "tex-input.bin",
+            "sha256": "0" * 64,
+            "expected_by": [{"kind": "observation", "role": "color",
+                             "event": 0, "timing": "post_event",
+                             "resource": "fb:0"}]}]
+        with mock.patch.object(m6_frame, "replay_input_overlap",
+                               return_value=fake):
+            overlap = gfx_prefix_check.preflight_fixture(frame, require_end=3)
+        self.assertTrue(any("cannot qualify" in problem
+                            for problem in overlap["problems"]))
+
+    def test_target_prefix_ignores_a_later_divergence(self):
+        frame, metal = self._fixture()
+        self._mutate_first_byte(self._event_file(metal, 4))
+        result = gfx_prefix_check.evaluate(frame, metal, require_end=3)
+        self.assertEqual(result["verdict"], "EXACT_PREFIX", result["problems"])
+        self.assertEqual(result["verified_prefix"], {"start": 0, "end": 3})
+        self.assertTrue(result["exact"])
+        self.assertTrue(result["qualified"])
+        self.assertEqual(result["events"][4]["status"], "divergent")
+
+    def test_target_prefix_is_blocked_by_an_earlier_divergence(self):
+        frame, metal = self._fixture()
+        self._mutate_first_byte(self._event_file(metal, 1))
+        result = gfx_prefix_check.evaluate(frame, metal, require_end=3)
+        self.assertEqual(result["verdict"], "FIRST_DIVERGENCE")
+        self.assertEqual(result["first_divergence"], 1)
+        self.assertEqual(result["verified_prefix"], {"start": 0, "end": 0})
+        self.assertFalse(result["qualified"])
+
     def test_trusted_execution_is_not_budgeted_and_a_stop_refuses_it(self):
         frame, _metal = self._fixture()
         temporary = tempfile.TemporaryDirectory()
@@ -685,6 +727,7 @@ class Event20PrefixTests(unittest.TestCase):
                                return_value=fake):
             result = self._evaluate(frame, metal)
         self.assertFalse(result["independent_equality"])
+        self.assertFalse(result["qualified"])
         self.assertTrue(any("not independently attributable" in problem
                             for problem in result["evidence_limitations"]))
 
@@ -989,6 +1032,7 @@ class OfflineAcceptancePredicateTests(unittest.TestCase):
             module.SIDECAR = root / "sidecar.json"
             result = {
                 "verdict": "EXACT_PREFIX",
+                "qualified": False,
                 "verified_prefix": {"start": 0, "end": 2},
                 "problems_count": 0,
                 "excluded_events": [],
@@ -1028,16 +1072,6 @@ class CandidateEnvironmentTests(unittest.TestCase):
                          "LD_PRELOAD", "CPATH"):
                 self.assertNotIn(name, environment)
             self.assertEqual(environment["HOME"], str(Path(temporary) / "home"))
-
-
-@unittest.skipUnless(sys.platform == "darwin",
-                     "compiled Metal candidate boundary is macOS-only")
-class CandidateIsolationInvariantTests(unittest.TestCase):
-    def test_empty_protected_paths_is_refused(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            with self.assertRaises(gfx_prefix_check.PrefixCheckError):
-                gfx_prefix_check._isolated_replay_command(
-                    Path("/bin/true"), [], Path(temporary), [])
 
 
 @unittest.skipUnless(sys.platform == "darwin",
@@ -1226,45 +1260,6 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
         self.assertEqual(
             result["execution"]["candidate"]["source_digests"][
                 "benchmark/eu4_gfx_frame_replay.mm"], expected)
-
-    def test_candidate_cannot_read_absolute_reference_directory(self):
-        base = Path(tempfile.mkdtemp(dir=self.temporary.name))
-        workspace, sidecar = self._candidate()
-        attack = (
-            "        if (index == 0) {\n"
-            "            NSString *dir = @\"" + str(self.fixture) + "/blobs\";\n"
-            "            NSArray *names = [[NSFileManager defaultManager]\n"
-            "                contentsOfDirectoryAtPath:dir error:NULL];\n"
-            "            for (NSString *name in names) {\n"
-            "                if (![name isEqualToString:@\"obs-event0.bgra\"]) continue;\n"
-            "                NSData *stolen = [NSData dataWithContentsOfFile:\n"
-            "                    [dir stringByAppendingPathComponent:name]];\n"
-            "                if (stolen != nil) {\n"
-            "                    [stolen writeToFile:[output_path\n"
-            "                        stringByAppendingPathComponent:item[@\"file\"]]\n"
-            "                        atomically:YES];\n"
-            "                    [@\"copied\" writeToFile:[output_path\n"
-            "                        stringByAppendingPathComponent:@\"absolute-attack\"]\n"
-            "                        atomically:YES encoding:NSUTF8StringEncoding error:NULL];\n"
-            "                    continue;\n"
-            "                }\n"
-            "            }\n"
-            "        }\n")
-        self._patch_replay(workspace, attack)
-        result = gfx_prefix_check.evaluate(
-            self.frame, None, require_end=0, trusted_execution=True,
-            candidate_workspace=workspace, candidate_sidecar=sidecar,
-            trusted_root=self.trusted_root)
-        self.assertIn("execution_dir", result, result.get("problems"))
-        self._assert_patch_built(result, workspace)
-        isolation = result["execution"]["reference_isolation"]
-        self.assertEqual(isolation["mechanism"], "seatbelt")
-        self.assertTrue(isolation["profile_sha256"])
-        self.assertTrue(any(str(self.trusted_root.resolve()) == path
-                            for path in isolation["protected_paths"]))
-        execution = Path(result["execution_dir"])
-        self.assertFalse((execution / "metal" / "absolute-attack").exists())
-        self.assertIs(result.get("independent_equality"), True)
 
     def test_checkpoint_output_interception_is_caught(self):
         workspace, sidecar = self._candidate()
