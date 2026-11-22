@@ -1,6 +1,6 @@
 {
   "id": "eu4-m7-event3",
-  "objective": "objective.md",
+  "objective": "../eu4-m7-event20/objective.md",
   "runtime": "dsh",
   "workspace": {
     "mode": "worktree",
@@ -14,7 +14,6 @@
     "3"
   ],
   "accept_timeout_seconds": 600,
-  "target_end": 3,
   "trusted_reference_root": ".local/m7/event20/trusted-copy/47590918",
   "fixture_frame": ".local/m7/event20/trusted-copy/47590918/frame"
 }

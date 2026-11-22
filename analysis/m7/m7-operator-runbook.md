@@ -65,10 +65,8 @@ test -d $CHECKER; and echo "CHECKER ROOT EXISTS - pick a new suffix before launc
 git -C $WS rev-parse HEAD
 git -C $WS status --short
 
-# 4. Trusted reference is intact and independently verifiable.
-$PY -m automation.gfx_prefix_check verify --root $TRUSTED --frame $TRUSTED/frame
-
-# 4b. The fixture can qualify the requested prefix (same check the launcher runs).
+# 4. The trusted reference is intact and the fixture can qualify the prefix.
+#    preflight_fixture() verifies the trusted root itself; one command is enough.
 $PY -c "from automation import gfx_prefix_check as g; import json; r = g.preflight_fixture('$TRUSTED/frame', require_end=2, trusted_root='$TRUSTED'); print(json.dumps(r['problems']))"
 
 # 5. Checker identity and candidate restrictions.
@@ -208,7 +206,6 @@ set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
 set -l TRUSTED $REPO/.local/m7/event20/trusted-copy/47590918
 cd $REPO
 
-$PY -m automation.gfx_prefix_check verify --root $TRUSTED --frame $TRUSTED/frame
 $PY -c "from automation import gfx_prefix_check as g; import json; r = g.preflight_fixture('$TRUSTED/frame', require_end=3, trusted_root='$TRUSTED'); print(json.dumps(r['problems']))"
 ```
 
