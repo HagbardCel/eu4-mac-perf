@@ -138,6 +138,10 @@ ls -lt ~/.local/share/eu4-dsh/sessions | head
 ```
 
 Checker output in the DSH transcript is the authoritative validator response.
+Prefer the prepared `eu4_validate_candidate` tool for the checker run; use
+`automation.agent_tools` for evidence discovery and replay diagnosis instead of
+composing new wrappers.  A direct `accept.py` invocation is valid only when it
+uses the campaign's run directory and the same sidecar binding.
 A validation receipt is written under the session root; it names the candidate
 revision/digest, checker verdict and identity digest. `trusted-execution.json`
 in the checker run directory names the compiled host and output digests. A

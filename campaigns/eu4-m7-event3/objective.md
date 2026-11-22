@@ -21,6 +21,11 @@ evidence gap and what the experiment will establish, prefer cheaper/narrower
 controls, and reuse a completed deterministic experiment instead of repeating
 it.  A repeated failed hypothesis causes reassessment, not automatic termination.
 
+Use the prepared campaign validation path (`eu4_validate_candidate`) for the
+authoritative checker run, and `automation.agent_tools` for evidence discovery
+and replay diagnosis.  Do not compose a replacement checker invocation or
+modify trusted validation code.
+
 The operator deadline is authoritative only through
 `python3 -m automation.campaign_guard status --state $EU4_CAMPAIGN_STATE`.
 Never report a deadline stop unless that status shows no remaining time or a
