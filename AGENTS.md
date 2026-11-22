@@ -30,6 +30,19 @@ returns an already-running identical suite instead of launching a duplicate.
 5. Inspect a running or finished invocation with
    `python3 -m automation.test_runner status --id <id>`; do not poll a log file.
 
+The full offline gate is the final verification step for retained implementation
+changes or PR review, not for temporary diagnostic modifications, exactly
+reverted experiments, individual `/goal` rounds, or campaigns whose acceptance
+is determined by the existing independent checker. During autonomous
+reconstruction, run the focused tests relevant to retained changes and the
+existing trusted checker instead; do not modify `automation/test_runner.py` or
+add test caching.
+
+When reverting an experiment, compare the renderer source or diff against the
+saved pre-experiment state. If it is identical, reuse the earlier verification
+evidence. If it is not identical, investigate the difference before claiming
+restoration.
+
 `python3.14 -m automation.python_runtime resolve` is the checked interpreter
 for the diagnostic core. The profile split is enforced by
 `automation.test_profiles` and by the capture/launch entry points: an explicit
