@@ -1056,6 +1056,17 @@ class ReplayInputProvenanceTests(unittest.TestCase):
                 (root / "replay-input" / "blobs" / "generated.bin").is_file())
             self.assertTrue(record["shared_input_outputs"])
 
+    def test_required_first_draw_seed_is_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            seed = _write_blob(frame, "seed.bin", b"previous-frame")
+            trace["_events"][1]["seed"] = seed
+            m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            self.assertTrue(
+                (root / "replay-input" / "blobs" / "seed.bin").is_file())
+
     def test_seed_overwritten_by_an_earlier_full_clear_is_removed(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
