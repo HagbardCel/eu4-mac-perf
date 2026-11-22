@@ -945,32 +945,38 @@ def main(argv: list[str] | None = None) -> int:
                     admin_token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN") or None)
                 value = {"ok": True, "created": True, "status": value}
             else:
-                state = guard.state()
-                current = {
-                    key: state.get("budgets", {}).get(key)
-                    for key in budgets
-                }
-                problems = []
-                if current != budgets:
-                    problems.append(
-                        f"existing budgets {current} != requested {budgets}")
-                if any(int(state.get("counts", {}).get(key, 0) or 0) != 0
-                       for key in state.get("counts", {})):
-                    problems.append("existing state has consumed budget")
-                if state.get("reservations"):
-                    problems.append("existing state has reservations")
-                if state.get("stop"):
-                    problems.append("existing state is stopped")
-                if problems:
-                    raise CampaignRefusal("state_in_use", "; ".join(problems))
-                # The state is unused: refresh the wall-clock window so a
-                # prepared handoff does not expire while waiting for launch.
-                seconds = budgets.get(
-                    "wall_clock_seconds",
-                    args.deadline_seconds if args.deadline_seconds is not None
-                    else PILOT_BUDGETS["wall_clock_seconds"])
-                state["deadline_epoch"] = time.time() + float(seconds)
-                guard._write(state)
+                # Check and refresh under the state lock: a reservation, stop or
+                # failure written after the read must not be overwritten by this
+                # earlier snapshot.
+                with guard._locked():
+                    state = guard.state()
+                    current = {
+                        key: state.get("budgets", {}).get(key)
+                        for key in budgets
+                    }
+                    problems = []
+                    if current != budgets:
+                        problems.append(
+                            f"existing budgets {current} != requested {budgets}")
+                    if any(int(state.get("counts", {}).get(key, 0) or 0) != 0
+                           for key in state.get("counts", {})):
+                        problems.append("existing state has consumed budget")
+                    if state.get("reservations"):
+                        problems.append("existing state has reservations")
+                    if state.get("stop"):
+                        problems.append("existing state is stopped")
+                    if problems:
+                        raise CampaignRefusal(
+                            "state_in_use", "; ".join(problems))
+                    # The state is unused: refresh the wall-clock window so a
+                    # prepared handoff does not expire while waiting for launch.
+                    seconds = budgets.get(
+                        "wall_clock_seconds",
+                        args.deadline_seconds
+                        if args.deadline_seconds is not None
+                        else PILOT_BUDGETS["wall_clock_seconds"])
+                    state["deadline_epoch"] = time.time() + float(seconds)
+                    guard._write(state)
                 value = {"ok": True, "created": False, "status": state}
         elif args.operation == "init":
             value = guard.init(

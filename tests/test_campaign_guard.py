@@ -1238,3 +1238,42 @@ class EnsureStateTests(unittest.TestCase):
         with contextlib.redirect_stdout(third):
             self.assertEqual(self._ensure(), 2)
         self.assertIn("consumed budget", third.getvalue())
+
+    def test_ensure_holds_the_state_lock_across_the_unused_state_check(self):
+        import contextlib
+        import io
+        import threading
+
+        self.assertEqual(self._ensure(), 0)
+        guard = campaign_guard.Guard(self.path)
+        entered = threading.Event()
+        release = threading.Event()
+
+        def hold_lock():
+            with guard._locked():
+                entered.set()
+                release.wait(5)
+
+        holder = threading.Thread(target=hold_lock)
+        holder.start()
+        try:
+            self.assertTrue(entered.wait(5))
+            finished = threading.Event()
+            result = {}
+
+            def run_ensure():
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result["code"] = self._ensure()
+                finished.set()
+
+            worker = threading.Thread(target=run_ensure)
+            worker.start()
+            # A read/check/write outside the lock would finish immediately and
+            # could overwrite a reservation written while it was deciding.
+            self.assertFalse(finished.wait(0.2))
+        finally:
+            release.set()
+            holder.join(5)
+        worker.join(5)
+        self.assertTrue(finished.is_set())
+        self.assertEqual(result.get("code"), 0)

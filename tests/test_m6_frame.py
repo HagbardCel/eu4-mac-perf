@@ -1102,6 +1102,7 @@ class TraceStateHostTests(unittest.TestCase):
         self.assertIn("production=111", ran.stdout)
         self.assertIn("observation=1", ran.stdout)
         self.assertIn("negative=1", ran.stdout)
+        self.assertIn("manifest=1", ran.stdout)
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")

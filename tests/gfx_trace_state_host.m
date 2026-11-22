@@ -705,11 +705,54 @@ int main(int argc, char **argv) {
     }
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, c, 0);
+    /* The manifest's default-drawable identity must be queried with
+       framebuffer zero selected even when an incomplete/timeout path leaves a
+       user FBO bound.  Querying GL_BACK_LEFT against the FBO would report
+       "absent" with a status of "ok". */
+    int manifest_ok = 1;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    while (glGetError() != GL_NO_ERROR) {
+    }
+    if (eu4_gfx_frame_trace_test_manifest(argv[1]) != 0) {
+        manifest_ok = 0;
+    }
+    GLint manifest_draw = 0, manifest_read = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &manifest_draw);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &manifest_read);
+    if (manifest_draw != (GLint)fbo || manifest_read != (GLint)fbo) {
+        manifest_ok = 0;
+    }
+    char manifest_path[1024];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/frame-trace.json",
+             argv[1]);
+    FILE *manifest = fopen(manifest_path, "rb");
+    if (manifest == NULL) {
+        manifest_ok = 0;
+    } else {
+        char manifest_text[65536];
+        size_t got = fread(manifest_text, 1, sizeof(manifest_text) - 1,
+                           manifest);
+        manifest_text[got] = 0;
+        fclose(manifest);
+        if (strstr(manifest_text, "\"default_drawable\":{\"status\":\"ok\"")
+                == NULL ||
+            strstr(manifest_text,
+                   "\"color_back_left\":{\"object_type\":\"framebuffer_default\"")
+                == NULL) {
+            manifest_ok = 0;
+        }
+    }
+    if (!manifest_ok) {
+        ok = 0;
+    }
+
     printf("trace_state=%d pending=0x%x after=0x%x reference=%d "
            "checkpoint=%d depth=%d stencil=%d records=%d production=%d%d%d "
-           "observation=%d negative=%d\n",
+           "observation=%d negative=%d manifest=%d\n",
            ok, pending, after, reference_ok, checkpoint_ok, depth_ok,
            stencil_ok, records_ok, production_none, production_depth,
-           production_both, observation, negative);
+           production_both, observation, negative, manifest_ok);
     return ok && observation && negative ? 0 : 1;
 }

@@ -4404,10 +4404,27 @@ static void write_cgl_drawable_state(FILE *file) {
     } else {
         fprintf(file, "\"profile\":\"0x%x\"", (unsigned)profile);
     }
-    fputs("},\"default_drawable\":{\"status\":\"ok\",", file);
-    GLint binding = 0, samples = 0, sample_buffers = 0;
-    GLint draw_buffer = 0, read_buffer = 0;
+    /* The default drawable's attachments are only valid while framebuffer
+       zero is selected.  A timeout or incomplete-capture path can leave a
+       user FBO bound, so record the current bindings, query the default
+       framebuffer explicitly, and restore both targets afterwards. */
+    GLint binding = 0, previous_read_binding = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &binding);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_binding);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    GLenum default_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (default_status != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(file,
+                "},\"default_drawable\":{\"status\":"
+                "\"unavailable:incomplete_0x%x\"},",
+                (unsigned)default_status);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)binding);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_binding);
+        return;
+    }
+    fputs("},\"default_drawable\":{\"status\":\"ok\",", file);
+    GLint samples = 0, sample_buffers = 0;
+    GLint draw_buffer = 0, read_buffer = 0;
     glGetIntegerv(GL_SAMPLES, &samples);
     glGetIntegerv(GL_SAMPLE_BUFFERS, &sample_buffers);
     glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
@@ -4493,6 +4510,8 @@ static void write_cgl_drawable_state(FILE *file) {
         }
     }
     fputs("},", file);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)binding);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_binding);
 }
 
 /* Emits the observation coverage block.  The observation file is the one
