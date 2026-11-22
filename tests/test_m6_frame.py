@@ -1049,6 +1049,8 @@ class ReplayInputOverlapTests(unittest.TestCase):
             self.assertIn(("final_reference", "final_reference", None), roles)
 
 
+@unittest.skipUnless(sys.platform == "darwin",
+                     "the trace host needs Apple OpenGL")
 class TraceStateHostTests(unittest.TestCase):
     def test_texture_probe_preserves_bindings_and_active_unit(self) -> None:
         source = ROOT / "tests" / "gfx_trace_state_host.m"

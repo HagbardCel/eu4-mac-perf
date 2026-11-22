@@ -274,8 +274,15 @@ under `.local/m7/event20/case-prefix` and is regenerable with
   `EXACT_SELECTION`, never `EXACT_PREFIX`.
 * Legacy seal re-evaluation (offline, existing Metal outputs): unchanged
   `FIRST_DIVERGENCE` at event 1, prefix `[0, 0]`, authentic authority.
-* Final offline gate `20261122T131015Z-1bcc7dfe`: 4,479 ran / 4,443 executed /
-  36 skipped / 0 failures / 0 errors, 1,437.8 s (skips are pre-existing
+* Portable CI (Linux container, `EU4_TEST_PROFILE=offline`,
+  `EU4_OFFLINE_ONLY=1`, non-root with `--init`): `20261122T134503Z-01fadb9f`,
+  4,339 ran / 3,862 executed / 477 skipped / 0 failures, 395.9 s.  The
+  mandatory `test_case_baseline.BaselineIdentityTests.
+  test_record_and_check_reuses_the_same_identity` test passes; portable
+  identity reports `dependency_authority=quoted-include` and never claims
+  macOS compiler provenance.
+* Final macOS offline gate `20261122T135313Z-d0131207`: 4,479 ran / 4,443 executed /
+  36 skipped / 0 failures / 0 errors, 1,602.7 s (skips are pre-existing
   environment-gated suites, not the compiled-candidate tests).
 
 ### Candidate bypass results
