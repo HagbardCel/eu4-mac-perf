@@ -262,8 +262,29 @@ env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=$PY EU4_CAMPAIGN_STATE=$STATE \
       --campaign-mode autonomous_reconstruction
 ```
 
-Paste the printed `goal_text` block into a new `/goal`.  The current expected
-result is `FIRST_DIVERGENCE` at event 1 (`tex:433`, 23 pixels, max channel
+Paste the printed `goal_text` block into a new `/goal`.
+
+Investigation discipline for this campaign:
+
+- Candidate-safe focused tests execute entirely inside `.local/dsh/m7-event3/workspace`
+  and may run in-session. Tests that need additional Git worktrees, shared Git
+  metadata writes or other operations unavailable in the DSH sandbox are
+  operator-side verification: report them as an environment limitation, not a
+  renderer failure, and do not rerun a test known to fail only because it cannot
+  create `.git/worktrees` entries.
+- Use the configured NumPy-capable `EU4_DSH_PYTHON` (the `$PY` above), not
+  whichever `python3` appears first on `PATH`. Prefer existing `eu4_*` tools and
+  their supported timeouts over custom shell wrappers, keep diagnostic outputs
+  in stable authorized locations, use bounded reads, targeted searches and the
+  evidence index instead of dumping large logs or documentation, and preserve
+  subprocess exit status when piping output.
+- Keep hypotheses, interventions, outcomes and evidence paths compactly in
+  `progress.md` or an allowed `analysis/m7/` location, and reuse a completed
+  deterministic experiment while its inputs and execution conditions are
+  unchanged; reuse never qualifies new renderer code or altered reference inputs.
+
+The current expected result is `FIRST_DIVERGENCE` at event 1 (`tex:433`, 20
+pixels after the retained precise-shader-math correction, 23 before, max channel
 error 1).  A pass requires `qualified=true`, authentic authority and the exact
 prefix `{start: 0, end: 3}`; a final image or candidate report never qualifies.
 

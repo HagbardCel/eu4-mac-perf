@@ -30,7 +30,7 @@
   },
   "limits": {
     "validation_timeout_seconds": 600,
-    "deadline_seconds": 1800
+    "deadline_seconds": 3600
   },
   "replay_inputs": [],
   "status": "event3-active",
