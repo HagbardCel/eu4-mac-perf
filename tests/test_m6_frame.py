@@ -931,7 +931,8 @@ class ReplayInputSanitizationTests(unittest.TestCase):
             frame = _Path(temporary) / "frame"
             (frame / "blobs").mkdir(parents=True)
             for name in ("input.bin", "expected.bin", "shared.bin",
-                         "source.bin", "cube-face.bin", "compressed.bin",
+                         "source.bin", "pre.bin", "shader.bin", "uniform.bin",
+                         "cube-face.bin", "compressed.bin",
                          "frame-reference.bgra"):
                 (frame / "blobs" / name).write_bytes(name.encode())
             shared_sha = hashlib.sha256(b"shared.bin").hexdigest()
@@ -942,7 +943,12 @@ class ReplayInputSanitizationTests(unittest.TestCase):
                                         "sha256": expected_sha},
                  "unrelated": {"file": "expected.bin"},
                  "source_image": {"file": "source.bin"},
+                 "pre_image": {"file": "pre.bin"},
                  "attributes": [{"data": "input.bin"}],
+                 "program": {
+                     "shaders": [{"file": "shader.bin"}],
+                     "uniforms": [{"file": "uniform.bin"}],
+                 },
                  "textures": [{"levels": [{
                      "file": "shared.bin",
                      "compressed": {"file": "compressed.bin"},
@@ -970,9 +976,12 @@ class ReplayInputSanitizationTests(unittest.TestCase):
             copied = {path.name for path in (destination / "blobs").iterdir()}
             self.assertIn("input.bin", copied)
             self.assertIn("shared.bin", copied)
-            self.assertIn("source.bin", copied)
+            self.assertIn("uniform.bin", copied)
             self.assertIn("cube-face.bin", copied)
             self.assertIn("compressed.bin", copied)
+            self.assertNotIn("source.bin", copied)
+            self.assertNotIn("pre.bin", copied)
+            self.assertNotIn("shader.bin", copied)
             self.assertNotIn("expected.bin", copied)
             self.assertNotIn("frame-reference.bgra", copied)
             self.assertEqual(record["shared_input_outputs"][0]["file"],

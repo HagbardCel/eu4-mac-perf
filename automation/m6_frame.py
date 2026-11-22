@@ -259,9 +259,14 @@ def event_input_blob_names(events, graph: dict | None = None) -> set[str]:
     paths the replay actually consumes are copied into a candidate input frame.
     A captured texture payload is skipped when its actual consumer samples an
     earlier in-frame Metal colour producer.  The same file is still included
-    when another input role (attribute, index, seed, image, shader, uniform or
-    external texture) consumes it.  ``graph`` supplies producer identities;
-    without it every captured texture remains an input.
+    when another consumed input role (attribute, index, seed, uniform or
+    external texture) uses it.  ``graph`` supplies producer identities; without
+    it every captured texture remains an input.
+
+    Full-frame replay reads no ``source_image``, no ``pre_image`` (that is
+    isolated-event-only) and no original GLSL ``program.shaders``; translated
+    shader artifacts are supplied separately.  Those entries are therefore not
+    candidate inputs.
     """
     resources = (graph or {}).get("resources") or {}
     names: set[str] = set()
@@ -272,16 +277,12 @@ def event_input_blob_names(events, graph: dict | None = None) -> set[str]:
 
     for index, event in enumerate(events):
         add(event.get("seed"))
-        add(event.get("pre_image"))
-        add(event.get("source_image"))
         for attribute in event.get("attributes") or []:
             if isinstance(attribute, dict) and isinstance(
                     attribute.get("data"), str) and attribute["data"]:
                 names.add(Path(attribute["data"]).name)
         add(event.get("indices"))
         program = event.get("program") or {}
-        for shader in program.get("shaders") or []:
-            add(shader)
         for uniform in program.get("uniforms") or []:
             add(uniform)
         for texture in event.get("textures") or []:
