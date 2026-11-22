@@ -65,8 +65,9 @@ test -d $CHECKER; and echo "CHECKER ROOT EXISTS - pick a new suffix before launc
 git -C $WS rev-parse HEAD
 git -C $WS status --short
 
-# 4. Trusted reference is intact and independently verifiable.
-$PY -m automation.gfx_prefix_check verify --root $TRUSTED --frame $TRUSTED/frame
+# 4. The trusted reference is intact and the fixture can qualify the prefix.
+#    preflight_fixture() verifies the trusted root itself; one command is enough.
+$PY -c "from automation import gfx_prefix_check as g; import json; r = g.preflight_fixture('$TRUSTED/frame', require_end=2, trusted_root='$TRUSTED'); print(json.dumps(r['problems']))"
 
 # 5. Checker identity and candidate restrictions.
 shasum -a 256 campaigns/eu4-m7-autonomy-offline/accept.py
@@ -135,6 +136,10 @@ ls -lt ~/.local/share/eu4-dsh/sessions | head
 ```
 
 Checker output in the DSH transcript is the authoritative validator response.
+Prefer the prepared `eu4_validate_candidate` tool for the checker run; use
+`automation.agent_tools` for evidence discovery and replay diagnosis instead of
+composing new wrappers.  A direct `accept.py` invocation is valid only when it
+uses the campaign's run directory and the same sidecar binding.
 A validation receipt is written under the session root; it names the candidate
 revision/digest, checker verdict and identity digest. `trusted-execution.json`
 in the checker run directory names the compiled host and output digests. A
@@ -171,7 +176,8 @@ does not extend it.
   rationale; there is no automatic cache, so repeating an experiment is a
   deliberate choice.
 - A correction is independently rebuilt and executed; the checker returns
-  `EXACT_PREFIX` with scope 0..2 (`pass`).
+  `EXACT_PREFIX` with scope 0..2 (`pass`), `independent_equality=true` and no
+  shared input/output payload.
 - At least two native goal rounds are expected: diagnosis, then correction and
   verification. There is no attempt or round cap.
 - Candidate-authored screenshots or metadata never pass the checker.
@@ -212,6 +218,58 @@ output directory; never overwrite an existing sealed capture. The event-20
 scientific criterion (`EVENT20_EXACT`, complete event 0..20, required R32F and
 format-specific exactness) is unchanged and is only established by the
 independent checker.
+
+## C. Authentic event-3 migration milestone
+
+This campaign targets events 0..3 of the same authentic sealed frame.  It
+reuses `campaigns/eu4-m7-event20/accept.py` with `--target-end 3`; the event-20
+configuration remains the complete-scope target.
+
+Fixed identities:
+
+| Item | Path |
+| --- | --- |
+| Campaign | `campaigns/eu4-m7-event3/campaign.json` |
+| Sidecar | `dsh/campaigns/m7-event3.json` |
+| Candidate workspace | `.local/dsh/m7-event3/workspace` |
+| Run root | `.local/dsh/m7-event3/run` |
+| Trusted reference | `.local/m7/event20/trusted-copy/47590918` |
+
+Preflight (read-only) before launch:
+
+```fish
+set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
+set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
+set -l TRUSTED $REPO/.local/m7/event20/trusted-copy/47590918
+cd $REPO
+
+$PY -c "from automation import gfx_prefix_check as g; import json; r = g.preflight_fixture('$TRUSTED/frame', require_end=3, trusted_root='$TRUSTED'); print(json.dumps(r['problems']))"
+```
+
+The preflight command must print `[]`.  The launcher runs the same check plus the
+candidate policy check and refuses `fixture_ineligible` before starting the
+agent.
+
+Launch (operator action):
+
+```fish
+set -l STATE $REPO/.local/m7/event3/state-operator.json
+set -l SIDECAR $REPO/dsh/campaigns/m7-event3.json
+test -f $STATE; and echo "STATE EXISTS - pick a new suffix"; or echo fresh
+
+env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=$PY EU4_CAMPAIGN_STATE=$STATE \
+    $REPO/dsh/scripts/run.sh --campaign $SIDECAR --campaign-state $STATE \
+      --campaign-mode autonomous_reconstruction
+```
+
+Paste the printed `goal_text` block into a new `/goal`.  The current expected
+result is `FIRST_DIVERGENCE` at event 1 (`tex:433`, 23 pixels, max channel
+error 1).  A pass requires `qualified=true`, authentic authority and the exact
+prefix `{start: 0, end: 3}`; a final image or candidate report never qualifies.
+
+The deadline claim rule is the same for every campaign: only
+`campaign_guard status --state $STATE` is authoritative.  Do not stop as
+"deadline" merely because a correction may not finish in time.
 
 ## Achievement distinctions
 
