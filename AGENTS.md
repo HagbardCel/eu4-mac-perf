@@ -18,17 +18,34 @@ returns an already-running identical suite instead of launching a duplicate.
    ```
 2. **Once focused tests pass**, run the dependent modules they touch (the
    neighbouring suites named in the change or its plan).
-3. **Run the full offline gate once at the end**:
+3. **Final verification**: for retained implementation changes being prepared
+   for merge, run the full offline gate once in an appropriate verification
+   environment:
    `python3.14 -m automation.test_runner run --profile offline --label full`.
-   The offline profile is the default and cannot launch EU4. Live tests are
-   explicit: `--profile live --module <module>`, with a real case and bounded
-   timeout, and are never part of the default gate.
+   During autonomous reconstruction campaigns, use relevant focused tests and
+   the existing independent checker instead. Temporary diagnostic
+   modifications, exact rollbacks and individual `/goal` rounds do not trigger
+   the full offline gate. The offline profile is the default and cannot launch
+   EU4. Live tests are explicit: `--profile live --module <module>`, with a
+   real case and bounded timeout, and are never part of the default gate.
 4. **Compare failures against base** before claiming a regression:
    run the same focused modules in a base worktree (`--cwd`) and use
    `python3 -m automation.test_runner compare --base <id|record> --candidate <id|record>`.
    A pre-existing failure is reported as pre-existing, not fixed or introduced.
 5. Inspect a running or finished invocation with
    `python3 -m automation.test_runner status --id <id>`; do not poll a log file.
+
+| Situation | Required action |
+| --- | --- |
+| Temporary experiment | Relevant focused build/test or diagnostic replay |
+| Experiment reverted exactly | Verify restored source/diff identity and reuse previous results |
+| Rollback differs from previous state | Investigate the unexpected differences |
+| Retained renderer correction | Focused tests and the trusted independent checker |
+| Final implementation PR | Full offline gate when appropriate |
+
+Do not require a native rebuild after a byte-identical rollback when a valid
+build of the restored source already exists. Do not modify
+`automation/test_runner.py` or add test caching.
 
 `python3.14 -m automation.python_runtime resolve` is the checked interpreter
 for the diagnostic core. The profile split is enforced by

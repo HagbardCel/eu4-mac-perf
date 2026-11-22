@@ -26,8 +26,9 @@ renderer-source/build identities and execution receipts to decide whether the
 validated renderer materially changed.  Do not rerun the independent checker
 because a diagnosis report, progress note or unrelated file changed; run it
 after a substantive renderer correction and before claiming an exact-prefix
-milestone.  A previous validation never establishes equivalence for new renderer
-code or altered reference inputs.
+milestone.  A direct diagnostic acceptance call must use the campaign's
+configured `--target-end`.  A previous validation never establishes equivalence
+for new renderer code or altered reference inputs.
 
 After an experiment, classify the conclusion as **supported** (evidence favors
 the explanation), **falsified** (the tested intervention or prediction was
@@ -35,8 +36,10 @@ contradicted) or **unresolved** (the experiment did not discriminate); these are
 reasoning conventions, not machine-readable fields.
 An unsuccessful texture-decoding substitution does not disprove every
 texture-precision mechanism, and an LOD clamp that leaves one output unchanged
-is not proof that every sample used LOD zero.  A repeated failed hypothesis
-causes reassessment, not automatic termination.
+is not proof that every sample used LOD zero.  Numerical magnitudes and
+correlation results are not measured causal errors unless supporting evidence
+establishes causation.  A repeated failed hypothesis causes reassessment, not
+automatic termination.
 
 The operator deadline is authoritative only through
 `python3 -m automation.campaign_guard status --state $EU4_CAMPAIGN_STATE`.
@@ -72,7 +75,8 @@ checker, `automation/gfx_prefix_check.py`,
 At campaign start, inspect previous evidence relevant to the current first
 divergence.  Use a reconstructed OpenGL control only when it can discriminate a
 specific hypothesis.  An unavailable or unsupported reconstructed OpenGL
-control is not, by itself, a reason to declare `requires_additional_evidence`;
+control is not, by itself, a reason to declare `requires_additional_evidence`
+when relevant authentic observations and candidate-side tests remain available;
 record it and continue with the available authentic evidence.
 
 ## Sequence
@@ -95,9 +99,11 @@ record it and continue with the available authentic evidence.
    `controlled_capture` campaign may launch only with an operator-issued
    one-use authorization. If the existing evidence is insufficient, stop with
    `requires_additional_evidence` and name the exact capture request (caller
-   set, prefix scope, required observations) for the operator; do not attempt a
-   capture from this objective and never construct a custom launcher or bypass
-   the one-use launch guard.
+   set, prefix scope, required observations) for the operator; request a new
+   capture only when the required observation is genuinely absent from the
+   existing evidence and the proposed capture can actually produce it. Do not
+   attempt a capture from this objective and never construct a custom launcher
+   or bypass the one-use launch guard.
 4. Run the independent checker after a substantive renderer correction and
    before claiming the requested exact-prefix milestone; reuse the current
    checker cache and execution facilities. Record the earliest verified
@@ -118,7 +124,9 @@ record it and continue with the available authentic evidence.
 8. Before declaring a candidate-scope limitation, give a concrete causal
    attribution to an excluded component, or state precisely why the next
    necessary discriminating experiment cannot be performed with available
-   evidence and authorized tools. If the defect belongs to a component outside
+   evidence and authorized tools. Declaring a component out of scope requires
+   specific evidence linking the discrepancy to that component, not a plausible
+   but unsupported attribution. If the defect belongs to a component outside
    the candidate's authorized scope (for example trusted shader translation or
    capture instrumentation), report the genuine candidate-scope limitation and
    the exact component. Do not compensate by changing unrelated renderer
@@ -129,7 +137,8 @@ record it and continue with the available authentic evidence.
 Stop on any of: verified success for the configured target scope; a genuine
 evidence gap that cannot currently be observed; an unavailable or unsafe
 environment; an explicit operator cancellation; or the operator's execution
-deadline as reported by `campaign_guard`. A first divergence does not end the
-campaign after a correction exposes the next one, and a repeated failed
+deadline as reported by `campaign_guard`. A failed exact-prefix comparison
+requires investigation, not campaign termination, and a first divergence does
+not end the campaign after a correction exposes the next one; a repeated failed
 hypothesis is a reason to reassess rather than a quota stop. Do not merge, push
 to `main`, modify historical seals, or relax exactness.

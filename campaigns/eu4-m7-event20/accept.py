@@ -182,7 +182,8 @@ def main(argv: list[str]) -> int:
         return _emit(
             "fail",
             f"earliest verified divergence is event {event}; "
-            "the campaign must stop there",
+            "the verified exact prefix stops at the event before it, and "
+            "remediation continues from that divergence",
             result)
     return _emit(
         "inconclusive",
