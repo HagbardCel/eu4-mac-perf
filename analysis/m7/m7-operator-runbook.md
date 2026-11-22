@@ -231,9 +231,17 @@ Fixed identities:
 | --- | --- |
 | Campaign | `campaigns/eu4-m7-event3/campaign.json` |
 | Sidecar | `dsh/campaigns/m7-event3.json` |
-| Candidate workspace | `.local/dsh/m7-event3/workspace` |
-| Run root | `.local/dsh/m7-event3/run` |
+| Candidate workspace | `.local/dsh/m7-event3/workspace` (preserve as-is) |
+| Run root | `.local/dsh/m7-event3/run-60m-01` (fresh anchor) |
+| Campaign state | `.local/m7/event3/state-operator-60m-01.json` (fresh file) |
 | Trusted reference | `.local/m7/event20/trusted-copy/47590918` |
+
+The sidecar now points at a fresh run root; the previous
+`.local/dsh/m7-event3/run` anchor and its receipts remain historical evidence and
+must not be reused.  Stop and deactivate the expired prior campaign using its own
+state before launching the replacement; the host-wide marker otherwise refuses a
+new campaign.  Keep the candidate workspace, its renderer changes, reports and
+receipts untouched: the launcher creates the new anchor in the fresh run root.
 
 Preflight (read-only) before launch:
 
@@ -241,7 +249,13 @@ Preflight (read-only) before launch:
 set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
 set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
 set -l TRUSTED $REPO/.local/m7/event20/trusted-copy/47590918
+set -l STATE $REPO/.local/m7/event3/state-operator-60m-01.json
+set -l RUN $REPO/.local/dsh/m7-event3/run-60m-01
 cd $REPO
+
+# Both the campaign state and the sidecar's run root must be unused.
+test -f $STATE; and echo "STATE EXISTS - pick a new suffix"; or echo "state is fresh"
+test -e $RUN; and echo "RUN ROOT EXISTS - pick a new sidecar run_root"; or echo "run root is fresh"
 
 $PY -c "from automation import gfx_prefix_check as g; import json; r = g.preflight_fixture('$TRUSTED/frame', require_end=3, trusted_root='$TRUSTED'); print(json.dumps(r['problems']))"
 ```
@@ -250,10 +264,15 @@ The preflight command must print `[]`.  The launcher runs the same check plus th
 candidate policy check and refuses `fixture_ineligible` before starting the
 agent.
 
-Launch (operator action):
+Launch (operator action).  If the expired prior campaign still holds the
+host-wide marker, release it first with its own state, then start the fresh
+campaign state:
 
 ```fish
-set -l STATE $REPO/.local/m7/event3/state-operator.json
+$PY -m automation.campaign_guard stop --state $REPO/.local/m7/event3/state-operator-event3-01.json --reason operator_stop
+$PY -m automation.campaign_guard deactivate --state $REPO/.local/m7/event3/state-operator-event3-01.json
+
+set -l STATE $REPO/.local/m7/event3/state-operator-60m-01.json
 set -l SIDECAR $REPO/dsh/campaigns/m7-event3.json
 test -f $STATE; and echo "STATE EXISTS - pick a new suffix"; or echo fresh
 
@@ -264,28 +283,24 @@ env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=$PY EU4_CAMPAIGN_STATE=$STATE \
 
 Paste the printed `goal_text` block into a new `/goal`.
 
-Investigation discipline for this campaign:
+Operator-specific reminders:
 
 - Candidate-safe focused tests execute entirely inside `.local/dsh/m7-event3/workspace`
   and may run in-session. Tests that need additional Git worktrees, shared Git
-  metadata writes or other operations unavailable in the DSH sandbox are
-  operator-side verification: report them as an environment limitation, not a
-  renderer failure, and do not rerun a test known to fail only because it cannot
-  create `.git/worktrees` entries.
+  metadata writes or other sandbox-unavailable operations are operator-side
+  verification: report them as an environment limitation, not a renderer
+  failure, and do not rerun a test known to fail only because it cannot create
+  `.git/worktrees` entries.
 - Use the configured NumPy-capable `EU4_DSH_PYTHON` (the `$PY` above), not
   whichever `python3` appears first on `PATH`. Prefer existing `eu4_*` tools and
-  their supported timeouts over custom shell wrappers, keep diagnostic outputs
-  in stable authorized locations, use bounded reads, targeted searches and the
-  evidence index instead of dumping large logs or documentation, and preserve
-  subprocess exit status when piping output.
-- Keep hypotheses, interventions, outcomes and evidence paths compactly in
-  `progress.md` or an allowed `analysis/m7/` location, and reuse a completed
-  deterministic experiment while its inputs and execution conditions are
-  unchanged; reuse never qualifies new renderer code or altered reference inputs.
+  their supported timeouts over custom shell wrappers, and keep diagnostic
+  outputs in stable, authorized locations inside the candidate's writable paths.
 
-The current expected result is `FIRST_DIVERGENCE` at event 1 (`tex:433`, 20
-pixels after the retained precise-shader-math correction, 23 before, max channel
-error 1).  A pass requires `qualified=true`, authentic authority and the exact
+The established baseline is `FIRST_DIVERGENCE` at event 1 (`tex:433`, 23 pixels,
+max channel error 1).  The current candidate retains a correction and must be
+assessed from its own trusted checker result; the prior receipt (candidate
+`b67d4f57…`, verdict `fail`) records only the event-1 divergence, not a corrected
+pixel count.  A pass requires `qualified=true`, authentic authority and the exact
 prefix `{start: 0, end: 3}`; a final image or candidate report never qualifies.
 
 The deadline claim rule is the same for every campaign: only
