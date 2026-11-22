@@ -41,6 +41,13 @@ correlation results are not measured causal errors unless supporting evidence
 establishes causation.  A repeated failed hypothesis causes reassessment, not
 automatic termination.
 
+A perturbation that changes an output establishes sensitivity to that
+perturbation, not causal attribution for the original discrepancy.  For A/B
+pixel comparisons, inspect the actual differing coordinates, channels, signed
+errors and overlap—not merely pixel counts or image hashes.  Verify that both
+compared executions produced valid diagnostic evidence before drawing
+conclusions.
+
 The operator deadline is authoritative only through
 `python3 -m automation.campaign_guard status --state $EU4_CAMPAIGN_STATE`.
 Never report a deadline stop unless that status shows no remaining time or a
@@ -105,6 +112,12 @@ record it and continue with the available authentic evidence.
    - identify the smallest unresolved semantic or numerical difference that a
      targeted experiment could discriminate.
 
+   Prefer the existing native DSH tools for supported operations: original-engine
+   research, captured-state/resource-graph inspection, historical evidence
+   discovery, differential diagnosis and replay. Use shell commands when an
+   operation is not supported by a native tool, including source editing,
+   compilation, focused tests and specialized analysis.
+
    Label each relevant statement **Known original behavior** (runtime capture,
    executable instructions or existing qualified evidence), **Known Metal
    behavior** (implementation inspection or executed Metal evidence) or
@@ -122,8 +135,13 @@ record it and continue with the available authentic evidence.
    when the current task and existing verification evidence require them. Do not
    launch EU4 if a required observer is incomplete or a relevant prefix test
    fails; a full preliminary battery is not required at every goal round.
-   Candidate-safe focused tests run entirely inside this worktree. Tests that
-   need additional Git worktrees, shared Git metadata writes or other
+   During this autonomous reconstruction campaign, the campaign-specific
+   verification policy takes precedence over generic full-suite instructions
+   inherited from the pinned candidate worktree. Temporary experiments, exact
+   rollbacks and individual goal rounds do not trigger the full offline gate.
+   Retained corrections require focused verification and the trusted independent
+   checker. Candidate-safe focused tests run entirely inside this worktree.
+   Tests that need additional Git worktrees, shared Git metadata writes or other
    unavailable operations belong in operator-side verification: report the
    inability to execute them in-session as an environment limitation, not a
    renderer failure, and do not rerun a known-failing test merely because it
