@@ -1009,7 +1009,8 @@ class ReplayInputProvenanceTests(unittest.TestCase):
             "frame": {"width": 1, "height": 1},
         }
         graph = {"resources": {"tex:431": {
-            "producers": [{"event": 0, "kind": "clear"}],
+            "producers": [{"event": 0, "kind": "clear",
+                           "writes": ["color"]}],
             "consumers": [{"event": 1}]}}}
         return frame, trace, graph
 
@@ -1023,18 +1024,28 @@ class ReplayInputProvenanceTests(unittest.TestCase):
                 (root / "replay-input" / "blobs" / "generated.bin").exists())
             self.assertEqual(record["shared_input_outputs"], [])
 
-    def test_payload_still_used_as_an_external_input_is_kept(self):
+    def test_generated_texture_filename_needed_by_another_role_is_kept(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             frame, trace, graph = self._frame(root)
-            trace["_events"][1]["textures"].append({
-                "name": 9, "levels": [{"file": "generated.bin"}]})
-            graph["resources"]["tex:9"] = {
-                "producers": [], "consumers": [{"event": 1}]}
+            trace["_events"][1]["attributes"] = [{
+                "data": "generated.bin", "sha256": "0" * 64}]
             m6_frame.materialize_replay_input(
                 frame, trace, root / "replay-input", graph=graph)
             self.assertTrue(
                 (root / "replay-input" / "blobs" / "generated.bin").is_file())
+
+    def test_depth_only_clear_does_not_generate_the_sampled_color_texture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            graph["resources"]["tex:431"]["producers"][0].update({
+                "writes": ["depth"]})
+            record = m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            self.assertTrue(
+                (root / "replay-input" / "blobs" / "generated.bin").is_file())
+            self.assertTrue(record["shared_input_outputs"])
 
     def test_seed_overwritten_by_an_earlier_full_clear_is_removed(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1045,7 +1056,8 @@ class ReplayInputProvenanceTests(unittest.TestCase):
             graph["resources"]["tex:431"]["boundary"] = {
                 "event": 1, "file": seed["file"]}
             graph["resources"]["tex:431"]["producers"][0].update({
-                "cleared": True, "coverage": {"color_full": True}})
+                "cleared": True, "coverage": {"color_full": True},
+                "writes": ["color"]})
             record = m6_frame.materialize_replay_input(
                 frame, trace, root / "replay-input", graph=graph)
             self.assertFalse(
@@ -1056,6 +1068,23 @@ class ReplayInputProvenanceTests(unittest.TestCase):
                 (root / "replay-input" / "frame-events.jsonl").read_text()
                 .splitlines() if line.strip()]
             self.assertNotIn("seed", sanitized[1])
+
+    def test_seed_on_a_later_draw_is_not_copied(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace, graph = self._frame(root)
+            trace["_events"].append({
+                "kind": "draw", "index": 1, "target": {"framebuffer": 0},
+                "seed": trace["_prefix"]["post_events"][0]["color"]})
+            m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input", graph=graph)
+            sanitized = [
+                json.loads(line) for line in
+                (root / "replay-input" / "frame-events.jsonl").read_text()
+                .splitlines() if line.strip()]
+            self.assertNotIn("seed", sanitized[2])
+            self.assertFalse(
+                (root / "replay-input" / "blobs" / "expected.bin").exists())
 
 
 class ReplayInputOverlapTests(unittest.TestCase):

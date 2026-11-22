@@ -73,6 +73,10 @@ def classify_prefix(events_out: list[dict], *, problems: list[str],
     missing, invalid or excluded event inside the boundary stops an exact walk.
     A later mismatch may not be promoted to ``FIRST_DIVERGENCE`` when an earlier
     event could not be verified.
+
+    The contract is: the complete replay must remain structurally valid (the
+    global reconciliation, request binding and identity checks already enforce
+    that), while pixel equality is asserted only through ``require_end``.
     """
     rows = {int(item["event"]): item for item in events_out
             if isinstance(item.get("event"), int)}
@@ -821,6 +825,8 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     :func:`gfx_independent_replay.reconcile_checkpoints`; this function
     validates identities, binding and coverage and classifies the reconciled
     result.  It never re-reads the same pixels to repeat that comparison.
+    Reconciliation of the complete replay must stay structurally valid; the
+    requested prefix bounds the pixel-equality claim, not the integrity checks.
     """
     frame_dir = Path(frame_dir).expanduser().resolve()
     metal_dir = (Path(metal_dir).expanduser().resolve()
