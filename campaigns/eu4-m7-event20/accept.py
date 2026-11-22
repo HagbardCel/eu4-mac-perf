@@ -14,10 +14,12 @@ and recomputes every exact-prefix comparison from the original pixel bytes.
 A model statement, a matching final image, or a missing intermediate checkpoint
 cannot pass.
 
-Supported verdicts: ``pass`` only for an independently verified EVENT20_EXACT;
-``fail`` for a verified first divergence; ``inconclusive`` when the evidence is
-missing, incomplete, unsupported or unproven.  ``blocked`` is reserved for an
-environment that cannot be restored.
+Supported verdicts: ``pass`` only for an independently verified exact prefix
+through event 20 from an authentic sealed frame; ``fail`` for a verified first
+divergence; ``inconclusive`` when the evidence is missing, incomplete,
+unsupported or unproven.  ``EVENT20_EXACT`` is a campaign name derived here
+from the generic ``EXACT_PREFIX`` result; the common checker has no event-20
+constant.
 """
 
 from __future__ import annotations
@@ -107,21 +109,32 @@ def main(argv: list[str]) -> int:
             candidate_sidecar=sidecar, trusted_run_dir=run_dir)
     except (gfx_prefix_check.PrefixCheckError, OSError, ValueError) as exc:
         return _emit("inconclusive", f"prefix checker could not evaluate: {exc}")
-    verdict = result.get("verdict")
-    if verdict == "EVENT20_EXACT":
+    generic = result.get("verdict")
+    authority = (result.get("evidence") or {}).get("authority")
+    exact_prefix = result.get("verified_prefix") or {}
+    if (generic == "EXACT_PREFIX"
+            and authority == "authentic"
+            and int(exact_prefix.get("end", -1)) >= 20):
+        result = dict(result, campaign_verdict="EVENT20_EXACT")
         return _emit(
             "pass",
-            "independent exact-prefix comparison verified events 0 through 20",
+            "independent exact-prefix comparison verified events 0 through 20 "
+            "from the authentic sealed frame",
             result)
-    if verdict == "EVENT20_BGRA_EXACT_WITH_EXCLUDED_AUX":
+    if generic == "UNSUPPORTED":
         return _emit(
             "inconclusive",
-            "all compared BGRA colour events match, but excluded auxiliary "
-            "operations remain: "
+            "the prefix contains unsupported auxiliary observations: "
             + ", ".join(str(event) for event in
                         result.get("excluded_events") or []),
             result)
-    if verdict == "FIRST_DIVERGENCE":
+    if generic == "EXACT_PREFIX" and authority != "authentic":
+        return _emit(
+            "inconclusive",
+            f"the exact prefix is {authority}, not an authentic sealed frame; "
+            "it qualifies the mechanism but not original-frame equivalence",
+            result)
+    if generic == "FIRST_DIVERGENCE":
         event = result.get("first_divergence")
         return _emit(
             "fail",
@@ -131,7 +144,7 @@ def main(argv: list[str]) -> int:
     return _emit(
         "inconclusive",
         "exact event-20 qualification is not established: "
-        + "; ".join(result.get("problems") or ["unknown"]),
+        + "; ".join(result.get("problems") or [generic or "unknown"]),
         result)
 
 

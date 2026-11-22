@@ -22,12 +22,13 @@ All live evidence for this campaign stays under
     .local/m7/event20/live/frame     (sealed original-GL frame)
     .local/m7/event20/live/shadow    (in-process Metal replay + checkpoints)
 
-The checker verifies the seal, the event stream, the opt-in prefix observation
-file, the shader receipt binding, the published checkpoint request and every
-BGRA comparison.  Do not copy, relabel or combine observations from another
-seal.  Do not edit the checker, `automation/gfx_prefix_check.py`,
-`automation/gfx_independent_replay.py`, `automation/m6_compare.py` or
-`automation/m6_frame.py`.
+The checker verifies the seal, the event stream, the observation file, the
+shader receipt binding, the published checkpoint request and every applicable
+colour channel of every observation.  The channel scope comes from the sealed
+attachment identity; a candidate cannot narrow it.  Do not copy, relabel or
+combine observations from another seal.  Do not edit the checker,
+`automation/gfx_prefix_check.py`, `automation/gfx_independent_replay.py`,
+`automation/gfx_observation.py` or `automation/m6_frame.py`.
 
 ## Sequence
 

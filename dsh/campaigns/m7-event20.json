@@ -26,6 +26,7 @@
         "automation/m6_compare.py",
         "automation/m6_frame.py",
         "automation/gfx_frame_graph.py",
+        "automation/gfx_observation.py",
         "dsh/**",
         "docs/status.md"
       ]

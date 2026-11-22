@@ -196,9 +196,7 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
     if any(not source.is_file() for source in sources):
         raise OSError("snapshot is missing a replay translation unit")
     compiler_info = compiler_identity(compiler)
-    compiler_path = compiler_info["path"] or compiler or "clang"
-    command = [compiler_path, *BUILD_FLAGS, "-o", str(output),
-               *map(str, sources)]
+    command = build_command(output, sources, compiler=compiler)
     completed = subprocess.run(
         command, capture_output=True, text=True, check=False,
         timeout=timeout, env=environment)

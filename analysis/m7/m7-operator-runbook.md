@@ -115,14 +115,14 @@ INDEPENDENTLY APPROVED.**
 
 | Item | Absolute path |
 | --- | --- |
-| Sidecar | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20-live-20261121.json` |
+| Sidecar | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20.json` (set `EU4_M7_EVENT20_TRUSTED_ROOT` to this run's trusted seal) |
 | Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json` |
 | Launch counter | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/run/live-launch.json` |
 | Candidate worktree / workspace | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/workspace` |
 | Capture evidence | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/evidence` |
 | Trusted reference | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/trusted/seal` |
 | Checker outputs | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/checker-1` |
-| Campaign source | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/campaigns/eu4-m7-event20-live-20261121/campaign.json` |
+| Campaign source | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/campaigns/eu4-m7-event20/campaign.json` |
 
 Budgets: **1 EU4 launch, 1 sealed frame, 1 shadow execution, 2 replays,
 1 correction evaluation, 1800 s, 0 automatic merges.** Do not reset a consumed
@@ -157,7 +157,7 @@ already exists with `used=0, limit=1`.
 after the last anchor, refresh it explicitly:
 
 ```fish
-/opt/homebrew/opt/python@3.14/bin/python3.14 -m automation.dsh_bridge prepare --create-anchor --reanchor --sidecar /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20-live-20261121.json
+/opt/homebrew/opt/python@3.14/bin/python3.14 -m automation.dsh_bridge prepare --create-anchor --reanchor --sidecar /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20.json
 ```
 
 ### Capture one sealed frame (consumes the launch)
@@ -186,7 +186,7 @@ report its root SHA-256 and file count.
 
 ```fish
 cd /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-env EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json EU4_M7_CHECKER_RUN_DIR=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/checker-1 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/run.sh --campaign /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20-live-20261121.json --campaign-state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json
+env EU4_M7_EVENT20_TRUSTED_ROOT=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/trusted/seal EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json EU4_M7_CHECKER_RUN_DIR=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/checker-1 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/run.sh --campaign /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20.json --campaign-state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator-live.json
 ```
 
 Workspace expected in DSH:

@@ -63,6 +63,7 @@ def main(argv: list[str]) -> int:
         return _emit("inconclusive",
                      f"offline checker could not evaluate: {exc}")
     events = result.get("events") or []
+    authority = (result.get("evidence") or {}).get("authority")
     exact = (
         result.get("verdict") == "EXACT_PREFIX"
         and result.get("verified_prefix") == {
@@ -71,12 +72,14 @@ def main(argv: list[str]) -> int:
         and not result.get("excluded_events")
         and len(events) == EXPECTED_END + 1
         and all(entry.get("status") == "match" for entry in events)
+        and authority in ("derived", "synthetic")
     )
     if exact:
         return _emit(
             "pass",
-            "independent trusted candidate execution reproduced the exact "
-            "offline prefix 0..2 (narrower than event 20)",
+            f"independent trusted candidate execution reproduced the exact "
+            f"{authority} offline prefix 0..2 (mechanism qualification only; "
+            "not original-frame equivalence)",
             result)
     first = result.get("first_divergence")
     if first is not None:

@@ -105,6 +105,12 @@ int eu4_gfx_frame_trace_test_reference(const char *directory);
    addressed colour blob name. */
 int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
                                         char *out_file, size_t out_size);
+/* Host-test only: run one real observation (shared guarded readback and
+   writer) and return its single record. */
+int eu4_gfx_frame_trace_test_observe(const char *directory, int event,
+                                     const char *timing, const char *kind,
+                                     int texture_name, char *out_record,
+                                     size_t out_size);
 /* Host-test only: force the recorded target framebuffer (no GL context). */
 void eu4_gfx_frame_trace_test_set_target(int framebuffer);
 void eu4_gfx_frame_trace_test_set_target_format(int internal_format);

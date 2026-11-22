@@ -34,7 +34,8 @@ import time
 import uuid
 from pathlib import Path
 
-from automation import campaign_guard, replay_host_dependencies  # noqa: E402
+from automation import (  # noqa: E402
+    campaign_guard, gfx_observation, replay_host_dependencies)
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
@@ -111,8 +112,8 @@ def _read_json(path: Path) -> dict:
 
 
 
-PREFIX_SCHEMA = "gfx-prefix-observations/v1"
-PREFIX_OBSERVATION_SCHEMA = "gfx-prefix-observation/v1"
+PREFIX_SCHEMA = gfx_observation.OBSERVATIONS_SCHEMA
+PREFIX_OBSERVATION_SCHEMA = gfx_observation.OBSERVATION_SCHEMA
 
 
 def _prefix_record_problems(record, index: int) -> list[str]:
@@ -120,7 +121,8 @@ def _prefix_record_problems(record, index: int) -> list[str]:
     if not isinstance(record, dict):
         return [f"prefix observation {index} is not an object"]
     problems: list[str] = []
-    if record.get("schema") != PREFIX_OBSERVATION_SCHEMA:
+    if not gfx_observation.is_supported_observation_schema(
+            record.get("schema")):
         problems.append(f"prefix observation {index} has an unsupported schema")
     if record.get("event") != index:
         problems.append(
@@ -175,19 +177,9 @@ def _prefix_record_problems(record, index: int) -> list[str]:
         if colour.get("pixel_format") not in (None, pixel_format):
             problems.append(f"prefix observation {index} colour pixel format "
                             "disagrees with the observation")
-        if pixel_format == "R32F":
-            identity = record.get("target_identity") or {}
-            try:
-                internal = int(identity.get("internal_format") or 0)
-            except (TypeError, ValueError):
-                internal = 0
-            if internal != 0x822E:
-                problems.append(
-                    f"prefix observation {index} declares R32F for a "
-                    "different internal format")
-            if record.get("alpha_applicable") not in (None, False):
-                problems.append(
-                    f"prefix observation {index} declares alpha for R32F")
+        scope = gfx_observation.format_scope(record)
+        for problem in scope["problems"]:
+            problems.append(f"prefix observation {index}: {problem}")
         if not _is_sha256(colour.get("sha256")):
             problems.append(f"prefix observation {index} has an invalid "
                             "colour digest")
@@ -234,7 +226,8 @@ def load_prefix_observations(manifest: dict, frame_dir: Path) -> dict | None:
     frame_dir = Path(frame_dir)
     if not isinstance(block, dict):
         raise FrameError("frame prefix block is not an object")
-    if block.get("schema") != PREFIX_SCHEMA:
+    if not gfx_observation.is_supported_observations_schema(
+            block.get("schema")):
         raise FrameError("unexpected frame prefix schema")
     if block.get("status") != "complete":
         raise FrameError(
@@ -242,7 +235,7 @@ def load_prefix_observations(manifest: dict, frame_dir: Path) -> dict | None:
             + str(block.get("status") or "unknown"))
     end = block.get("end")
     if (not isinstance(end, int) or isinstance(end, bool)
-            or not 0 <= end < 64):
+            or not 0 <= end < 4096):
         raise FrameError("frame prefix end event is invalid")
     count = block.get("count")
     if (not isinstance(count, int) or isinstance(count, bool)
@@ -269,8 +262,12 @@ def load_prefix_observations(manifest: dict, frame_dir: Path) -> dict | None:
                    if line.strip()]
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise FrameError(f"unreadable frame prefix observations: {exc}") from exc
+    # The observation file is the one authoritative record.  A legacy manifest
+    # may still embed the same records; when present they must agree exactly,
+    # but new captures reference the file by digest and count alone.
     embedded = block.get("observations")
-    if not isinstance(embedded, list) or embedded != records:
+    if embedded is not None and (
+            not isinstance(embedded, list) or embedded != records):
         raise FrameError("frame prefix observations disagree with the manifest")
     post = [record for record in records
             if isinstance(record, dict) and record.get("timing") == "post_event"]
@@ -281,6 +278,10 @@ def load_prefix_observations(manifest: dict, frame_dir: Path) -> dict | None:
     if initial[0].get("event") != 0:
         raise FrameError("frame prefix initial observation is not event 0")
     for index, record in enumerate(post):
+        if not gfx_observation.is_supported_observation_schema(
+                record.get("schema") if isinstance(record, dict) else None):
+            raise FrameError(
+                f"frame prefix observation {index} has an unsupported schema")
         problems = _prefix_record_problems(record, index)
         if problems:
             raise FrameError(problems[0])
@@ -863,8 +864,8 @@ def checkpoint_options_error(args) -> str | None:
     if prefix_end is not None:
         if prefix_end < 0:
             return "--prefix-end must be non-negative"
-        if prefix_end >= 32:
-            return "--prefix-end must be below the native hard bound 32"
+        if prefix_end >= 4096:
+            return "--prefix-end must be below the native hard bound 4096"
         if prefix_end >= int(getattr(args, "max_draws", 0) or 0):
             return "--prefix-end must be below --max-draws"
         if int(getattr(args, "prefix_max_bytes", 0) or 0) <= 0:
@@ -2887,19 +2888,8 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         (shadow / "coordinator.json").write_text(
             json.dumps(result, indent=2) + "\n")
         return 1
-    receipt = {
-        "schema": "m7-shadow-shader-receipt/v1",
-        "capture_frame_id": seal.get("capture_frame_id"),
-        "pid": seal.get("pid"),
-        "session_id": seal.get("session_id"),
-        "trace_manifest_sha256": seal.get("manifest_sha256"),
-        "event_stream_sha256": seal.get("event_stream_sha256"),
-        "event_stream_bytes": seal.get("event_stream_bytes"),
-        **identity,
-        "checkpoint_request_file": request_path.name,
-        "checkpoint_request_sha256": request_sha256,
-        "checkpoint_count": len(request.get("checkpoints") or []),
-    }
+    receipt = build_shader_receipt(seal, request_path)
+    receipt.update(identity)
     receipt_path = shadow / "shader-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     (shader_dir / "ready").write_text(
@@ -3166,6 +3156,38 @@ def shader_receipt_identity(directory: Path | str | None, *,
     }
 
 
+def build_shader_receipt(seal: dict, request_path: Path | str,
+                         shader_dir: Path | str | None = None,
+                         *, required_identity: bool = False) -> dict:
+    """Build the one shader-receipt representation used by every replay path.
+
+    The receipt binds the checkpoint request to the sealed frame; when a
+    translated shader directory is supplied its canonical identity is added.
+    It is metadata about an execution, never a substitute for the independently
+    verified result.
+    """
+    request_path = Path(request_path)
+    receipt = {
+        "schema": "m7-shadow-shader-receipt/v1",
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "pid": seal.get("pid"),
+        "session_id": seal.get("session_id"),
+        "trace_manifest_sha256": seal.get("manifest_sha256"),
+        "event_stream_sha256": seal.get("event_stream_sha256"),
+        "event_stream_bytes": seal.get("event_stream_bytes"),
+    }
+    if shader_dir is not None:
+        receipt.update(shader_receipt_identity(
+            shader_dir, required=required_identity))
+    receipt.update({
+        "checkpoint_request_file": request_path.name,
+        "checkpoint_request_sha256": _sha256(request_path),
+        "checkpoint_count": len(_read_json(request_path).get("checkpoints")
+                                or []),
+    })
+    return receipt
+
+
 def _continuous_frame_coordinator(
     run: Path, shadow: Path, frame_index: int, args,
     overall_deadline: float,
@@ -3208,19 +3230,8 @@ def _continuous_frame_coordinator(
     request = gfx_frame_graph.write_checkpoint_request(graph, request_path)
     request_sha256 = _sha256(request_path)
     identity = shader_receipt_identity(shader_dir, required=True)
-    receipt = {
-        "schema": "m7-shadow-shader-receipt/v1",
-        "capture_frame_id": seal.get("capture_frame_id"),
-        "pid": seal.get("pid"),
-        "session_id": seal.get("session_id"),
-        "trace_manifest_sha256": seal.get("manifest_sha256"),
-        "event_stream_sha256": seal.get("event_stream_sha256"),
-        "event_stream_bytes": seal.get("event_stream_bytes"),
-        **identity,
-        "checkpoint_request_file": request_path.name,
-        "checkpoint_request_sha256": request_sha256,
-        "checkpoint_count": len(request.get("checkpoints") or []),
-    }
+    receipt = build_shader_receipt(seal, request_path)
+    receipt.update(identity)
     receipt_path = output / "shader-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     (shader_dir / "ready").write_text(json.dumps({
@@ -3627,7 +3638,8 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument(
         "--prefix-end", type=int, default=None, metavar="EVENT",
         help="opt-in exact-prefix mode: observe the post-event state of every "
-             "operation from event 0 through EVENT (native hard bound 31)")
+             "operation from event 0 through EVENT (bounded by the byte/time "
+             "budgets and the native hard bound)")
     cap.add_argument(
         "--prefix-max-bytes", type=int, default=384 * 1024 * 1024,
         help="aggregate readback-byte budget for exact-prefix observations")

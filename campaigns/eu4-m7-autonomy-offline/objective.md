@@ -41,4 +41,5 @@ The independent checker is
 - the source/build/host/output digests are bound in the receipt.
 
 The canonical event-20 acceptance criterion is unchanged and is not used by
-this offline smoke campaign.
+this offline smoke campaign.  This fixture qualifies the mechanism only; it
+does not establish original-frame equivalence.

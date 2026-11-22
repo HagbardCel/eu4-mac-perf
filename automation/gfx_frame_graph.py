@@ -25,6 +25,8 @@ import json
 import re
 from pathlib import Path
 
+from automation import gfx_observation
+
 SCHEMA = "gfx-frame-graph/v1"
 COVERAGE_SCHEMA = "gfx-frame-coverage-report/v1"
 
@@ -1669,61 +1671,12 @@ def checkpoint_plan(graph: dict) -> list[dict]:
 def format_scope(observation: dict) -> dict:
     """Derive the applicable comparison channels from sealed attachment identity.
 
-    The declared ``alpha_applicable`` field is evidence to be checked, never an
-    authority: a false value on an attachment with a stored/known alpha channel
-    is a provenance contradiction.
+    The definition lives in :mod:`automation.gfx_observation` so the native
+    writer, the graph, the portable case builder and the reconciler cannot
+    disagree.  The declared ``alpha_applicable`` field is evidence to be
+    checked, never an authority.
     """
-    identity = observation.get("target_identity") or {}
-    try:
-        internal = int(identity.get("internal_format") or 0)
-    except (TypeError, ValueError):
-        internal = 0
-    pixel_format = observation.get("pixel_format")
-    alpha_bits = identity.get("alpha_bits")
-    problems: list[str] = []
-    if pixel_format == "R32F" or internal == 0x822E:
-        derived = False
-        channels = "R32F"
-        if pixel_format not in (None, "R32F"):
-            problems.append(
-                "R32F attachment declares a different pixel format")
-        if isinstance(alpha_bits, int) and not isinstance(alpha_bits, bool) \
-                and alpha_bits != 0:
-            problems.append(
-                "R32F attachment claims a stored alpha channel")
-    elif internal == 0:
-        # Default framebuffer: attachment component queries are unavailable,
-        # but the drawable has an 8-bit alpha channel.
-        derived = True
-        channels = "RGBA"
-    elif internal == 0x8051:
-        derived = False
-        channels = "RGB"
-        if isinstance(alpha_bits, int) and not isinstance(alpha_bits, bool) \
-                and alpha_bits != 0:
-            problems.append(
-                "RGB8 attachment claims a stored alpha channel")
-    else:
-        if isinstance(alpha_bits, int) and not isinstance(alpha_bits, bool):
-            derived = alpha_bits != 0
-        elif internal == 0x8058:
-            derived = True
-        else:
-            derived = True
-        if internal in (0x8058,) and isinstance(alpha_bits, int) \
-                and not isinstance(alpha_bits, bool) and alpha_bits == 0:
-            problems.append(
-                "RGBA8 attachment reports no alpha channel")
-        channels = "RGBA" if derived else "RGB"
-    declared = observation.get("alpha_applicable")
-    if declared is not None and (declared is not False) != derived:
-        problems.append(
-            "alpha applicability contradicts the sealed attachment identity")
-    return {
-        "alpha_applicable": derived,
-        "compared_channels": channels,
-        "problems": problems,
-    }
+    return gfx_observation.format_scope(observation)
 
 
 def _alpha_applicable(observation: dict) -> bool:

@@ -24,7 +24,7 @@ document.**
 
 The live observations are in
 `.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/frame-trace.json`
-and summarized in `analysis/m7/m7-event20-readiness.md`.
+and summarized in `analysis/m7/m7-exact-prefix-report.md`.
 
 The 90825686 seal proves captured-state completeness (samples, bit depths,
 extent, pre-draw colour/depth seeds) but not that an offscreen RGBA8 FBO is the

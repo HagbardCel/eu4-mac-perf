@@ -96,11 +96,11 @@ static void load_sampler_queries(void) {
    operation from event 0 through the selected end event, plus the initial
    pre-event-0 framebuffer state.  Every observation is a full BGRA readback
    with its own target/resource identity and an aggregate byte/time budget. */
-#define FTRACE_MAX_PREFIX_EVENTS 32
+#define FTRACE_MAX_PREFIX_EVENTS 4096
 #define FTRACE_PREFIX_HARD_MAX_BYTES (768ull * 1024ull * 1024ull)
 #define FTRACE_PREFIX_DEFAULT_MAX_BYTES (384ull * 1024ull * 1024ull)
 #define FTRACE_PREFIX_MAX_NS (10ull * 1000ull * 1000ull * 1000ull)
-#define FTRACE_PREFIX_LINE_MAX 2048
+#define FTRACE_PREFIX_LINE_MAX 4096
 #define FTRACE_NAME 96
 
 #define GL_TEXTURE_MAX_ANISOTROPY 0x84FE
@@ -124,14 +124,19 @@ static void load_sampler_queries(void) {
 #define GL_RGB16F_VALUE 0x881B
 #define GL_RGBA16_VALUE 0x805B
 #define GL_SRGB8_ALPHA8_VALUE 0x8C43
-#define GL_DEPTH32F_STENCIL8_VALUE 0x8CAC
+#define GL_DEPTH32F_STENCIL8_VALUE 0x8CAD
+#define GL_DEPTH24_STENCIL8_VALUE 0x88F0
+#define GL_DEPTH_COMPONENT16_VALUE 0x81A5
+#define GL_DEPTH_COMPONENT24_VALUE 0x81A6
+#define GL_DEPTH_COMPONENT32F_VALUE 0x8DAB
+#define GL_STENCIL_INDEX8_VALUE 0x8D48
 #define GL_SAMPLER_2D_RECT_VALUE 0x8B63
 #define GL_SAMPLER_BINDING_VALUE 0x8919
 #ifndef GL_SIGNED_NORMALIZED
 #define GL_SIGNED_NORMALIZED 0x8F9D
 #endif
 #ifndef GL_UNSIGNED_NORMALIZED
-#define GL_UNSIGNED_NORMALIZED 0x8F9C
+#define GL_UNSIGNED_NORMALIZED 0x8C17
 #endif
 #ifndef GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE
 #define GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE 0x8216
@@ -735,6 +740,12 @@ static int capture_reference(void);
 static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
                               uint8_t **out_pixels,
                               ftrace_drawable_state *out_state);
+static int read_observation_pixels(uint32_t framebuffer, GLenum read_buffer,
+                                   uint32_t texture, uint32_t width,
+                                   uint32_t height, GLenum format,
+                                   GLenum type, size_t bytes_per_pixel,
+                                   uint8_t **out_pixels);
+static int framebuffer_attachment_identity_supported(void);
 static void sha256_hex(const void *data, size_t size, char out[65]);
 static int write_atomic(const char *path, const void *data, size_t size);
 static int write_frame_manifest(int complete, const char *reason);
@@ -2844,48 +2855,12 @@ static int capture_target_pixels(const char *prefix, const char *member,
         return -1;
     }
     size_t bytes = (size_t)width * (size_t)height * 4;
-    uint8_t *pixels = (uint8_t *)malloc(bytes);
-    if (pixels == NULL) {
-        return -1;
-    }
-    GLint read_framebuffer = 0, read_buffer = 0, pack_alignment = 0;
-    GLint pack_row = 0, pack_skip_rows = 0, pack_skip_pixels = 0, pack_buffer = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
-    glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
-    glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row);
-    glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
-    glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
-    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)framebuffer);
-    if (framebuffer != 0) {
-        glReadBuffer(GL_COLOR_ATTACHMENT0);
-    }
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-    if (pack_buffer != 0) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    }
-    while (glGetError() != GL_NO_ERROR) {
-    }
-    glFinish();
-    glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
-                 pixels);
-    GLenum gl_error = glGetError();
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_framebuffer);
-    if (framebuffer != 0) {
-        glReadBuffer((GLenum)read_buffer);
-    }
-    glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
-    glPixelStorei(GL_PACK_ROW_LENGTH, pack_row);
-    glPixelStorei(GL_PACK_SKIP_ROWS, pack_skip_rows);
-    glPixelStorei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
-    if (pack_buffer != 0) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
-    }
-    if (gl_error != GL_NO_ERROR) {
+    uint8_t *pixels = NULL;
+    if (read_observation_pixels((uint32_t)framebuffer,
+                                framebuffer == 0 ? GL_BACK
+                                                 : GL_COLOR_ATTACHMENT0,
+                                0, (uint32_t)width, (uint32_t)height, GL_BGRA,
+                                GL_UNSIGNED_INT_8_8_8_8_REV, 4, &pixels) != 0) {
         free(pixels);
         return -1;
     }
@@ -2963,88 +2938,261 @@ static void prefix_reset_locked(void) {
     g.prefix_clear_pending_event = -1;
 }
 
+typedef struct {
+    int internal_format;
+    GLenum read_format;
+    GLenum read_type;
+    int colour_bpp;
+    const char *pixel_format;
+    int alpha_applicable;
+    int red_bits;
+    int green_bits;
+    int blue_bits;
+    int alpha_bits;
+    int component_type;
+    int supported;
+} observation_format_identity;
+
+/* The one mapping from an attachment's internal format to its exact readback
+   byte layout and comparison scope.  Unknown formats are unsupported rather
+   than normalized into a nearby one. */
+static int observation_format_identity_for(int internal_format,
+                                           observation_format_identity *out) {
+    memset(out, 0, sizeof(*out));
+    out->internal_format = internal_format;
+    out->component_type = GL_UNSIGNED_NORMALIZED;
+    switch (internal_format) {
+        case GL_RGB8:
+            out->read_format = GL_BGRA;
+            out->read_type = GL_UNSIGNED_BYTE;
+            out->colour_bpp = 4;
+            out->pixel_format = "BGRA8";
+            out->alpha_applicable = 0;
+            out->red_bits = 8;
+            out->green_bits = 8;
+            out->blue_bits = 8;
+            out->alpha_bits = 0;
+            out->supported = 1;
+            return 1;
+        case GL_RGBA8:
+            out->read_format = GL_RGBA;
+            out->read_type = GL_UNSIGNED_BYTE;
+            out->colour_bpp = 4;
+            out->pixel_format = "RGBA8";
+            out->alpha_applicable = 1;
+            out->red_bits = 8;
+            out->green_bits = 8;
+            out->blue_bits = 8;
+            out->alpha_bits = 8;
+            out->supported = 1;
+            return 1;
+        case GL_SRGB8_ALPHA8_VALUE:
+            /* The Metal target is materialized as BGRA8Unorm, so the byte
+               layout is BGRA8; the stored alpha channel still applies. */
+            out->read_format = GL_BGRA;
+            out->read_type = GL_UNSIGNED_BYTE;
+            out->colour_bpp = 4;
+            out->pixel_format = "BGRA8";
+            out->alpha_applicable = 1;
+            out->red_bits = 8;
+            out->green_bits = 8;
+            out->blue_bits = 8;
+            out->alpha_bits = 8;
+            out->supported = 1;
+            return 1;
+        case GL_R32F_VALUE:
+            out->read_format = GL_RED;
+            out->read_type = GL_FLOAT;
+            out->colour_bpp = 4;
+            out->pixel_format = "R32F";
+            out->alpha_applicable = 0;
+            out->red_bits = 32;
+            out->component_type = GL_FLOAT;
+            out->supported = 1;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int depth_stencil_bits_for(int internal_format, int *depth_bits,
+                                  int *stencil_bits) {
+    *depth_bits = 0;
+    *stencil_bits = 0;
+    switch (internal_format) {
+        case GL_DEPTH_COMPONENT16_VALUE:
+            *depth_bits = 16;
+            return 1;
+        case GL_DEPTH_COMPONENT24_VALUE:
+            *depth_bits = 24;
+            return 1;
+        case GL_DEPTH_COMPONENT32F_VALUE:
+            *depth_bits = 32;
+            return 1;
+        case GL_DEPTH24_STENCIL8_VALUE:
+            *depth_bits = 24;
+            *stencil_bits = 8;
+            return 1;
+        case GL_DEPTH32F_STENCIL8_VALUE:
+            *depth_bits = 32;
+            *stencil_bits = 8;
+            return 1;
+        case GL_STENCIL_INDEX8_VALUE:
+            *stencil_bits = 8;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+typedef struct {
+    int present;
+    int type;
+    int name;
+    int level;
+    int internal_format;
+    int width;
+    int height;
+    int sizes_known;
+    int red_bits;
+    int green_bits;
+    int blue_bits;
+    int alpha_bits;
+} observation_attachment;
+
+/* Query one framebuffer attachment's effective identity.  Texture and
+   renderbuffer bindings are restored before returning; no GL error is read. */
+static void query_attachment_identity(GLenum attachment,
+                                      observation_attachment *out) {
+    memset(out, 0, sizeof(*out));
+    GLint type = 0, name = 0, level = 0;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, attachment,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
+    if (type == 0 || type == GL_NONE) {
+        return;
+    }
+    out->present = 1;
+    out->type = (int)type;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, attachment,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &name);
+    out->name = (int)name;
+    if (type == GL_TEXTURE) {
+        glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, attachment,
+            GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &level);
+        out->level = (int)level;
+        GLint previous = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)name);
+        GLint width = 0, height = 0, internal = 0, red = 0, green = 0,
+              blue = 0, alpha = 0;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH,
+                                 &width);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT,
+                                 &height);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level,
+                                 GL_TEXTURE_INTERNAL_FORMAT, &internal);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_RED_SIZE,
+                                 &red);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_GREEN_SIZE,
+                                 &green);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_BLUE_SIZE,
+                                 &blue);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_ALPHA_SIZE,
+                                 &alpha);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
+        out->width = (int)width;
+        out->height = (int)height;
+        out->internal_format = (int)internal;
+        out->sizes_known = 1;
+        out->red_bits = (int)red;
+        out->green_bits = (int)green;
+        out->blue_bits = (int)blue;
+        out->alpha_bits = (int)alpha;
+    } else if (type == GL_RENDERBUFFER) {
+        GLint previous = 0;
+        glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
+        glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)name);
+        GLint width = 0, height = 0, internal = 0;
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH,
+                                     &width);
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT,
+                                     &height);
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER,
+                                     GL_RENDERBUFFER_INTERNAL_FORMAT,
+                                     &internal);
+        glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)previous);
+        out->width = (int)width;
+        out->height = (int)height;
+        out->internal_format = (int)internal;
+        observation_format_identity identity;
+        if (observation_format_identity_for(out->internal_format, &identity)) {
+            out->sizes_known = 1;
+            out->red_bits = identity.red_bits;
+            out->green_bits = identity.green_bits;
+            out->blue_bits = identity.blue_bits;
+            out->alpha_bits = identity.alpha_bits;
+        }
+    }
+}
+
 static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
     memset(out, 0, sizeof(*out));
-    out->read_format = GL_BGRA;
-    out->read_type = GL_UNSIGNED_BYTE;
-    out->colour_bpp = 4;
-    out->pixel_format = "BGRA8";
+    out->framebuffer = -1;
+    observation_format_identity identity;
+    int red = 0, green = 0, blue = 0, alpha = 0;
+    int sizes_known = 0;
+    int internal_format = 0;
     if (direct_texture >= 0) {
         out->direct_texture = 1;
-        out->framebuffer = -1;
         out->color_type = GL_TEXTURE;
         out->color_name = direct_texture;
         out->color_level = 0;
         out->width = 4;
         out->height = 4;
-        out->internal_format = GL_RGBA8;
-        if (!g.test_only) {
+        if (g.test_only) {
+            internal_format = g.test_target_internal_override >= 0
+                                  ? g.test_target_internal_override : GL_RGBA8;
+            if (observation_format_identity_for(internal_format, &identity)) {
+                sizes_known = 1;
+                red = identity.red_bits;
+                green = identity.green_bits;
+                blue = identity.blue_bits;
+                alpha = identity.alpha_bits;
+            }
+        } else {
             GLint previous = 0;
             glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
             glBindTexture(GL_TEXTURE_2D, (GLuint)direct_texture);
-            GLint texture_width = 0, texture_height = 0, internal = 0;
+            GLint width = 0, height = 0, iformat = 0, r = 0, g = 0, b = 0,
+                  a = 0;
             glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,
-                                     &texture_width);
+                                     &width);
             glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT,
-                                     &texture_height);
+                                     &height);
             glGetTexLevelParameteriv(GL_TEXTURE_2D, 0,
-                                     GL_TEXTURE_INTERNAL_FORMAT, &internal);
-            glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
-            out->width = (int)texture_width;
-            out->height = (int)texture_height;
-            out->internal_format = (int)internal;
-        }
-        if (!g.test_only) {
-            GLint red = 0, green = 0, blue = 0, alpha = 0;
-            GLint previous_texture = 0;
-            glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
-            glBindTexture(GL_TEXTURE_2D, (GLuint)direct_texture);
+                                     GL_TEXTURE_INTERNAL_FORMAT, &iformat);
             glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_RED_SIZE,
-                                     &red);
+                                     &r);
             glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_GREEN_SIZE,
-                                     &green);
+                                     &g);
             glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_BLUE_SIZE,
-                                     &blue);
+                                     &b);
             glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_ALPHA_SIZE,
-                                     &alpha);
-            glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
-            out->color_red_bits = (int)red;
-            out->color_green_bits = (int)green;
-            out->color_blue_bits = (int)blue;
-            out->color_alpha_bits = (int)alpha;
+                                     &a);
+            glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
+            out->width = (int)width;
+            out->height = (int)height;
+            internal_format = (int)iformat;
+            sizes_known = 1;
+            red = (int)r;
+            green = (int)g;
+            blue = (int)b;
+            alpha = (int)a;
         }
-        if (out->internal_format == GL_R32F_VALUE) {
-            out->read_format = GL_RED;
-            out->read_type = GL_FLOAT;
-            out->pixel_format = "R32F";
-            out->alpha_applicable = 0;
-        } else if (out->internal_format == GL_RGBA8) {
-            out->read_format = GL_RGBA;
-            out->pixel_format = "RGBA8";
-            out->alpha_applicable = 1;
-        } else if (out->internal_format == GL_RGB8 ||
-                   out->internal_format == GL_SRGB8_ALPHA8_VALUE) {
-            out->read_format = GL_BGRA;
-            out->pixel_format = "BGRA8";
-            out->alpha_applicable = 0;
-        } else if (out->color_red_bits == 8 && out->color_green_bits == 8 &&
-                   out->color_blue_bits == 8 &&
-                   (out->color_alpha_bits == 8 || out->color_alpha_bits == 0)) {
-            out->read_format = GL_RGBA;
-            out->pixel_format = "RGBA8";
-            out->alpha_applicable = out->color_alpha_bits == 8 ? 1 : 0;
-        } else if (!g.test_only) {
-            out->unsupported_format = 1;
-            out->pixel_format = NULL;
-        }
-        if (out->width <= 0 || out->height <= 0 || out->width > 8192 ||
-            out->height > 8192) {
-            fail_capture_locked("prefix_dimensions");
-            return -1;
-        }
-        return 0;
-    }
-    if (g.test_only) {
+    } else if (g.test_only) {
         out->framebuffer = g.test_target_fb_override >= 0
                                ? g.test_target_fb_override : 0;
         out->width = 4;
@@ -3052,177 +3200,140 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
         out->color_type = out->framebuffer == 0 ? 0 : GL_TEXTURE;
         out->color_name = out->framebuffer;
         out->color_level = 0;
-        out->internal_format = g.test_target_internal_override >= 0
-                                   ? g.test_target_internal_override
-                                   : (out->framebuffer == 0 ? 0 : GL_RGBA8);
+        if (out->framebuffer == 0) {
+            internal_format = 0;
+            red = green = blue = alpha = 8;
+            sizes_known = 1;
+        } else {
+            internal_format = g.test_target_internal_override >= 0
+                                  ? g.test_target_internal_override : GL_RGBA8;
+            if (observation_format_identity_for(internal_format, &identity)) {
+                sizes_known = 1;
+                red = identity.red_bits;
+                green = identity.green_bits;
+                blue = identity.blue_bits;
+                alpha = identity.alpha_bits;
+            }
+        }
         out->depth_present = 1;
         out->stencil_present = 1;
         out->depth_bits = 24;
         out->stencil_bits = 8;
-        if (out->internal_format == GL_R32F_VALUE) {
-            out->read_format = GL_RED;
-            out->read_type = GL_FLOAT;
-            out->pixel_format = "R32F";
-            out->alpha_applicable = 0;
-            out->color_component_type = GL_FLOAT;
-            out->color_red_bits = 32;
-        } else {
-            out->alpha_applicable = 1;
-        }
-        return 0;
-    }
-    GLint framebuffer = 0;
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
-    out->framebuffer = (int)framebuffer;
-    if (framebuffer == 0) {
-        uint32_t drawable_width = 0, drawable_height = 0;
-        if (eu4_gfx_gl_drawable_extent(&drawable_width, &drawable_height) == 0 &&
-            drawable_width > 0 && drawable_height > 0) {
-            out->width = (int)drawable_width;
-            out->height = (int)drawable_height;
-        } else {
-            GLint viewport[4] = {0, 0, 0, 0};
-            glGetIntegerv(GL_VIEWPORT, viewport);
-            out->width = viewport[2];
-            out->height = viewport[3];
-        }
-        GLint bits = 0;
-        glGetIntegerv(GL_DEPTH_BITS, &bits);
-        out->depth_bits = (int)bits;
-        glGetIntegerv(GL_STENCIL_BITS, &bits);
-        out->stencil_bits = (int)bits;
-        out->depth_present = out->depth_bits > 0;
-        out->stencil_present = out->stencil_bits > 0;
     } else {
-        GLint object_type = 0, object_name = 0, texture_level = 0;
-        glGetFramebufferAttachmentParameteriv(
-            GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &object_type);
-        if (object_type != GL_TEXTURE) {
-            fail_capture_locked("prefix_unsupported_target");
-            return -1;
-        }
-        glGetFramebufferAttachmentParameteriv(
-            GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &object_name);
-        glGetFramebufferAttachmentParameteriv(
-            GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-            GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &texture_level);
-        GLint previous = 0;
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
-        glBindTexture(GL_TEXTURE_2D, (GLuint)object_name);
-        GLint texture_width = 0, texture_height = 0, internal = 0;
-        glGetTexLevelParameteriv(GL_TEXTURE_2D, texture_level,
-                                 GL_TEXTURE_WIDTH, &texture_width);
-        glGetTexLevelParameteriv(GL_TEXTURE_2D, texture_level,
-                                 GL_TEXTURE_HEIGHT, &texture_height);
-        glGetTexLevelParameteriv(GL_TEXTURE_2D, texture_level,
-                                 GL_TEXTURE_INTERNAL_FORMAT, &internal);
-        glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
-        out->color_type = (int)object_type;
-        out->color_name = (int)object_name;
-        out->color_level = (int)texture_level;
-        out->internal_format = (int)internal;
-        out->width = (int)texture_width;
-        out->height = (int)texture_height;
-        GLint depth_type = 0, stencil_type = 0;
-        glGetFramebufferAttachmentParameteriv(
-            GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &depth_type);
-        glGetFramebufferAttachmentParameteriv(
-            GL_DRAW_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
-            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &stencil_type);
-        GLint depth_size = 0, stencil_size = 0;
-        while (glGetError() != GL_NO_ERROR) {
-        }
-        glGetFramebufferAttachmentParameteriv(
-            GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-            GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depth_size);
-        GLenum depth_size_error = glGetError();
-        while (glGetError() != GL_NO_ERROR) {
-        }
-        glGetFramebufferAttachmentParameteriv(
-            GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-            GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &stencil_size);
-        GLenum stencil_size_error = glGetError();
-        out->depth_present = depth_type != GL_NONE ||
-                             (depth_size_error == GL_NO_ERROR && depth_size > 0);
-        out->stencil_present = stencil_type != GL_NONE ||
-                               (stencil_size_error == GL_NO_ERROR &&
-                                stencil_size > 0);
-        out->depth_bits = out->depth_present
-                              ? (depth_size_error == GL_NO_ERROR
-                                     ? (int)depth_size : 24)
-                              : 0;
-        out->stencil_bits = out->stencil_present
-                                ? (stencil_size_error == GL_NO_ERROR &&
-                                           stencil_size > 0
-                                       ? (int)stencil_size : 8)
-                                : 0;
-        GLint component_type = 0, red = 0, green = 0, blue = 0, alpha = 0;
-        while (glGetError() != GL_NO_ERROR) {
-        }
-        glGetFramebufferAttachmentParameteriv(
-            GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-            GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &component_type);
-        GLenum component_error = glGetError();
-        const struct {
-            GLenum parameter;
-            GLint *value;
-        } colour_sizes[] = {
-            {GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, &red},
-            {GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, &green},
-            {GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, &blue},
-            {GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE, &alpha},
-        };
-        for (size_t size_index = 0;
-             size_index < sizeof(colour_sizes) / sizeof(colour_sizes[0]);
-             size_index++) {
-            while (glGetError() != GL_NO_ERROR) {
+        GLint framebuffer = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
+        out->framebuffer = (int)framebuffer;
+        if (framebuffer == 0) {
+            uint32_t drawable_width = 0, drawable_height = 0;
+            if (eu4_gfx_gl_drawable_extent(&drawable_width, &drawable_height) == 0 &&
+                drawable_width > 0 && drawable_height > 0) {
+                out->width = (int)drawable_width;
+                out->height = (int)drawable_height;
+            } else {
+                GLint viewport[4] = {0, 0, 0, 0};
+                glGetIntegerv(GL_VIEWPORT, viewport);
+                out->width = viewport[2];
+                out->height = viewport[3];
             }
-            glGetFramebufferAttachmentParameteriv(
-                GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                colour_sizes[size_index].parameter,
-                colour_sizes[size_index].value);
-            (void)glGetError();
-        }
-        out->color_component_type = component_error == GL_NO_ERROR
-                                        ? (int)component_type : 0;
-        out->color_red_bits = (int)red;
-        out->color_green_bits = (int)green;
-        out->color_blue_bits = (int)blue;
-        out->color_alpha_bits = (int)alpha;
-        if (internal == GL_R32F_VALUE) {
-            /* The Metal replay allocates R32F targets as R32Float.  The
-               reference and candidate are compared as the exact four-byte
-               float payload; there is no alpha channel. */
-            out->read_format = GL_RED;
-            out->read_type = GL_FLOAT;
-            out->pixel_format = "R32F";
-            out->alpha_applicable = 0;
-        } else if (internal == GL_RGBA8) {
-            /* The Metal replay allocates RGBA8 targets as RGBA8Unorm. */
-            out->read_format = GL_RGBA;
-            out->pixel_format = "RGBA8";
-            out->alpha_applicable = 1;
-        } else if (internal == GL_RGB8 || internal == GL_SRGB8_ALPHA8_VALUE) {
-            /* The Metal replay allocates RGB8 targets as BGRA8Unorm.  The
-               original target has no alpha channel, so alpha is not an
-               applicable comparison channel. */
-            out->read_format = GL_BGRA;
-            out->pixel_format = "BGRA8";
-            out->alpha_applicable = 0;
-        } else if (component_error == GL_NO_ERROR &&
-                   component_type == GL_UNSIGNED_NORMALIZED && red == 8 &&
-                   green == 8 && blue == 8 &&
-                   (alpha == 8 || alpha == 0)) {
-            out->read_format = GL_RGBA;
-            out->pixel_format = "RGBA8";
-            out->alpha_applicable = alpha == 8 ? 1 : 0;
+            GLint bits = 0;
+            glGetIntegerv(GL_RED_BITS, &red);
+            glGetIntegerv(GL_GREEN_BITS, &green);
+            glGetIntegerv(GL_BLUE_BITS, &blue);
+            glGetIntegerv(GL_ALPHA_BITS, &alpha);
+            sizes_known = 1;
+            internal_format = 0;
+            glGetIntegerv(GL_DEPTH_BITS, &bits);
+            out->depth_bits = (int)bits;
+            glGetIntegerv(GL_STENCIL_BITS, &bits);
+            out->stencil_bits = (int)bits;
+            out->depth_present = out->depth_bits > 0;
+            out->stencil_present = out->stencil_bits > 0;
         } else {
+            observation_attachment colour;
+            query_attachment_identity(GL_COLOR_ATTACHMENT0, &colour);
+            if (!colour.present ||
+                (colour.type != GL_TEXTURE && colour.type != GL_RENDERBUFFER)) {
+                fail_capture_locked("prefix_unsupported_target");
+                return -1;
+            }
+            out->color_type = colour.type;
+            out->color_name = colour.name;
+            out->color_level = colour.level;
+            out->width = colour.width;
+            out->height = colour.height;
+            internal_format = colour.internal_format;
+            sizes_known = colour.sizes_known;
+            red = colour.red_bits;
+            green = colour.green_bits;
+            blue = colour.blue_bits;
+            alpha = colour.alpha_bits;
+            observation_attachment depth_attachment;
+            observation_attachment stencil_attachment;
+            query_attachment_identity(GL_DEPTH_ATTACHMENT, &depth_attachment);
+            query_attachment_identity(GL_STENCIL_ATTACHMENT,
+                                      &stencil_attachment);
+            int depth_bits = 0, stencil_bits = 0;
+            if (depth_attachment.present &&
+                depth_stencil_bits_for(depth_attachment.internal_format,
+                                       &depth_bits, &stencil_bits)) {
+                out->depth_bits = depth_bits;
+                if (stencil_bits > 0) {
+                    out->stencil_bits = stencil_bits;
+                }
+            }
+            if (stencil_attachment.present) {
+                int extra_depth = 0, extra_stencil = 0;
+                if (depth_stencil_bits_for(stencil_attachment.internal_format,
+                                           &extra_depth, &extra_stencil) &&
+                    extra_stencil > 0) {
+                    out->stencil_bits = extra_stencil;
+                } else if (depth_attachment.present &&
+                           stencil_attachment.name == depth_attachment.name) {
+                    out->stencil_bits = 8;
+                }
+            }
+            out->depth_present =
+                depth_attachment.present || out->depth_bits > 0;
+            out->stencil_present =
+                stencil_attachment.present || out->stencil_bits > 0;
+        }
+    }
+    if (out->framebuffer == 0 && direct_texture < 0) {
+        if (red != 8 || green != 8 || blue != 8 ||
+            (alpha != 0 && alpha != 8)) {
             out->unsupported_format = 1;
             out->pixel_format = NULL;
+        } else {
+            out->internal_format = 0;
+            out->read_format = GL_BGRA;
+            out->read_type = GL_UNSIGNED_BYTE;
+            out->colour_bpp = 4;
+            out->pixel_format = "BGRA8";
+            out->alpha_applicable = alpha == 8;
+            out->color_component_type = GL_UNSIGNED_NORMALIZED;
+            out->color_red_bits = red;
+            out->color_green_bits = green;
+            out->color_blue_bits = blue;
+            out->color_alpha_bits = alpha;
         }
+    } else if (!observation_format_identity_for(internal_format, &identity) ||
+               (sizes_known &&
+                (red != identity.red_bits || green != identity.green_bits ||
+                 blue != identity.blue_bits || alpha != identity.alpha_bits))) {
+        out->unsupported_format = 1;
+        out->pixel_format = NULL;
+    } else {
+        out->internal_format = identity.internal_format;
+        out->read_format = identity.read_format;
+        out->read_type = identity.read_type;
+        out->colour_bpp = identity.colour_bpp;
+        out->pixel_format = identity.pixel_format;
+        out->alpha_applicable = identity.alpha_applicable;
+        out->color_component_type = identity.component_type;
+        out->color_red_bits = identity.red_bits;
+        out->color_green_bits = identity.green_bits;
+        out->color_blue_bits = identity.blue_bits;
+        out->color_alpha_bits = identity.alpha_bits;
     }
     if (out->width <= 0 || out->height <= 0 || out->width > 8192 ||
         out->height > 8192) {
@@ -3239,12 +3350,12 @@ static int prefix_read_colour_locked(const prefix_target_state *target,
     *out_bytes = 0;
     size_t bytes = (size_t)target->width * (size_t)target->height *
                    (size_t)target->colour_bpp;
-    uint8_t *pixels = (uint8_t *)malloc(bytes);
-    if (pixels == NULL) {
-        fail_capture_locked("prefix_read");
-        return -1;
-    }
     if (g.test_only) {
+        uint8_t *pixels = (uint8_t *)malloc(bytes ? bytes : 1);
+        if (pixels == NULL) {
+            fail_capture_locked("prefix_read");
+            return -1;
+        }
         for (size_t i = 0; i < bytes; i++) {
             pixels[i] = (uint8_t)(i * 37u + 11u + (size_t)event * 7u);
         }
@@ -3252,79 +3363,22 @@ static int prefix_read_colour_locked(const prefix_target_state *target,
         *out_bytes = bytes;
         return 0;
     }
-    if (target->direct_texture) {
-        GLint previous_texture = 0, pack_alignment = 0, pack_row = 0,
-              pack_skip_rows = 0, pack_skip_pixels = 0, pack_buffer = 0;
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
-        glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
-        glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row);
-        glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
-        glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
-        glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
-        glBindTexture(GL_TEXTURE_2D, (GLuint)target->color_name);
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-        glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-        glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-        if (pack_buffer != 0) {
-            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        }
-        while (glGetError() != GL_NO_ERROR) {
-        }
-        glGetTexImage(GL_TEXTURE_2D, 0, target->read_format,
-                      target->read_type, pixels);
-        GLenum texture_error = glGetError();
-        glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
-        glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
-        glPixelStorei(GL_PACK_ROW_LENGTH, pack_row);
-        glPixelStorei(GL_PACK_SKIP_ROWS, pack_skip_rows);
-        glPixelStorei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
-        if (pack_buffer != 0) {
-            glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
-        }
-        if (texture_error != GL_NO_ERROR) {
-            free(pixels);
-            fail_capture_locked("prefix_read");
-            return -1;
-        }
-        *out_pixels = pixels;
-        *out_bytes = bytes;
-        return 0;
+    if (target->unsupported_format || target->pixel_format == NULL) {
+        fail_capture_locked("prefix_unsupported_format");
+        return -1;
     }
-    GLint previous_read_framebuffer = 0, previous_read_buffer = 0;
-    GLint pack_alignment = 0, pack_row = 0, pack_skip_rows = 0,
-          pack_skip_pixels = 0, pack_buffer = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
-    glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
-    glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row);
-    glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
-    glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
-    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)target->framebuffer);
-    glReadBuffer(target->framebuffer == 0 ? GL_BACK : GL_COLOR_ATTACHMENT0);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-    if (pack_buffer != 0) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    }
-    while (glGetError() != GL_NO_ERROR) {
-    }
-    glReadPixels(0, 0, target->width, target->height, target->read_format,
-                 target->read_type, pixels);
-    GLenum gl_error = glGetError();
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_framebuffer);
-    glReadBuffer((GLenum)previous_read_buffer);
-    glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
-    glPixelStorei(GL_PACK_ROW_LENGTH, pack_row);
-    glPixelStorei(GL_PACK_SKIP_ROWS, pack_skip_rows);
-    glPixelStorei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
-    if (pack_buffer != 0) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
-    }
-    if (gl_error != GL_NO_ERROR) {
+    uint32_t texture = target->direct_texture
+                           ? (uint32_t)target->color_name : 0;
+    uint32_t framebuffer = target->direct_texture
+                               ? 0 : (uint32_t)target->framebuffer;
+    GLenum read_buffer = target->framebuffer == 0
+                             ? GL_BACK : GL_COLOR_ATTACHMENT0;
+    uint8_t *pixels = NULL;
+    if (read_observation_pixels(framebuffer, read_buffer, texture,
+                                (uint32_t)target->width,
+                                (uint32_t)target->height, target->read_format,
+                                target->read_type, (size_t)target->colour_bpp,
+                                &pixels) != 0) {
         free(pixels);
         fail_capture_locked("prefix_read");
         return -1;
@@ -3344,14 +3398,17 @@ static int prefix_read_attachment_locked(const prefix_target_state *target,
     if (out_capacity != NULL) {
         *out_capacity = 0;
     }
-    size_t bytes = (size_t)target->width * (size_t)target->height *
-                   bytes_per_pixel;
-    uint8_t *pixels = (uint8_t *)calloc(bytes ? bytes : 1, 1);
-    if (pixels == NULL) {
-        fail_capture_locked("prefix_read");
+    if (target->direct_texture || target->framebuffer < 0) {
         return -1;
     }
+    size_t bytes = (size_t)target->width * (size_t)target->height *
+                   bytes_per_pixel;
     if (g.test_only) {
+        uint8_t *pixels = (uint8_t *)calloc(bytes ? bytes : 1, 1);
+        if (pixels == NULL) {
+            fail_capture_locked("prefix_read");
+            return -1;
+        }
         if (format == GL_DEPTH_COMPONENT && type == GL_FLOAT) {
             float *values = (float *)pixels;
             for (size_t i = 0; i < (size_t)target->width * target->height; i++) {
@@ -3367,38 +3424,13 @@ static int prefix_read_attachment_locked(const prefix_target_state *target,
         }
         return 0;
     }
-    GLint previous_read_framebuffer = 0, previous_read_buffer = 0;
-    GLint pack_alignment = 0, pack_row = 0, pack_skip_rows = 0,
-          pack_skip_pixels = 0, pack_buffer = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
-    glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
-    glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row);
-    glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
-    glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
-    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)target->framebuffer);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-    if (pack_buffer != 0) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    }
-    while (glGetError() != GL_NO_ERROR) {
-    }
-    glReadPixels(0, 0, target->width, target->height, format, type, pixels);
-    GLenum gl_error = glGetError();
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_framebuffer);
-    glReadBuffer((GLenum)previous_read_buffer);
-    glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
-    glPixelStorei(GL_PACK_ROW_LENGTH, pack_row);
-    glPixelStorei(GL_PACK_SKIP_ROWS, pack_skip_rows);
-    glPixelStorei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
-    if (pack_buffer != 0) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
-    }
-    if (gl_error != GL_NO_ERROR) {
+    uint8_t *pixels = NULL;
+    GLenum read_buffer = target->framebuffer == 0
+                             ? GL_BACK : GL_COLOR_ATTACHMENT0;
+    if (read_observation_pixels((uint32_t)target->framebuffer, read_buffer, 0,
+                                (uint32_t)target->width,
+                                (uint32_t)target->height, format, type,
+                                bytes_per_pixel, &pixels) != 0) {
         free(pixels);
         fail_capture_locked("prefix_read");
         return -1;
@@ -3697,7 +3729,7 @@ static int prefix_emit_target_locked(int event, const char *timing,
     char line[FTRACE_PREFIX_LINE_MAX];
     int length = snprintf(
         line, sizeof(line),
-        "{\"schema\":\"gfx-prefix-observation/v1\",\"event\":%d,"
+        "{\"schema\":\"gfx-observation/v1\",\"event\":%d,"
         "\"timing\":\"%s\",\"kind\":\"%s\",%s,"
         "\"resource\":\"%s\",\"target_name\":\"%s\","
         "\"pixel_format\":%s,\"alpha_applicable\":%s,"
@@ -4225,19 +4257,15 @@ static void write_cgl_drawable_state(FILE *file) {
         {GL_DEPTH, "depth"},
         {GL_STENCIL, "stencil"},
     };
+    int identity_supported = framebuffer_attachment_identity_supported();
     for (size_t index = 0;
          index < sizeof(attachments) / sizeof(attachments[0]); index++) {
         GLint type = 0;
-        while (glGetError() != GL_NO_ERROR) {
-        }
         glGetFramebufferAttachmentParameteriv(
             GL_FRAMEBUFFER, attachments[index].attachment,
             GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
-        GLenum type_error = glGetError();
         fprintf(file, "\"%s\":{\"object_type\":", attachments[index].name);
-        if (type_error != GL_NO_ERROR) {
-            fputs("\"unavailable:gl_error\"", file);
-        } else if (type == GL_NONE) {
+        if (type == GL_NONE) {
             fputs("\"absent\"", file);
         } else if (type == GL_FRAMEBUFFER_DEFAULT) {
             fputs("\"framebuffer_default\"", file);
@@ -4248,17 +4276,15 @@ static void write_cgl_drawable_state(FILE *file) {
         } else {
             fprintf(file, "\"0x%x\"", (unsigned)type);
         }
-        GLint component = 0;
-        while (glGetError() != GL_NO_ERROR) {
-        }
-        glGetFramebufferAttachmentParameteriv(
-            GL_FRAMEBUFFER, attachments[index].attachment,
-            GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &component);
-        GLenum component_error = glGetError();
-        fputs(",\"component_type\":", file);
-        if (component_error != GL_NO_ERROR) {
-            fputs("\"unavailable:gl_error\"", file);
+        if (!identity_supported) {
+            fputs(",\"component_type\":\"unavailable:unsupported\"", file);
+            fputs("}", file);
         } else {
+            GLint component = 0;
+            glGetFramebufferAttachmentParameteriv(
+                GL_FRAMEBUFFER, attachments[index].attachment,
+                GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &component);
+            fputs(",\"component_type\":", file);
             switch ((GLenum)component) {
                 case GL_FLOAT: fputs("\"float\"", file); break;
                 case GL_INT: fputs("\"int\"", file); break;
@@ -4270,35 +4296,28 @@ static void write_cgl_drawable_state(FILE *file) {
                 default:
                     fprintf(file, "\"0x%x\"", (unsigned)component); break;
             }
-        }
-        const struct {
-            GLenum parameter;
-            const char *name;
-        } sizes[] = {
-            {GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, "red_size"},
-            {GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, "green_size"},
-            {GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, "blue_size"},
-            {GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE, "alpha_size"},
-            {GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, "depth_size"},
-            {GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, "stencil_size"},
-        };
-        for (size_t size_index = 0;
-             size_index < sizeof(sizes) / sizeof(sizes[0]); size_index++) {
-            GLint value = 0;
-            while (glGetError() != GL_NO_ERROR) {
+            const struct {
+                GLenum parameter;
+                const char *name;
+            } sizes[] = {
+                {GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, "red_size"},
+                {GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, "green_size"},
+                {GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, "blue_size"},
+                {GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE, "alpha_size"},
+                {GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, "depth_size"},
+                {GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, "stencil_size"},
+            };
+            for (size_t size_index = 0;
+                 size_index < sizeof(sizes) / sizeof(sizes[0]); size_index++) {
+                GLint value = 0;
+                glGetFramebufferAttachmentParameteriv(
+                    GL_FRAMEBUFFER, attachments[index].attachment,
+                    sizes[size_index].parameter, &value);
+                fprintf(file, ",\"%s\":%d", sizes[size_index].name,
+                        (int)value);
             }
-            glGetFramebufferAttachmentParameteriv(
-                GL_FRAMEBUFFER, attachments[index].attachment,
-                sizes[size_index].parameter, &value);
-            GLenum size_error = glGetError();
-            fprintf(file, ",\"%s\":", sizes[size_index].name);
-            if (size_error != GL_NO_ERROR) {
-                fputs("\"unavailable:gl_error\"", file);
-            } else {
-                fprintf(file, "%d", (int)value);
-            }
+            fputs("}", file);
         }
-        fputs("}", file);
         if (index + 1 < sizeof(attachments) / sizeof(attachments[0])) {
             fputs(",", file);
         }
@@ -4306,21 +4325,23 @@ static void write_cgl_drawable_state(FILE *file) {
     fputs("},", file);
 }
 
-/* Emits the exact-prefix coverage block from the sealed observation file.
-   The observation file is not a blob; its digest and byte count are bound into
-   the manifest so the sealed frame cannot lose or alter a checkpoint. */
+/* Emits the observation coverage block.  The observation file is the one
+   authoritative record; the manifest references it by digest, byte count and
+   record count instead of duplicating every record. */
 static void write_prefix_manifest(FILE *file) {
     int complete = g.prefix_initial && !g.prefix_failed &&
                    g.prefix_next_event == g.prefix_end + 1;
     fprintf(file,
-            ",\"prefix\":{\"schema\":\"gfx-prefix-observations/v1\","
+            ",\"prefix\":{\"schema\":\"gfx-observations/v1\","
+            "\"authority\":\"%s\","
             "\"end\":%d,\"status\":\"%s\",\"count\":%d,"
             "\"post_event_count\":%d,\"initial\":%s,"
             "\"observation_file\":\"%s\","
             "\"observation_sha256\":\"%s\","
             "\"observation_bytes\":%llu,"
             "\"budget\":{\"max_bytes\":%llu,\"used_bytes\":%llu,"
-            "\"max_ns\":%llu,\"used_ns\":%llu},\"observations\":[",
+            "\"max_ns\":%llu,\"used_ns\":%llu}}",
+            g.test_only ? "synthetic" : "authentic",
             g.prefix_end, complete ? "complete" : "incomplete", g.prefix_count,
             g.prefix_count, g.prefix_initial ? "true" : "false",
             g.prefix_file, g.prefix_sha,
@@ -4329,30 +4350,6 @@ static void write_prefix_manifest(FILE *file) {
             (unsigned long long)g.prefix_bytes,
             (unsigned long long)g.prefix_max_ns,
             (unsigned long long)g.prefix_readback_ns);
-    char path[FTRACE_PATH];
-    if (snprintf(path, sizeof(path), "%s/%s", g.dir, g.prefix_file) <
-        (int)sizeof(path)) {
-        FILE *observations = fopen(path, "r");
-        if (observations != NULL) {
-            char line[FTRACE_PREFIX_LINE_MAX];
-            int emitted = 0;
-            while (observations != NULL && emitted < FTRACE_MAX_PREFIX_EVENTS + 2 &&
-                   fgets(line, sizeof(line), observations) != NULL) {
-                size_t length = strlen(line);
-                while (length > 0 &&
-                       (line[length - 1] == '\n' || line[length - 1] == '\r')) {
-                    line[--length] = 0;
-                }
-                if (length == 0) {
-                    continue;
-                }
-                fprintf(file, "%s%s", emitted == 0 ? "" : ",", line);
-                emitted++;
-            }
-            fclose(observations);
-        }
-    }
-    fputs("]}", file);
 }
 
 static int write_frame_manifest(int complete, const char *reason) {
@@ -4369,6 +4366,7 @@ static int write_frame_manifest(int complete, const char *reason) {
     fprintf(file, "\"complete\":%s,", bool_text(complete));
     fprintf(file, "\"reason\":\"%s\",", reason != NULL ? reason : "");
     fprintf(file, "\"truncated\":%s,", bool_text(g.truncated));
+    fprintf(file, "\"test_only\":%s,", bool_text(g.test_only));
     fprintf(file, "\"stream_validated\":%s,", bool_text(g.stream_validated));
     fprintf(file, "\"pid\":%d,", (int)getpid());
     fprintf(file, "\"present_index\":%d,", g.capturing_frame);
@@ -5409,6 +5407,25 @@ static uint64_t stream_caller_signature(void) {
 /* glIsEnabled with an unsupported enum plants a GL error in the engine's
    queue, which this observer must never do.  The sRGB enable is therefore
    queried only when the driver advertises the extension. */
+/* ARB_framebuffer_object adds attachment component/size queries.  On a driver
+   that lacks it those enums raise a GL error, so they are never queried: the
+   observer must not alter the engine's error queue. */
+static int framebuffer_attachment_identity_supported(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *version = (const char *)glGetString(GL_VERSION);
+        const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+        cached = 0;
+        if (version != NULL && atoi(version) >= 3) {
+            cached = 1;
+        } else if (extensions != NULL &&
+                   strstr(extensions, "GL_ARB_framebuffer_object") != NULL) {
+            cached = 1;
+        }
+    }
+    return cached;
+}
+
 static int srgb_extension_supported(void) {
     static int cached = -1;
     if (cached < 0) {
@@ -5464,6 +5481,7 @@ typedef struct {
     GLint draw_framebuffer;
     GLint read_framebuffer;
     GLint read_buffer;
+    GLint texture_binding;
     GLint pack_alignment;
     GLint pack_row;
     GLint pack_skip_rows;
@@ -5471,12 +5489,21 @@ typedef struct {
     GLint pack_buffer;
     GLboolean pack_swap_bytes;
     GLboolean pack_lsb_first;
-} drawable_readback_guard;
+    int texture_bound;
+    int draw_bound;
+} observation_readback_guard;
 
-static void end_drawable_readback(const drawable_readback_guard *guard) {
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)guard->draw_framebuffer);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)guard->read_framebuffer);
-    glReadBuffer((GLenum)guard->read_buffer);
+static void end_observation_readback(const observation_readback_guard *guard) {
+    if (guard->texture_bound) {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)guard->texture_binding);
+    } else {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)guard->read_framebuffer);
+        if (guard->draw_bound) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                              (GLuint)guard->draw_framebuffer);
+        }
+        glReadBuffer((GLenum)guard->read_buffer);
+    }
     glPixelStorei(GL_PACK_ALIGNMENT, guard->pack_alignment);
     glPixelStorei(GL_PACK_ROW_LENGTH, guard->pack_row);
     glPixelStorei(GL_PACK_SKIP_ROWS, guard->pack_skip_rows);
@@ -5488,15 +5515,14 @@ static void end_drawable_readback(const drawable_readback_guard *guard) {
     }
 }
 
-/* Select the real default drawable and a tightly packed pack state.  Every
-   mutation is restored by end_drawable_readback.  The engine's GL error queue
-   is deliberately never queried: OpenGL has no non-destructive peek and the
-   observer must not consume a pending renderer error. */
-static int begin_drawable_readback(drawable_readback_guard *guard) {
+/* Select one observation source and a tightly packed pack state.  Every
+   mutation is restored by end_observation_readback.  The engine's GL error
+   queue is deliberately never queried: OpenGL has no non-destructive peek and
+   the observer must not consume a pending renderer error. */
+static void begin_observation_readback(observation_readback_guard *guard,
+                                       GLuint framebuffer, GLenum read_buffer,
+                                       GLuint texture) {
     memset(guard, 0, sizeof(*guard));
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &guard->draw_framebuffer);
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &guard->read_framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &guard->read_buffer);
     glGetIntegerv(GL_PACK_ALIGNMENT, &guard->pack_alignment);
     glGetIntegerv(GL_PACK_ROW_LENGTH, &guard->pack_row);
     glGetIntegerv(GL_PACK_SKIP_ROWS, &guard->pack_skip_rows);
@@ -5504,22 +5530,22 @@ static int begin_drawable_readback(drawable_readback_guard *guard) {
     glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &guard->pack_buffer);
     glGetBooleanv(GL_PACK_SWAP_BYTES, &guard->pack_swap_bytes);
     glGetBooleanv(GL_PACK_LSB_FIRST, &guard->pack_lsb_first);
-    if (guard->draw_framebuffer != 0) {
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    }
-    if (guard->read_framebuffer != 0) {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    }
-    glReadBuffer(GL_BACK);
-    GLint selected_read_framebuffer = -1, selected_draw_framebuffer = -1;
-    GLint selected_read_buffer = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &selected_read_framebuffer);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &selected_draw_framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &selected_read_buffer);
-    if (selected_read_framebuffer != 0 || selected_draw_framebuffer != 0 ||
-        selected_read_buffer != GL_BACK) {
-        end_drawable_readback(guard);
-        return -1;
+    if (texture != 0) {
+        guard->texture_bound = 1;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &guard->texture_binding);
+        glBindTexture(GL_TEXTURE_2D, texture);
+    } else {
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &guard->draw_framebuffer);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &guard->read_framebuffer);
+        glGetIntegerv(GL_READ_BUFFER, &guard->read_buffer);
+        /* Reading the default drawable requires it to be the draw target as
+           well, so the driver reports its samples/integer state. */
+        guard->draw_bound = framebuffer == 0 && guard->draw_framebuffer != 0;
+        if (guard->draw_bound) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+        glReadBuffer(read_buffer);
     }
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glPixelStorei(GL_PACK_ROW_LENGTH, 0);
@@ -5530,6 +5556,39 @@ static int begin_drawable_readback(drawable_readback_guard *guard) {
     if (guard->pack_buffer != 0) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
+}
+
+/* One shared readback primitive for every observation source: the default
+   drawable, an offscreen framebuffer attachment, or a standalone texture.
+   glReadPixels/glGetTexImage are synchronous; glFinish is not issued because
+   the Apple driver implements it as an error-queue flush. */
+static int read_observation_pixels(uint32_t framebuffer, GLenum read_buffer,
+                                   uint32_t texture, uint32_t width,
+                                   uint32_t height, GLenum format,
+                                   GLenum type, size_t bytes_per_pixel,
+                                   uint8_t **out_pixels) {
+    *out_pixels = NULL;
+    if (width == 0 || height == 0 || width > 8192 || height > 8192 ||
+        bytes_per_pixel == 0 ||
+        (uint64_t)width * (uint64_t)height >
+            (uint64_t)(SIZE_MAX / bytes_per_pixel)) {
+        return -1;
+    }
+    size_t bytes = (size_t)width * (size_t)height * bytes_per_pixel;
+    uint8_t *pixels = (uint8_t *)calloc(bytes ? bytes : 1, 1);
+    if (pixels == NULL) {
+        return -1;
+    }
+    observation_readback_guard guard;
+    begin_observation_readback(&guard, framebuffer, read_buffer, texture);
+    if (texture != 0) {
+        glGetTexImage(GL_TEXTURE_2D, 0, format, type, pixels);
+    } else {
+        glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, format, type,
+                     pixels);
+    }
+    end_observation_readback(&guard);
+    *out_pixels = pixels;
     return 0;
 }
 
@@ -5563,22 +5622,27 @@ static int read_drawable_pixels(GLenum format, GLenum type,
         return -1;
     }
     size_t bytes = (size_t)width * (size_t)height * bytes_per_pixel;
-    uint8_t *pixels = calloc(bytes ? bytes : 1, 1);
+    uint8_t *pixels = (uint8_t *)calloc(bytes ? bytes : 1, 1);
     if (pixels == NULL) {
         return -1;
     }
-    drawable_readback_guard guard;
-    if (begin_drawable_readback(&guard) != 0) {
-        free(pixels);
-        return -1;
-    }
+    observation_readback_guard guard;
+    begin_observation_readback(&guard, 0, GL_BACK, 0);
     if (out_state != NULL) {
         query_drawable_state(out_state);
     }
-    /* glReadPixels is synchronous; do not issue glFinish, which the Apple
-       driver implements as an error-queue flush. */
+    GLint selected_draw = -1, selected_read = -1, selected_buffer = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &selected_draw);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &selected_read);
+    glGetIntegerv(GL_READ_BUFFER, &selected_buffer);
+    if (selected_draw != 0 || selected_read != 0 ||
+        selected_buffer != GL_BACK) {
+        end_observation_readback(&guard);
+        free(pixels);
+        return -1;
+    }
     glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, format, type, pixels);
-    end_drawable_readback(&guard);
+    end_observation_readback(&guard);
     *out_width = width;
     *out_height = height;
     *out_pixels = pixels;
@@ -6173,6 +6237,77 @@ int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
         snprintf(out_file, out_size, "%s", g.checkpoint_file[0]);
     }
     return 0;
+}
+
+/* Host-test only: run one real observation (shared readback and writer) and
+   return its record.  Used by the synthetic GL-context state host. */
+int eu4_gfx_frame_trace_test_observe(const char *directory, int event,
+                                     const char *timing, const char *kind,
+                                     int texture_name, char *out_record,
+                                     size_t out_size) {
+    if (directory == NULL || directory[0] != '/' || timing == NULL ||
+        kind == NULL) {
+        return -1;
+    }
+    snprintf(g.dir, sizeof(g.dir), "%s", directory);
+    if (mkdir_p(g.dir) != 0) {
+        return -1;
+    }
+    char blobs[FTRACE_PATH];
+    snprintf(blobs, sizeof(blobs), "%s/blobs", g.dir);
+    if (mkdir_p(blobs) != 0) {
+        return -1;
+    }
+    if (g.prefix_observations != NULL) {
+        fclose(g.prefix_observations);
+        g.prefix_observations = NULL;
+    }
+    snprintf(g.prefix_file, sizeof(g.prefix_file), "%s",
+             "prefix-observations.jsonl");
+    char path[FTRACE_PATH];
+    if (snprintf(path, sizeof(path), "%s/%s", g.dir, g.prefix_file) >=
+        (int)sizeof(path)) {
+        return -1;
+    }
+    g.prefix_observations = fopen(path, "w");
+    if (g.prefix_observations == NULL) {
+        return -1;
+    }
+    g.prefix_enabled = 1;
+    g.prefix_end = event;
+    g.prefix_initial = 0;
+    g.prefix_next_event = 0;
+    g.prefix_count = 0;
+    g.prefix_bytes = 0;
+    g.prefix_readback_ns = 0;
+    g.prefix_failed = 0;
+    g.prefix_max_bytes = FTRACE_PREFIX_HARD_MAX_BYTES;
+    g.prefix_max_ns = FTRACE_PREFIX_MAX_NS;
+    int result = prefix_emit_target_locked(event, timing, kind, texture_name);
+    int write_failed = ferror(g.prefix_observations) != 0 ||
+                       fflush(g.prefix_observations) != 0;
+    fclose(g.prefix_observations);
+    g.prefix_observations = NULL;
+    g.prefix_enabled = 0;
+    if (write_failed) {
+        return -1;
+    }
+    if (out_record != NULL && out_size > 0) {
+        out_record[0] = 0;
+        FILE *observations = fopen(path, "r");
+        if (observations != NULL) {
+            if (fgets(out_record, (int)out_size, observations) == NULL) {
+                out_record[0] = 0;
+            }
+            size_t length = strlen(out_record);
+            while (length > 0 && (out_record[length - 1] == '\n' ||
+                                  out_record[length - 1] == '\r')) {
+                out_record[--length] = 0;
+            }
+            fclose(observations);
+        }
+    }
+    return result;
 }
 
 /* Host-test only: force the recorded target framebuffer for a scenario that

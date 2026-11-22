@@ -211,6 +211,22 @@ def _load_pixels(path: Path, width: int, height: int) -> bytes:
     return payload
 
 
+def _float_ulp_distance(left: int, right: int) -> int:
+    """Ordered IEEE-754 bit distance.
+
+    Subtracting the raw unsigned words makes every negative value look
+    extremely far from a positive one (and reverses the sign ordering).  Map
+    the bits onto the monotonic integer line first: negative values descend
+    from 0x80000000, non-negative values ascend from zero.
+    """
+    def ordered(bits: int) -> int:
+        if bits & 0x80000000:
+            return 0x80000000 - bits
+        return bits
+
+    return abs(ordered(left) - ordered(right))
+
+
 def compare_r32f(reference: bytes, candidate: bytes, width: int,
                  height: int) -> dict:
     """Exact bitwise comparison of two R32F payloads.
@@ -235,7 +251,7 @@ def compare_r32f(reference: bytes, candidate: bytes, width: int,
         if left == right:
             continue
         mismatched += 1
-        distance = abs(left - right)
+        distance = _float_ulp_distance(left, right)
         if distance > max_ulp:
             max_ulp = distance
         if first is None:
@@ -391,6 +407,17 @@ def _checkpoint_capture_matches(left, right) -> bool:
     if left_key is None and right_key is None:
         return True
     return left_key is not None and left_key == right_key
+
+
+def _sealed_prefix_observation(graph: dict, event: int,
+                               target: str) -> dict | None:
+    for record in (graph.get("prefix") or {}).get("post_events") or []:
+        if not isinstance(record, dict):
+            continue
+        if (int(record.get("event", -1)) == event
+                and str(record.get("target_name")) == target):
+            return record
+    return None
 
 
 def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
@@ -663,18 +690,65 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             internal = reported_format
         candidate = _swap_red_blue(metal) if channel_swap else metal
         channels = wanted.get("compared_channels")
-        if channels is None:
-            if reference_format == "R32F":
-                channels = "R32F"
-            elif reference_format and captured_format == "RGB8":
-                channels = "RGB"
-            else:
-                channels = "RGBA"
         alpha_declared = wanted.get("alpha_applicable")
-        if alpha_declared is None:
-            alpha_applicable = channels != "RGB" and channels != "R32F"
+        sealed_scope = None
+        if timing == "post_event":
+            # The sealed observation, not the candidate request, is the
+            # authority on the byte layout and applicable channels.  A request
+            # that narrows the scope to hide a channel is invalid evidence.
+            observation = _sealed_prefix_observation(graph, event, target)
+            if observation is None:
+                fail("post-event checkpoint has no sealed observation")
+                continue
+            sealed_scope = gfx_frame_graph.format_scope(observation)
+            if sealed_scope["problems"]:
+                fail(sealed_scope["problems"][0])
+                continue
+            sealed_format = sealed_scope["pixel_format"]
+            if reference_format and reference_format != sealed_format:
+                fail(f"reference pixel format {reference_format} disagrees "
+                     f"with the sealed attachment layout {sealed_format}")
+                continue
+            reported_bytes = _normalize_format(item.get("pixel_format"))
+            if reported_bytes != sealed_format:
+                fail(f"candidate pixel format {reported_bytes or '<missing>'} "
+                     f"does not match the sealed layout {sealed_format}")
+                continue
+            if channels not in (None, sealed_scope["compared_channels"]):
+                fail("requested comparison channels disagree with the sealed "
+                     "attachment identity")
+                continue
+            if (alpha_declared is not None
+                    and (alpha_declared is not False)
+                    != sealed_scope["alpha_applicable"]):
+                fail("alpha applicability contradicts the sealed attachment "
+                     "identity")
+                continue
+            channels = sealed_scope["compared_channels"]
+            alpha_applicable = sealed_scope["alpha_applicable"]
+            colour = observation.get("color") or {}
+            if (colour.get("sha256")
+                    and expected_reference_sha
+                    and str(colour.get("sha256")) != expected_reference_sha):
+                fail("sealed observation blob digest disagrees with the "
+                     "request")
+                continue
+            if (observation.get("width") not in (None, width)
+                    or observation.get("height") not in (None, height)):
+                fail("sealed observation dimensions disagree with the result")
+                continue
         else:
-            alpha_applicable = alpha_declared is not False
+            if channels is None:
+                if reference_format == "R32F":
+                    channels = "R32F"
+                elif reference_format and captured_format == "RGB8":
+                    channels = "RGB"
+                else:
+                    channels = "RGBA"
+            if alpha_declared is None:
+                alpha_applicable = channels != "RGB" and channels != "R32F"
+            else:
+                alpha_applicable = alpha_declared is not False
         if alpha_applicable != (channels == "RGBA"):
             fail("alpha applicability contradicts the compared channel scope")
             continue
@@ -722,6 +796,9 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             "candidate_pixel_format": _normalize_format(item.get("pixel_format"))
             or None,
         }
+        for optional in ("max_ulp_error", "exact_bitwise", "format_scope"):
+            if optional in statistics:
+                entry["statistics"][optional] = statistics[optional]
         if statistics["mismatched_pixels"] == 0:
             entry["status"] = "match"
         elif entry["authoritative"]:

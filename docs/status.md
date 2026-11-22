@@ -47,7 +47,7 @@ GitHub identity is the author and GitHub refuses self-approval.
 | Area | State | Evidence / scope | Smallest missing discriminator |
 |---|---|---|---|
 | Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and exact four-channel comparator; all channels are compared | — |
-| Exact-prefix event-20 coverage | **Implemented; trusted candidate execution; live pilot stops at event 1** | Opt-in post-event observations for every event, offscreen/clears/copies; checker verifies the candidate, builds it from a source snapshot, executes against an immutable copied reference and recomputes all bytes; replay charged once; see [readiness](../analysis/m7/m7-event20-readiness.md) and [comparison](../analysis/m7/m7-event20-comparison.json) | The event-1 1-LSB DXT1_ALPHA difference (`tex:433`, 23 px) is not root-caused. Event 11 is R32F and unobserved in the existing seal; R32F support is implemented for future captures. Native multi-round DSH integration of the corrected checker is not yet demonstrated, so `M7_AUTONOMOUS_READY` is not claimed |
+| Exact-prefix event-20 coverage | **Implemented; trusted candidate execution; live pilot stops at event 1** | One observation mechanism for default/offscreen targets and pre/post timing; one reconciliation/comparison path; checker verifies the candidate, builds it from a source snapshot, executes against an immutable copied reference; replay charged once; see the [exact-prefix report](../analysis/m7/m7-exact-prefix-report.md) | The event-1 1-LSB DXT1_ALPHA difference (`tex:433`, 23 px) is not root-caused. Event 11 is R32F and unobserved in the existing seal; R32F support is implemented and tested. Native multi-round DSH integration of the corrected checker is not yet demonstrated, so `M7_AUTONOMOUS_READY` is not claimed |
 | Exact verdict semantics | **Merged and audit-reviewed** | PR #241 final `3be433f7`; raw exactness separated from policy; envelope hard cap. #258 `8a5d4bc2` fixes the residual report-locator cap and malformed-evidence tracebacks; merged `d29f45f0` after independent exact-head review. | No missing discriminator for the envelope contract; non-blocking residuals are named in the audit |
 | Event/writer attribution | **Merged; audit-reviewed** | PR #242 final `7bcaaa1c`; capture identity from validated graph/checkpoint records; 616/904 matrices generated | Regenerate present 904/616 rows from the sealed graph |
 | Compressed texture capture/replay | **Merged; authentic comparison complete** | PR #244 final `cd4245cf`; BC1 alpha, orientation, geometry/format/device negatives. Sealed-904 comparison: compressed path 4 px vs decoded 858 at checkpoint 15, strictly worse decoded at every checkpoint ([compressed-904](../analysis/harness-remediation/compressed-904.md)) | Texture representation is material; the remaining 4-pixel residual is not explained by it |
@@ -71,8 +71,10 @@ GitHub identity is the author and GitHub refuses self-approval.
   and unobserved in this seal. Exact verified prefix `[0, 0]`. The event-1
   cause is unresolved; the compressed texture path is already better than the
   decoded path (17,446 px). A derived 75,456,851-byte event-0..1 case
-  reproduces the divergence. Report:
-  [readiness](../analysis/m7/m7-event20-readiness.md).
+  reproduces the divergence. Re-evaluating the preserved seal with the
+  consolidated checker reproduces this result unchanged; the legacy
+  observation manifest remains readable. Report:
+  [exact-prefix report](../analysis/m7/m7-exact-prefix-report.md).
 - Present **615** (session `2564021f…`): 325 operations, checkpoints 14 match,
   17/19/20/284/final differ. Interval **[14, 17]**, next checkpoint 15.
 - Present **616** (session `2da0a8fc…`): checkpoint 14 match, 15 differs

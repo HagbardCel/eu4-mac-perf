@@ -1,18 +1,19 @@
-"""Independent exact-prefix qualification for events 0 through 20.
+"""Independent exact-prefix qualification for a captured graphics range.
 
-This module is the acceptance authority for the M7 event-20 campaign.  It does
-not trust the renderer, the replay report, or the model:
+The checker is campaign-independent.  It does not trust the renderer, the
+replay report, or the model:
 
-* the sealed frame, its event stream and its opt-in prefix observations are
-  verified from disk;
-* the checkpoint request is bound to the frame by the shader receipt;
-* every prefix comparison is recomputed byte-for-byte from the original-GL
-  reference blob and the Metal output file with the exact four-channel
-  comparator;
-* a missing, stale, foreign or normalized observation is a failure.
+* the sealed frame, its event stream and its observation file are verified from
+  disk;
+* the checkpoint request is bound to the frame by the authoritative receipt;
+* every comparison happens once, in
+  :func:`gfx_independent_replay.reconcile_checkpoints`, with the channel scope
+  derived from the sealed attachment identity;
+* a missing, stale, foreign, duplicated or normalized observation is a failure.
 
-It returns a structured verdict.  ``EVENT20_EXACT`` is only possible when every
-event from 0 through 20 has a matching, identity-bound, full BGRA observation.
+It returns a structured verdict (``EXACT_PREFIX``, ``EXACT_RANGE``,
+``FIRST_DIVERGENCE``, ``INCOMPLETE_EVIDENCE`` or ``UNSUPPORTED``).  Campaign
+names such as ``EVENT20_EXACT`` belong to the campaign adapter.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from pathlib import Path
 
 from automation import (
     campaign_guard, dsh_campaign, gfx_frame_graph, gfx_independent_replay,
-    m6_compare, m6_frame, replay_host_dependencies, state,
+    gfx_observation, m6_frame, replay_host_dependencies, state,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,20 +63,14 @@ def _require(condition: bool, problems: list[str], message: str) -> None:
         problems.append(message)
 
 
-def _opaque_alpha(payload: bytes) -> bytes:
-    data = bytearray(payload)
-    for offset in range(3, len(data), 4):
-        data[offset] = 255
-    return bytes(data)
-
-
 def classify_prefix(events_out: list[dict], *, problems: list[str],
                     end: int, require_end: int) -> dict:
-    """Walk the prefix sequentially and classify only authenticated evidence.
+    """Classify only authenticated evidence, walking the prefix sequentially.
 
-    A missing, invalid or excluded event stops the walk.  A later mismatch may
-    not be promoted to ``FIRST_DIVERGENCE`` when an earlier event could not be
-    verified, and no exact verdict is possible with an excluded operation.
+    A missing, invalid or excluded event stops an exact walk.  A later mismatch
+    may not be promoted to ``FIRST_DIVERGENCE`` when an earlier event could not
+    be verified.  The generic verdicts never mention a campaign-specific event
+    number; the M7 adapter derives its name from ``EXACT_PREFIX``.
     """
     rows = {int(item["event"]): item for item in events_out
             if isinstance(item.get("event"), int)}
@@ -91,44 +86,45 @@ def classify_prefix(events_out: list[dict], *, problems: list[str],
         if status == "match":
             verified_end = event
             continue
-        if status == "divergent":
+        if status == "divergent" and row.get("authoritative", True):
             first_divergence = event
             break
         unverified_event = event
         break
     invalid_events = sorted(
         event for event, row in rows.items()
-        if row.get("status") not in ("match", "divergent"))
+        if row.get("status") not in ("match", "divergent",
+                                     "unsupported_auxiliary"))
     excluded_events = sorted(
         event for event, row in rows.items()
         if row.get("status") == "unsupported_auxiliary")
     verified_color_events = sorted(
         event for event, row in rows.items() if row.get("status") == "match")
     if problems or unverified_event is not None:
-        verdict = "requires_additional_evidence"
+        verdict = "INCOMPLETE_EVIDENCE"
         status = "incomplete"
+        first_divergence = None
         verified_prefix = ({"start": 0, "end": verified_end}
                            if verified_end >= 0 else None)
-        first_divergence = None
     elif first_divergence is not None:
         verdict = "FIRST_DIVERGENCE"
         status = "divergent"
         verified_prefix = ({"start": 0, "end": first_divergence - 1}
                            if first_divergence > 0 else None)
-    elif verified_end == end and end >= require_end and require_end >= 20:
-        verdict = "EVENT20_EXACT"
-        status = "qualified"
-        verified_prefix = {"start": 0, "end": require_end}
+    elif excluded_events:
+        verdict = "UNSUPPORTED"
+        status = "unsupported"
+        verified_prefix = {"start": 0, "end": verified_end}
     elif verified_end == end and end >= require_end:
         verdict = "EXACT_PREFIX"
-        status = "qualified_prefix"
+        status = "qualified"
         verified_prefix = {"start": 0, "end": require_end}
     elif verified_end == end:
-        verdict = "partial_prefix"
-        status = "partial"
+        verdict = "EXACT_RANGE"
+        status = "qualified_range"
         verified_prefix = {"start": 0, "end": end}
     else:
-        verdict = "requires_additional_evidence"
+        verdict = "INCOMPLETE_EVIDENCE"
         status = "incomplete"
         verified_prefix = None
     return {
@@ -459,29 +455,12 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
     replay = _read_json(replay_path)
     if replay.get("status") != "ok" or replay.get("failed") != 0:
         raise PrefixCheckError("trusted Metal replay did not complete cleanly")
-    receipt = {
-        "schema": "m7-shadow-shader-receipt/v1",
-        "capture_frame_id": None,
-        "pid": None,
-        "session_id": None,
-        "trace_manifest_sha256": None,
-        "event_stream_sha256": None,
-        "checkpoint_request_file": request_path.name,
-        "checkpoint_request_sha256": _sha256(request_path),
-        "checkpoint_count": len(request.get("checkpoints") or []),
-    }
-    seal_path = frame_dir / "frame-seal.json"
-    if seal_path.is_file():
-        seal = _read_json(seal_path)
-        receipt.update({
-            "capture_frame_id": seal.get("capture_frame_id"),
-            "pid": seal.get("pid"),
-            "session_id": seal.get("session_id"),
-            "trace_manifest_sha256": seal.get("manifest_sha256"),
-            "event_stream_sha256": seal.get("event_stream_sha256"),
-        })
     (replay_dir / "checkpoint-request.json").write_text(
         json.dumps(request, indent=2) + "\n")
+    seal_path = frame_dir / "frame-seal.json"
+    seal = _read_json(seal_path) if seal_path.is_file() else {}
+    receipt = m6_frame.build_shader_receipt(
+        seal, replay_dir / "checkpoint-request.json", shaders)
     (replay_dir / "shader-receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\n")
     outputs = []
@@ -523,9 +502,26 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
     }
 
 
+def _invalid_result(result: dict, problems: list[str], *, status: str,
+                    events: list | None = None,
+                    execution: dict | None = None) -> dict:
+    result["problems_count"] = len(problems)
+    if execution is not None:
+        result["execution"] = execution
+    result.update({
+        "verdict": "INCOMPLETE_EVIDENCE" if status != "unsupported"
+                   else "UNSUPPORTED",
+        "status": status,
+        "first_divergence": None,
+        "verified_prefix": None,
+        "events": events or [],
+    })
+    return result
+
+
 def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
              *, request_path: Path | str | None = None,
-             require_end: int = 20,
+             require_end: int | None = None,
              trusted_execution: bool = False,
              trusted_root: Path | str | None = None,
              trusted_run_dir: Path | str | None = None,
@@ -533,54 +529,54 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
              candidate_sidecar: Path | str | None = None) -> dict:
     """Verify one sealed frame's exact prefix against its Metal replay.
 
-    ``frame_dir`` contains frame-seal.json, frame-trace.json,
-    frame-events.jsonl, blobs/ and prefix-observations.jsonl.  ``metal_dir``
-    contains replay.json plus the Metal checkpoint outputs.  The trusted
-    checker must run this function outside the candidate workspace.
+    ``frame_dir`` contains the seal, event stream, blobs and observation file.
+    ``metal_dir`` contains the replay result plus Metal observation outputs.
+    The trusted checker must run outside the candidate workspace.
+
+    Pixel comparison happens once, in
+    :func:`gfx_independent_replay.reconcile_checkpoints`; this function
+    validates identities, binding and coverage and classifies the reconciled
+    result.  It never re-reads the same pixels to repeat that comparison.
     """
     frame_dir = Path(frame_dir).expanduser().resolve()
     metal_dir = (Path(metal_dir).expanduser().resolve()
                  if metal_dir is not None else None)
     problems: list[str] = []
     result: dict = {
-        "schema": "m7-event20-prefix-check/v1",
+        "schema": "gfx-observation-check/v2",
         "frame_dir": str(frame_dir),
         "metal_dir": str(metal_dir),
         "required_through": require_end,
         "problems": problems,
     }
-    if trusted_root is not None:
-        try:
-            record = verify_trusted_evidence(trusted_root, frame_dir)
-            result["trusted_evidence"] = {
-                "root": str(Path(trusted_root).expanduser().resolve()),
-                "root_sha256": record.get("root_sha256"),
-                "file_count": len(record.get("files") or []),
-            }
-        except (PrefixCheckError, OSError) as exc:
-            problems.append(f"trusted evidence is not usable: {exc}")
-            return dict(result, verdict="requires_additional_evidence",
-                        status="invalid", first_divergence=None,
-                        verified_prefix=None, events=[])
     trusted_record = None
     if trusted_root is not None:
         try:
             trusted_record = verify_trusted_evidence(trusted_root, frame_dir)
-        except (PrefixCheckError, OSError):
-            trusted_record = None
+        except (PrefixCheckError, OSError) as exc:
+            problems.append(f"trusted evidence is not usable: {exc}")
+            return _invalid_result(result, problems, status="invalid")
+        result["trusted_evidence"] = {
+            "root": str(Path(trusted_root).expanduser().resolve()),
+            "root_sha256": trusted_record.get("root_sha256"),
+            "file_count": len(trusted_record.get("files") or []),
+        }
     try:
-        seal = m6_frame.load_seal(
-            frame_dir,
-            trusted_evidence=trusted_record if trusted_root is not None else None)
+        seal = m6_frame.load_seal(frame_dir, trusted_evidence=trusted_record)
         trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
     except (m6_frame.FrameError, OSError, ValueError) as exc:
         problems.append(f"sealed frame is not usable: {exc}")
-        return dict(result, verdict="requires_additional_evidence",
-                    status="invalid", first_divergence=None,
-                    verified_prefix=None, events=[])
-    graph = gfx_frame_graph.build(frame_dir)
-    result["capture"] = gfx_independent_replay.capture_identity(
-        seal, trace)
+        return _invalid_result(result, problems, status="invalid")
+    result["evidence"] = {
+        "authority": gfx_observation.authority(trace, seal),
+        "session_id": seal.get("session_id"),
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "manifest_sha256": seal.get("manifest_sha256"),
+        "event_stream_sha256": seal.get("event_stream_sha256"),
+        "reference_sha256": seal.get("reference_sha256"),
+    }
+    graph = gfx_frame_graph.build(frame_dir, trace=trace)
+    result["capture"] = gfx_independent_replay.capture_identity(seal, trace)
     result["graph_status"] = graph.get("status")
     result["graph_reasons"] = graph.get("reasons") or []
     prefix = graph.get("prefix") or {}
@@ -588,12 +584,11 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     result["prefix_end"] = prefix.get("end")
     if prefix.get("status") != "complete":
         problems.append("exact-prefix coverage is not complete")
-        for problem in prefix.get("problems") or []:
-            problems.append(str(problem))
-        return dict(result, verdict="requires_additional_evidence",
-                    status="incomplete", first_divergence=None,
-                    verified_prefix=None, events=[])
+        problems.extend(str(problem) for problem in prefix.get("problems") or [])
+        return _invalid_result(result, problems, status="incomplete")
     end = int(prefix["end"])
+    require_end = end if require_end is None else int(require_end)
+    result["required_through"] = require_end
     result["initial_state"] = prefix.get("initial_state") or []
     result["state_coverage"] = prefix.get("state_coverage") or []
     result["prefix_coverage"] = {
@@ -635,98 +630,61 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                     raise
         except campaign_guard.CampaignRefusal as exc:
             problems.append(f"trusted replay budget refused: {exc}")
-            return dict(result, verdict="requires_additional_evidence",
-                        status="invalid", first_divergence=None,
-                        verified_prefix=None, events=[], execution={
-                            "mode": "candidate-build-and-replay",
-                            "status": "refused",
-                            "error": str(exc),
-                        })
+            return _invalid_result(
+                result, problems, status="invalid",
+                execution={"mode": "candidate-build-and-replay",
+                           "status": "refused", "error": str(exc)})
         except (PrefixCheckError, OSError, subprocess.TimeoutExpired) as exc:
             problems.append(f"trusted Metal execution failed: {exc}")
-            return dict(result, verdict="requires_additional_evidence",
-                        status="invalid", first_divergence=None,
-                        verified_prefix=None, events=[], execution={
-                            "mode": "candidate-build-and-replay",
-                            "status": "failed",
-                            "error": str(exc),
-                        })
+            return _invalid_result(
+                result, problems, status="invalid",
+                execution={"mode": "candidate-build-and-replay",
+                           "status": "failed", "error": str(exc)})
         result["execution"] = trusted["execution"]
         metal_dir = trusted["metal_dir"]
-        request_file = trusted["request_path"]
         execution = trusted["execution"]
         problems.extend(verify_execution_outputs(execution, metal_dir))
     else:
         if metal_dir is None:
             problems.append("Metal result directory is required without "
                             "trusted execution")
-            return dict(result, verdict="requires_additional_evidence",
-                        status="invalid", first_divergence=None,
-                        verified_prefix=None, events=[])
-        request_file = (Path(request_path).expanduser().resolve()
-                        if request_path is not None
-                        else metal_dir / "checkpoint-request.json")
+            return _invalid_result(result, problems, status="invalid")
+    request_file = (Path(request_path).expanduser().resolve()
+                    if request_path is not None
+                    else metal_dir / "checkpoint-request.json")
+    if not request_file.is_file():
+        problems.append(f"checkpoint request is absent: {request_file}")
+        return _invalid_result(result, problems, status="invalid")
     try:
         request = _read_json(request_file)
     except PrefixCheckError as exc:
         problems.append(str(exc))
-        return dict(result, verdict="requires_additional_evidence",
-                    status="invalid", first_divergence=None,
-                    verified_prefix=None, events=[])
+        return _invalid_result(result, problems, status="invalid")
     request_sha = _sha256(request_file)
-    result["request"] = {"path": str(request_file),
-                         "sha256": request_sha}
-    published_canonical = json.dumps(
-        request, sort_keys=True, separators=(",", ":"))
-    if published_canonical != expected_canonical:
+    result["request"] = {"path": str(request_file), "sha256": request_sha}
+    if json.dumps(request, sort_keys=True,
+                  separators=(",", ":")) != expected_canonical:
         problems.append(
             "published checkpoint request does not agree with the independent "
             "derivation from the sealed frame")
-        result["request"]["agrees_with_derivation"] = False
-    else:
-        result["request"]["agrees_with_derivation"] = True
-    receipt_path = metal_dir / "shader-receipt.json"
-    try:
-        receipt = _read_json(receipt_path)
-    except PrefixCheckError as exc:
-        problems.append(f"shader receipt is not usable: {exc}")
-        receipt = {}
-    result["receipt"] = {
-        "path": str(receipt_path),
-        "sha256": _sha256(receipt_path) if receipt_path.is_file() else None,
-    }
-    _require(receipt.get("schema") == "m7-shadow-shader-receipt/v1",
-             problems, "shader receipt schema is not recognized")
-    _require(receipt.get("checkpoint_request_sha256") == request_sha,
-             problems,
-             "shader receipt does not bind the published checkpoint request")
-    _require(receipt.get("checkpoint_request_file")
-             == request_file.name,
-             problems, "shader receipt names a different request file")
-    requested = request.get("checkpoints")
-    if not isinstance(requested, list):
-        problems.append("checkpoint request has no checkpoint array")
-        requested = []
-    _require(receipt.get("checkpoint_count") == len(requested),
-             problems, "shader receipt checkpoint count disagrees with the "
-                       "published request")
-    for field, seal_field in (
-            ("capture_frame_id", "capture_frame_id"),
-            ("pid", "pid"),
-            ("session_id", "session_id"),
-            ("trace_manifest_sha256", "manifest_sha256"),
-            ("event_stream_sha256", "event_stream_sha256")):
-        if seal.get(seal_field) is not None:
-            _require(receipt.get(field) == seal.get(seal_field), problems,
-                     f"shader receipt {field} does not match the sealed frame")
+    # The existing authoritative binding path: it validates the published
+    # request against the graph plan and binds it to the sealed frame through
+    # the shader receipt.  A candidate-authored receipt is never trusted on
+    # its own.
+    _, _, binding_problems, binding = \
+        gfx_independent_replay.checkpoint_request_evidence(
+            graph, metal_dir, seal=seal)
+    result["request_binding"] = binding
+    for problem in binding_problems:
+        problems.append(
+            "checkpoint request is not bound: "
+            + str(problem.get("detail") or problem.get("kind")))
     replay_path = metal_dir / "replay.json"
     try:
         replay = _read_json(replay_path)
     except PrefixCheckError as exc:
         problems.append(f"Metal replay result is not usable: {exc}")
-        return dict(result, verdict="requires_additional_evidence",
-                    status="invalid", first_divergence=None,
-                    verified_prefix=None, events=[])
+        return _invalid_result(result, problems, status="invalid")
     result["replay"] = {
         "path": str(replay_path),
         "sha256": _sha256(replay_path),
@@ -749,31 +707,29 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
         if replay.get(field) is not None:
             _require(replay.get(field) == value, problems,
                      f"Metal replay {field} does not bind the request")
-    capture = result["capture"]
     try:
         results, validation = gfx_independent_replay.reconcile_checkpoints(
-            graph, request, replay, frame_dir, metal_dir, capture=capture)
+            graph, request, replay, frame_dir, metal_dir,
+            capture=result["capture"])
     except (gfx_independent_replay.ReplayError, OSError, ValueError) as exc:
         problems.append(f"checkpoint reconciliation failed: {exc}")
-        return dict(result, verdict="requires_additional_evidence",
-                    status="invalid", first_divergence=None,
-                    verified_prefix=None, events=[])
+        return _invalid_result(result, problems, status="invalid")
     result["checkpoint_validation"] = validation
     _require(validation.get("status") == "ok", problems,
              "checkpoint reconciliation reported invalid evidence")
 
-    events_out: list[dict] = []
-    expected_post = {int(record["event"]): record
-                     for record in prefix.get("post_events") or []}
+    sealed = {int(record["event"]): record
+              for record in prefix.get("post_events") or []}
     excluded = {int(event) for event in prefix.get("excluded_events") or []}
     result["excluded_events"] = sorted(excluded)
+    events_out: list[dict] = []
     seen: set[int] = set()
     for entry in results:
         if entry.get("timing") != "post_event":
             continue
         event = int(entry.get("event"))
         seen.add(event)
-        observation = expected_post.get(event)
+        observation = sealed.get(event)
         row = {
             "event": event,
             "target": entry.get("target"),
@@ -787,117 +743,58 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
             "dimensions": [entry.get("width"), entry.get("height")],
             "reference_pixel_format": entry.get("reference_pixel_format"),
             "candidate_pixel_format": entry.get("candidate_pixel_format"),
-            "alpha_applicable": entry.get("alpha_applicable", True) is not False,
+            "alpha_applicable": entry.get("alpha_applicable"),
             "compared_channels": entry.get("compared_channels"),
+            "statistics": entry.get("statistics") or {},
         }
-        statistics = entry.get("statistics") or {}
-        row["statistics"] = statistics
-        if event in excluded:
-            problems.append(
-                f"prefix event {event} is excluded but has a Metal result")
+        problem = None
+        if entry.get("status") == "invalid":
+            problem = str(entry.get("reason") or "reconciled status is invalid")
+        elif event in excluded:
+            problem = "unexpected result for an excluded event"
+        elif observation is None:
+            problem = "sealed observation is absent"
+        elif event > end:
+            problem = "result is outside the verified coverage"
+        else:
+            scope = gfx_observation.format_scope(observation)
+            colour = observation.get("color") or {}
+            checks = (
+                (entry.get("resource"), observation.get("resource"),
+                 "resource"),
+                (str(entry.get("target")), str(observation.get("target_name")),
+                 "target"),
+                (entry.get("timing"), observation.get("timing"), "timing"),
+                (entry.get("reference_file"),
+                 str(frame_dir / "blobs" / str(colour.get("file") or "")),
+                 "reference file"),
+                (entry.get("reference_sha256"), colour.get("sha256"),
+                 "reference digest"),
+                (entry.get("reference_pixel_format"),
+                 scope.get("pixel_format"), "reference pixel format"),
+                (entry.get("candidate_pixel_format"),
+                 scope.get("pixel_format"), "candidate pixel format"),
+                (entry.get("compared_channels"),
+                 scope.get("compared_channels"), "compared channels"),
+                (entry.get("alpha_applicable"),
+                 scope.get("alpha_applicable"), "alpha applicability"),
+                (entry.get("width"), observation.get("width"), "width"),
+                (entry.get("height"), observation.get("height"), "height"),
+            )
+            for actual, expected, label in checks:
+                if actual != expected:
+                    problem = f"{label} disagrees with the sealed observation"
+                    break
+            if problem is None and scope["problems"]:
+                problem = scope["problems"][0]
+            if problem is None and entry.get("status") not in (
+                    "match", "divergent"):
+                problem = str(entry.get("reason")
+                              or "reconciled status is not match or divergence")
+        if problem is not None:
+            problems.append(f"prefix event {event}: {problem}")
             row["status"] = "invalid"
-            row["problem"] = "unexpected result for an excluded event"
-            events_out.append(row)
-            continue
-        if observation is None:
-            problems.append(f"prefix event {event} was not requested")
-            row["status"] = "invalid"
-            row["problem"] = "unexpected prefix observation"
-            events_out.append(row)
-            continue
-        if (entry.get("resource") != observation.get("resource")
-                or str(entry.get("target"))
-                != str(observation.get("target_name"))):
-            problems.append(
-                f"prefix event {event} resource or target disagrees with the "
-                "sealed observation")
-            row["status"] = "invalid"
-            row["problem"] = "resource identity mismatch"
-        reference_format = entry.get("reference_pixel_format")
-        if reference_format not in (None, "BGRA8", "RGBA8", "R32F"):
-            problems.append(
-                f"prefix event {event} has an unsupported reference pixel "
-                "format")
-            row["status"] = "invalid"
-            row["problem"] = "unsupported pixel format"
-        if reference_format == "R32F":
-            identity = observation.get("target_identity") or {}
-            try:
-                internal = int(identity.get("internal_format") or 0)
-            except (TypeError, ValueError):
-                internal = 0
-            if internal != 0x822E:
-                problems.append(
-                    f"prefix event {event} claims R32F but the sealed "
-                    "attachment identity is not GL_R32F")
-                row["status"] = "invalid"
-                row["problem"] = "R32F format identity mismatch"
-            if entry.get("compared_channels") != "R32F":
-                problems.append(
-                    f"prefix event {event} does not use the R32F comparison "
-                    "scope")
-                row["status"] = "invalid"
-                row["problem"] = "R32F comparison scope mismatch"
-            if entry.get("alpha_applicable", True) is not False:
-                problems.append(
-                    f"prefix event {event} declares alpha for an R32F target")
-                row["status"] = "invalid"
-                row["problem"] = "R32F alpha applicability mismatch"
-            if entry.get("candidate_pixel_format") not in (None, "R32F"):
-                problems.append(
-                    f"prefix event {event} substitutes the R32F candidate "
-                    "pixel format")
-                row["status"] = "invalid"
-                row["problem"] = "R32F candidate format substitution"
-        # Recompute exact four-channel equality from the original bytes.  The
-        # reconciled statistics are not trusted for the verdict.
-        try:
-            width = int(entry.get("width") or 0)
-            height = int(entry.get("height") or 0)
-            reference_path = Path(entry.get("reference_file") or "")
-            metal_path = Path(entry.get("metal_file") or "")
-            reference = reference_path.read_bytes()
-            candidate = metal_path.read_bytes()
-            if (len(reference) != width * height * 4
-                    or len(candidate) != width * height * 4):
-                raise PrefixCheckError("pixel payload size mismatch")
-            alpha_applicable = entry.get("alpha_applicable", True) is not False
-            channels = entry.get("compared_channels") or (
-                "RGBA" if alpha_applicable else "RGB")
-            if channels == "R32F":
-                exact = gfx_independent_replay.compare_r32f(
-                    reference, candidate, width, height)
-            else:
-                if not alpha_applicable:
-                    reference = _opaque_alpha(reference)
-                    candidate = _opaque_alpha(candidate)
-                exact = m6_compare.compare_images(
-                    reference, candidate, width, height)
-            row["independent"] = {
-                "mismatched_pixels": exact["mismatched_pixels"],
-                "max_channel_error": exact["max_channel_error"],
-                "alpha_different_pixels": exact["alpha_different_pixels"],
-                "pixels": exact["pixels"],
-                "format_scope": exact.get("format_scope", channels),
-                "max_ulp_error": exact.get("max_ulp_error", 0),
-                "exact_bitwise": exact.get("exact_bitwise", True),
-            }
-            if (exact["mismatched_pixels"] != 0
-                    or exact["max_channel_error"] != 0
-                    or exact["alpha_different_pixels"] != 0):
-                row["status"] = "divergent"
-                row["problem"] = "independent exact comparison failed"
-            elif row["status"] == "match":
-                row["status"] = "match"
-            else:
-                row["status"] = "invalid"
-                row["problem"] = (row.get("problem")
-                                  or entry.get("reason")
-                                  or "reconciled status is not match")
-        except (OSError, ValueError, PrefixCheckError) as exc:
-            row["status"] = "invalid"
-            row["problem"] = f"independent comparison failed: {exc}"
-            problems.append(f"prefix event {event}: {row['problem']}")
+            row["problem"] = problem
         events_out.append(row)
     for event in range(end + 1):
         if event in seen:
@@ -907,9 +804,8 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                 "event": event,
                 "status": "unsupported_auxiliary",
                 "excluded": True,
-                "problem": "isolated auxiliary target with an unsupported "
-                           "non-BGRA colour format; the clear is accounted "
-                           "for but not compared",
+                "problem": "isolated auxiliary target with a non-comparable "
+                           "colour format; accounted for but not compared",
             })
             continue
         problems.append(f"prefix event {event} has no reconciled result")
@@ -921,11 +817,10 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     events_out.sort(key=lambda item: item["event"])
     result["events"] = events_out
     result["observed_events"] = len(events_out)
-
     classification = classify_prefix(
         events_out, problems=problems, end=end, require_end=require_end)
     result.update(classification)
-    result["verdict"] = classification["verdict"]
+    result["exact"] = classification["verdict"] == "EXACT_PREFIX"
     result["problems_count"] = len(problems)
     return result
 

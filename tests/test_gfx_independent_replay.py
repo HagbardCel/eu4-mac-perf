@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 import subprocess
 import sys
 import tempfile
@@ -217,3 +218,31 @@ class ProducerReceiptEnvironmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class R32FComparisonTests(unittest.TestCase):
+    def test_negative_float_ulp_distance_is_ordered(self):
+        reference = struct.pack("<f", -1.0) * 4
+        neighbour = struct.pack("<I", 0xBF7FFFFF) * 4
+        result = gfx_independent_replay.compare_r32f(
+            reference, neighbour, 2, 2)
+        self.assertFalse(result["exact_bitwise"])
+        self.assertEqual(result["mismatched_pixels"], 4)
+        self.assertEqual(result["max_ulp_error"], 1)
+
+    def test_r32f_is_compared_as_exact_float_bits(self):
+        reference = struct.pack("<f", 1.0) * 4
+        identical = gfx_independent_replay.compare_r32f(
+            reference, reference, 2, 2)
+        self.assertEqual(identical["format_scope"], "R32F")
+        self.assertEqual(identical["mismatched_pixels"], 0)
+        self.assertTrue(identical["exact_bitwise"])
+        self.assertEqual(identical["max_channel_error"], 0)
+        changed = bytearray(reference)
+        changed[0] ^= 1
+        different = gfx_independent_replay.compare_r32f(
+            reference, bytes(changed), 2, 2)
+        self.assertEqual(different["mismatched_pixels"], 1)
+        self.assertFalse(different["exact_bitwise"])
+        self.assertGreater(different["max_ulp_error"], 0)
+        self.assertEqual(different["max_channel_error"], 0)
+        self.assertEqual(different["alpha_different_pixels"], 0)

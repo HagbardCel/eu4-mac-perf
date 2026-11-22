@@ -1,10 +1,11 @@
-"""Bounded portable reproduction for an exact-prefix divergence.
+"""Bounded portable reproduction for a captured graphics prefix.
 
-A full 283-operation sealed frame can exceed the portable-case budget.  This
-module derives a smaller frame containing only the first N operations and the
-resources they reference.  The derived frame is explicitly labelled with the
-original seal/manifest/event-stream/prefix digests; it is never presented as the
-original full seal.
+A full sealed frame can exceed the portable-case budget.  This module derives a
+smaller frame containing only the first N operations and the resources they
+reference.  The derived frame is explicitly labelled with the original
+seal/manifest/event-stream/observation digests and is never presented as the
+original full seal.  A derived case does not inherit the authority of the
+complete seal it was cut from.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from pathlib import Path
 
 from automation import gfx_frame_graph, gfx_prefix_check, m6_frame
 
-SCHEMA = "m7-prefix-case/v1"
+SCHEMA = "gfx-observation-case/v1"
 
 
 class PrefixCaseError(RuntimeError):
@@ -103,7 +104,6 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
         "observation_file": observation_path.name,
         "observation_sha256": _sha(observation_path),
         "observation_bytes": observation_path.stat().st_size,
-        "observations": [initial, *post],
     })
     manifest = dict(trace)
     manifest.pop("_events", None)
@@ -181,6 +181,13 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     }
     (destination / "frame-seal.json").write_text(
         json.dumps(derived_seal, indent=2) + "\n")
+    derived_graph = gfx_frame_graph.build(destination)
+    derived_prefix = derived_graph.get("prefix") or {}
+    if derived_prefix.get("status") != "complete":
+        raise PrefixCaseError(
+            "derived events are not a self-contained prefix: "
+            + "; ".join(derived_prefix.get("problems") or
+                        [str(derived_prefix.get("status") or "unknown")]))
     return {
         "frame_dir": str(destination),
         "events": len(selected),
@@ -225,131 +232,3 @@ def build_case(frame_dir: Path | str, end: int,
     }
     (derived.parent / "case.json").write_text(json.dumps(case, indent=2) + "\n")
     return case
-
-
-def build_event_subset_frame(frame_dir: Path | str, event_indices: list[int],
-                             destination: Path | str) -> dict:
-    """Copy an ordered event subset into a derived, explicitly labelled frame.
-
-    Events are reindexed to 0..N-1.  Post-event observations are remapped and
-    the selected original events are recorded in ``derived_from``.  The result
-    is a controlled fixture, never a claim about the original full seal.
-    """
-    frame_dir = Path(frame_dir).expanduser().resolve()
-    destination = Path(destination).expanduser().resolve()
-    indices = [int(value) for value in event_indices]
-    if not indices or indices != sorted(set(indices)):
-        raise PrefixCaseError("event subset must be ordered and unique")
-    seal = m6_frame.load_seal(frame_dir)
-    trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
-    events = trace.get("_events") or []
-    prefix = m6_frame.load_prefix_observations(trace, frame_dir)
-    if prefix is None:
-        raise PrefixCaseError("frame has no prefix observations")
-    if any(index < 0 or index >= len(events) for index in indices):
-        raise PrefixCaseError("event subset is outside the frame")
-    post_by_old = {int(record["event"]): record
-                   for record in prefix["post_events"]}
-    selected = [events[index] for index in indices]
-    post = []
-    for new_index, old_index in enumerate(indices):
-        record = post_by_old.get(old_index)
-        if record is None:
-            raise PrefixCaseError(
-                f"selected event {old_index} has no post-event observation")
-        record = dict(record)
-        record["event"] = new_index
-        post.append(record)
-    if destination.exists():
-        shutil.rmtree(destination)
-    (destination / "blobs").mkdir(parents=True)
-    blob_names: set[str] = set()
-    for event in selected:
-        blob_names |= _event_blob_names(event)
-    for record in [prefix["initial"], *post]:
-        blob_names |= _event_blob_names(record)
-    for name in sorted(blob_names):
-        source = frame_dir / "blobs" / name
-        if not source.is_file():
-            raise PrefixCaseError(f"referenced blob is absent: {name}")
-        shutil.copyfile(source, destination / "blobs" / name)
-    (destination / "frame-events.jsonl").write_text(
-        "".join(json.dumps(event, sort_keys=True) + "\n" for event in selected))
-    initial = dict(prefix["initial"])
-    initial["event"] = 0
-    observation_path = destination / "prefix-observations.jsonl"
-    observation_path.write_text(
-        "".join(json.dumps(record, sort_keys=True) + "\n"
-                for record in [initial, *post]))
-    reference = trace.get("frame") or {}
-    shutil.copyfile(frame_dir / str(reference["reference"]),
-                    destination / str(reference["reference"]))
-    manifest = dict(trace)
-    for key in ("_events", "_draws", "_frame_dir", "_prefix",
-                "_blob_count_verified"):
-        manifest.pop(key, None)
-    manifest.update({
-        "schema": m6_frame.TRACE_SCHEMA,
-        "complete": True,
-        "reason": "derived_event_subset",
-        "truncated": False,
-        "events": len(selected),
-        "prefix": {
-            "schema": "gfx-prefix-observations/v1",
-            "end": len(selected) - 1,
-            "status": "complete",
-            "count": len(post),
-            "post_event_count": len(post),
-            "initial": True,
-            "observation_file": observation_path.name,
-            "observation_sha256": _sha(observation_path),
-            "observation_bytes": observation_path.stat().st_size,
-            "observations": [initial, *post],
-        },
-        "default_checkpoint_events": [],
-        "default_checkpoint_count": 0,
-        "derived_from": {
-            "original_session_id": seal.get("session_id"),
-            "original_capture_frame_id": seal.get("capture_frame_id"),
-            "original_operation_count": len(events),
-            "original_manifest_sha256": seal.get("manifest_sha256"),
-            "original_event_stream_sha256": seal.get("event_stream_sha256"),
-            "original_reference_sha256": seal.get("reference_sha256"),
-            "selected_original_events": indices,
-            "scope": "derived event subset; not the original full seal",
-        },
-    })
-    (destination / "frame-trace.json").write_text(
-        json.dumps(manifest, indent=2) + "\n")
-    derived_seal = dict(seal)
-    derived_seal.update({
-        "sealed": True,
-        "complete": True,
-        "capture_dir": str(destination),
-        "operation_count": len(selected),
-        "draw_count": sum(1 for event in selected if event.get("kind") == "draw"),
-        "clear_count": sum(1 for event in selected if event.get("kind") == "clear"),
-        "copy_count": sum(1 for event in selected
-                          if event.get("kind") in ("resolve", "copy")),
-        "event_stream_file": "frame-events.jsonl",
-        "event_stream_bytes": (destination / "frame-events.jsonl").stat().st_size,
-        "event_stream_sha256": _sha(destination / "frame-events.jsonl"),
-        "event_stream_verified": True,
-        "manifest_file": "frame-trace.json",
-        "manifest_sha256": _sha(destination / "frame-trace.json"),
-        "trace_complete": True,
-        "trace_integrity": True,
-        "readback_ok": True,
-        "failure_reason": "",
-        "derived_from": manifest["derived_from"],
-    })
-    (destination / "frame-seal.json").write_text(
-        json.dumps(derived_seal, indent=2) + "\n")
-    return {
-        "frame_dir": str(destination),
-        "events": len(selected),
-        "selected_original_events": indices,
-        "bytes": sum(path.stat().st_size for path in destination.rglob("*")
-                     if path.is_file()),
-        "derived_from": manifest["derived_from"],
-    }
