@@ -931,24 +931,33 @@ class ReplayInputSanitizationTests(unittest.TestCase):
             frame = _Path(temporary) / "frame"
             (frame / "blobs").mkdir(parents=True)
             for name in ("input.bin", "expected.bin", "shared.bin",
-                         "source.bin", "frame-reference.bgra"):
+                         "source.bin", "cube-face.bin", "compressed.bin",
+                         "frame-reference.bgra"):
                 (frame / "blobs" / name).write_bytes(name.encode())
+            shared_sha = hashlib.sha256(b"shared.bin").hexdigest()
+            expected_sha = hashlib.sha256(b"expected.bin").hexdigest()
             events = [
                 {"kind": "draw", "index": 0,
-                 "default_checkpoint": {"file": "expected.bin"},
+                 "default_checkpoint": {"file": "expected.bin",
+                                        "sha256": expected_sha},
                  "unrelated": {"file": "expected.bin"},
                  "source_image": {"file": "source.bin"},
                  "attributes": [{"data": "input.bin"}],
-                 "textures": [{"levels": [{"file": "shared.bin"}]}]},
+                 "textures": [{"levels": [{
+                     "file": "shared.bin",
+                     "compressed": {"file": "compressed.bin"},
+                     "faces": [{"file": "cube-face.bin"}]}]}]},
             ]
             trace = {
                 "_events": events,
                 "_prefix": {
                     "post_events": [
                         {"event": 0, "timing": "post_event",
-                         "color": {"file": "shared.bin"}},
+                         "color": {"file": "shared.bin",
+                                   "sha256": shared_sha}},
                         {"event": 1, "timing": "post_event",
-                         "color": {"file": "expected.bin"}},
+                         "color": {"file": "expected.bin",
+                                   "sha256": expected_sha}},
                     ],
                 },
                 "frame": {"width": 4, "height": 4,
@@ -962,6 +971,8 @@ class ReplayInputSanitizationTests(unittest.TestCase):
             self.assertIn("input.bin", copied)
             self.assertIn("shared.bin", copied)
             self.assertIn("source.bin", copied)
+            self.assertIn("cube-face.bin", copied)
+            self.assertIn("compressed.bin", copied)
             self.assertNotIn("expected.bin", copied)
             self.assertNotIn("frame-reference.bgra", copied)
             self.assertEqual(record["shared_input_outputs"][0]["file"],
@@ -973,6 +984,69 @@ class ReplayInputSanitizationTests(unittest.TestCase):
                          (destination / "frame-events.jsonl").read_text()
                          .splitlines() if line.strip()]
             self.assertNotIn("default_checkpoint", sanitized[0])
+
+
+class ReplayInputOverlapTests(unittest.TestCase):
+    def _frame(self, root: Path, payload: bytes) -> tuple[Path, dict]:
+        frame = root / "frame"
+        (frame / "blobs").mkdir(parents=True)
+        import hashlib
+        digest = hashlib.sha256(payload).hexdigest()
+        for name in ("input.bin", "expected-other.bin"):
+            (frame / "blobs" / name).write_bytes(payload)
+        events = [{"kind": "draw", "index": 0,
+                   "attributes": [{"data": "input.bin"}]}]
+        trace = {
+            "_events": events,
+            "_prefix": {"post_events": [{
+                "event": 0, "timing": "post_event", "resource": "fb:0",
+                "color": {"file": "expected-other.bin", "sha256": digest},
+                "depth": {"status": "not_used"},
+                "stencil": {"status": "not_used"}}]},
+            "frame": {"width": 4, "height": 4},
+        }
+        return frame, trace
+
+    def test_overlap_matches_content_not_filename(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace = self._frame(root, b"same-payload")
+            record = m6_frame.materialize_replay_input(
+                frame, trace, root / "replay-input")
+            self.assertTrue((root / "replay-input" / "blobs" /
+                             "input.bin").is_file())
+            self.assertFalse((root / "replay-input" / "blobs" /
+                              "expected-other.bin").is_file())
+            overlap = record["shared_input_outputs"]
+            self.assertEqual(len(overlap), 1)
+            self.assertEqual(overlap[0]["file"], "expected-other.bin")
+            self.assertEqual(overlap[0]["input_file"], "input.bin")
+            self.assertEqual(overlap[0]["expected_by"][0]["kind"],
+                             "observation")
+
+    def test_initial_depth_and_final_reference_are_reported_separately(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace = self._frame(root, b"shared")
+            import hashlib
+            digest = hashlib.sha256(b"shared").hexdigest()
+            trace["_prefix"]["initial"] = {
+                "event": 0, "timing": "pre_event", "resource": "fb:0",
+                "color": {"file": "expected-other.bin", "sha256": digest}}
+            trace["_prefix"]["post_events"][0]["depth"] = {
+                "status": "captured", "file": "expected-other.bin",
+                "sha256": digest, "bytes": 4}
+            trace["frame"].update({
+                "reference": "expected-other.bin",
+                "reference_sha256": digest})
+            overlap = m6_frame.replay_input_overlap(trace, frame)
+            roles = {(entry["kind"], entry["role"], entry["timing"])
+                     for item in overlap for entry in item["expected_by"]}
+            self.assertIn(("observation", "color", "pre_event"), roles)
+            self.assertIn(("observation", "depth", "post_event"), roles)
+            self.assertIn(("final_reference", "final_reference", None), roles)
 
 
 class TraceStateHostTests(unittest.TestCase):

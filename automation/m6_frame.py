@@ -257,6 +257,9 @@ def event_input_blob_names(events) -> set[str]:
             for level in texture.get("levels") or []:
                 add(level)
                 add(level.get("compressed") if isinstance(level, dict) else None)
+                for face in (level.get("faces") if isinstance(level, dict)
+                             else None) or []:
+                    add(face)
     return names
 
 
@@ -275,70 +278,131 @@ def event_blob_names(events) -> set[str]:
     return names
 
 
-def _record_blob_names(record) -> set[str]:
-    return {Path(member["file"]).name
-            for member in iter_blob_members(record)
-            if isinstance(member.get("file"), str) and member["file"]}
+def _blob_entry(member, *,
+                role: str, identity: dict) -> dict | None:
+    if not isinstance(member, dict):
+        return None
+    name = member.get("file")
+    if not isinstance(name, str) or not name:
+        return None
+    return {
+        "file": Path(name).name,
+        "sha256": member.get("sha256") if isinstance(
+            member.get("sha256"), str) else None,
+        "role": role,
+        "identity": identity,
+    }
 
 
-def expected_output_blobs(trace: dict) -> dict[str, list[dict]]:
-    """Inventory blobs that are expected observation outputs.
+def expected_output_blobs(trace: dict) -> list[dict]:
+    """Inventory expected observation/checkpoint/reference payloads.
 
-    These are never renderer inputs, even when a content-addressed name happens
-    to collide with an input blob.  Each entry records the observation or
-    checkpoint that expects it so an unavoidable overlap can be reported.
+    Each entry records its byte digest and the exact role it plays, so the
+    overlap classifier can distinguish a compared post-event colour payload
+    from an initial state, a depth/stencil diagnostic, a default checkpoint or
+    the final-frame reference.
     """
-    expected: dict[str, list[dict]] = {}
+    entries: list[dict] = []
 
-    def add(names, identity: dict) -> None:
-        for name in names:
-            expected.setdefault(name, []).append(identity)
+    def add(member, role: str, identity: dict) -> None:
+        entry = _blob_entry(member, role=role, identity=identity)
+        if entry is not None:
+            entries.append(entry)
 
     prefix = trace.get("_prefix") or {}
     for record in [prefix.get("initial"), *(prefix.get("post_events") or [])]:
-        if isinstance(record, dict):
-            add(_record_blob_names(record), {
-                "kind": "observation",
-                "event": record.get("event"),
-                "timing": record.get("timing"),
-                "resource": record.get("resource"),
-            })
+        if not isinstance(record, dict):
+            continue
+        identity = {
+            "kind": "observation",
+            "event": record.get("event"),
+            "timing": record.get("timing"),
+            "resource": record.get("resource"),
+        }
+        add(record.get("color"), "color", identity)
+        add(record.get("depth"), "depth", identity)
+        add(record.get("stencil"), "stencil", identity)
     for event in trace.get("_events") or []:
         checkpoint = event.get("default_checkpoint")
-        if isinstance(checkpoint, dict):
-            add(_record_blob_names(checkpoint), {
-                "kind": "default_checkpoint",
-                "event": checkpoint.get("event"),
-                "resource": checkpoint.get("resource"),
-            })
+        if not isinstance(checkpoint, dict):
+            continue
+        identity = {
+            "kind": "default_checkpoint",
+            "event": checkpoint.get("event"),
+            "timing": checkpoint.get("timing"),
+            "resource": checkpoint.get("resource"),
+        }
+        add(checkpoint.get("depth"), "depth", identity)
+        add(checkpoint.get("stencil"), "stencil", identity)
+        for key in ("file", "reference_file"):
+            add(checkpoint.get(key), "color", identity) if isinstance(
+                checkpoint.get(key), str) else None
     frame = trace.get("frame") or {}
     reference = frame.get("reference")
     if isinstance(reference, str) and reference:
-        add({Path(reference).name}, {"kind": "final_reference"})
-    return expected
+        entries.append({
+            "file": Path(reference).name,
+            "sha256": frame.get("reference_sha256"),
+            "role": "final_reference",
+            "identity": {"kind": "final_reference"},
+        })
+    return entries
 
 
-def replay_input_overlap(trace: dict) -> list[dict]:
-    """Expected outputs whose bytes remain available as renderer inputs."""
+def _input_blob_entries(events, frame_dir: Path | None) -> list[dict]:
+    entries = []
+    for name in sorted(event_input_blob_names(events)):
+        entry = {"file": name, "sha256": None}
+        if frame_dir is not None:
+            path = Path(frame_dir) / "blobs" / name
+            if path.is_file():
+                entry["sha256"] = _sha256(path)
+        entries.append(entry)
+    return entries
+
+
+def replay_input_overlap(trace: dict,
+                         frame_dir: Path | str | None = None) -> list[dict]:
+    """Expected outputs whose bytes remain accessible as renderer inputs.
+
+    Matching is by content digest, not filename, so a copied payload under a
+    different name is still reported.  Every accessible expected output is
+    listed; ``affects_claim`` later depends on its role and timing.
+    """
     events = [{key: value for key, value in event.items()
                if key != "default_checkpoint"}
               for event in trace.get("_events") or []]
     expected = expected_output_blobs(trace)
-    return [
-        {"file": name, "expected_by": expected[name]}
-        for name in sorted(event_input_blob_names(events) & set(expected))
-    ]
+    overlaps = []
+    for item in _input_blob_entries(events, frame_dir):
+        digest = item.get("sha256")
+        matches = [entry for entry in expected
+                   if digest is not None and entry.get("sha256") == digest]
+        if not matches:
+            continue
+        overlaps.append({
+            "file": matches[0]["file"],
+            "input_file": item["file"],
+            "sha256": digest,
+            "expected_by": [{
+                "kind": entry["identity"]["kind"],
+                "role": entry["role"],
+                "event": entry["identity"].get("event"),
+                "timing": entry["identity"].get("timing"),
+                "resource": entry["identity"].get("resource"),
+            } for entry in matches],
+        })
+    return overlaps
 
 
 def materialize_replay_input(frame_dir: Path | str, trace: dict,
                              destination: Path | str) -> dict:
     """Create a replay input frame without expected output pixels.
 
-    The sanitized event representation is built first, then its blob allowlist
-    is derived from that representation.  Expected outputs (observations,
-    default checkpoints, final reference) are never copied, even if their
-    content-addressed name matches an input.  Any unavoidable overlap is
-    reported explicitly instead of silently certifying the output.
+    The sanitized event representation is built first, then its explicit input
+    inventory is derived from that representation.  Expected outputs are never
+    copied, even when the same bytes are available under another input name;
+    overlap is reported by content digest.
     """
     frame_dir = Path(frame_dir).resolve()
     destination = Path(destination).resolve()
@@ -350,8 +414,7 @@ def materialize_replay_input(frame_dir: Path | str, trace: dict,
         sanitized_events.append({key: value for key, value in event.items()
                                  if key != "default_checkpoint"})
     inputs = event_input_blob_names(sanitized_events)
-    expected = expected_output_blobs(trace)
-    shared = sorted(inputs & set(expected))
+    overlap = replay_input_overlap(trace, frame_dir)
     destination.mkdir(parents=True, exist_ok=True)
     blobs = destination / "blobs"
     blobs.mkdir(exist_ok=True)
@@ -365,21 +428,28 @@ def materialize_replay_input(frame_dir: Path | str, trace: dict,
     for key in ("prefix", "default_checkpoint_events",
                 "default_checkpoint_count", "default_checkpoint_event"):
         manifest.pop(key, None)
+    frame_info = manifest.get("frame")
+    if isinstance(frame_info, dict):
+        # The candidate does not need expected-reference paths or digests.
+        manifest["frame"] = {
+            key: value for key, value in frame_info.items()
+            if key not in ("reference", "reference_file", "reference_bytes",
+                           "reference_sha256")
+        }
     (destination / "frame-events.jsonl").write_text(
         "".join(json.dumps(event, sort_keys=True) + "\n"
                 for event in sanitized_events))
     (destination / "frame-trace.json").write_text(
         json.dumps(manifest, indent=2) + "\n")
+    expected = expected_output_blobs(trace)
     return {
         "frame_dir": str(destination),
         "blob_count": len(inputs),
         "event_count": len(sanitized_events),
         "excluded": ["frame-reference", "default-checkpoint", "observation"],
-        "expected_only_blobs": len(set(expected) - inputs),
-        "shared_input_outputs": [
-            {"file": name, "expected_by": expected[name]}
-            for name in shared
-        ],
+        "expected_only_blobs": len([entry for entry in expected
+                                    if entry["file"] not in inputs]),
+        "shared_input_outputs": overlap,
     }
 
 

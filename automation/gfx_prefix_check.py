@@ -519,6 +519,13 @@ def _isolated_replay_command(host: Path, argv: list[str],
         raise PrefixCheckError(
             "candidate reference isolation is unavailable: sandbox-exec not "
             "found")
+    probe = subprocess.run(
+        [sandbox, "-p", "(version 1)(allow default)", "/usr/bin/true"],
+        capture_output=True, text=True, check=False, timeout=30)
+    if probe.returncode != 0:
+        raise PrefixCheckError(
+            "candidate reference isolation is unavailable: sandbox-exec "
+            "preparation probe failed")
     profile = _sandbox_profile(protected_paths)
     return [sandbox, "-p", profile, str(host), *argv]
 
@@ -614,6 +621,11 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         if candidate_sidecar is None:
             raise PrefixCheckError(
                 "trusted candidate execution requires an explicit sidecar")
+        present = [Path(path) for path in (protected_paths or [])
+                   if Path(path).exists()]
+        if not present or frame_dir not in [path.resolve() for path in present]:
+            raise PrefixCheckError(
+                "candidate reference isolation has no protected reference path")
         candidate = verify_candidate(Path(candidate_workspace),
                                      Path(candidate_sidecar))
         before = _candidate_source_digests(Path(candidate["workspace"]))
@@ -699,6 +711,7 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
                      for path in (protected_paths or [])]
         isolation = {
             "mechanism": "seatbelt",
+            "reference_roots": protected,
             "protected_paths": protected,
             "profile_sha256": hashlib.sha256(
                 _sandbox_profile(protected_paths or []).encode()).hexdigest()
@@ -808,13 +821,25 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     except (m6_frame.FrameError, OSError, ValueError) as exc:
         problems.append(f"sealed frame is not usable: {exc}")
         return _invalid_result(result, problems, status="invalid")
-    overlap = m6_frame.replay_input_overlap(trace)
+    overlap = m6_frame.replay_input_overlap(trace, frame_dir)
     result["shared_input_outputs"] = overlap
-    result["evidence_limitations"] = [
-        f"output {item['file']} is also a renderer input; its bytes cannot be "
-        "independently attributed to the candidate renderer"
-        for item in overlap
-    ]
+    result["evidence_limitations"] = []
+    for item in overlap:
+        roles = ", ".join(sorted({
+            f"{entry['kind']}:{entry.get('role')}"
+            for entry in item.get("expected_by") or []
+        }))
+        result["evidence_limitations"].append(
+            f"expected payload {item['file']} is accessible as renderer input "
+            f"{item['input_file']} ({roles}); its bytes cannot be independently "
+            "attributed")
+    shared_files = {
+        item["file"] for item in overlap
+        if any(entry.get("kind") == "observation"
+               and entry.get("role") == "color"
+               and entry.get("timing") == "post_event"
+               for entry in item.get("expected_by") or [])
+    }
     provenance = gfx_observation.authority(trace, seal)
     trusted_authority = trusted_record is not None
     if provenance == "authentic" and not trusted_authority:
@@ -1009,7 +1034,6 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     _require(validation.get("status") == "ok", problems,
              "checkpoint reconciliation reported invalid evidence")
 
-    shared_files = {item["file"] for item in overlap}
     sealed = {int(record["event"]): record
               for record in prefix.get("post_events") or []}
     excluded = {int(event) for event in prefix.get("excluded_events") or []}
@@ -1128,16 +1152,16 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
         scope_events = set(selection)
     affected = set()
     for item in overlap:
-        for identity in item.get("expected_by") or []:
-            if identity.get("kind") == "observation":
-                affected.add(identity.get("event"))
-            elif identity.get("kind") == "final_reference":
-                scope_events.add(-1)
+        for entry in item.get("expected_by") or []:
+            if (entry.get("kind") == "observation"
+                    and entry.get("role") == "color"
+                    and entry.get("timing") == "post_event"):
+                affected.add(entry.get("event"))
     result["independent_equality"] = not (affected & scope_events)
     if not result["independent_equality"]:
         result["evidence_limitations"].append(
-            "one or more compared outputs are also renderer inputs; the pixel "
-            "match is not independently attributable")
+            "one or more compared post-event colour outputs are also renderer "
+            "inputs; the pixel match is not independently attributable")
     result["problems_count"] = len(problems)
     return result
 

@@ -540,6 +540,64 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertEqual(divergent["first_divergence"], 120)
         self.assertIsNone(divergent["verified_prefix"])
 
+    def test_selected_late_cube_compressed_inputs_use_common_checker(self):
+        directory = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        result = subprocess.run(
+            [str(self.binary), "prefix-late", str(directory)],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        events_path = directory / "frame-events.jsonl"
+        seal_path = directory / "frame-seal.json"
+        manifest_path = directory / "frame-trace.json"
+        events = [json.loads(line) for line in
+                  events_path.read_text().splitlines() if line.strip()]
+        face = b"cube-face-payload" * 2
+        compressed = b"compressed-block" * 2
+        face_sha = hashlib.sha256(face).hexdigest()
+        compressed_sha = hashlib.sha256(compressed).hexdigest()
+        (directory / "blobs" / "cube-face.bin").write_bytes(face)
+        (directory / "blobs" / "compressed.dxt").write_bytes(compressed)
+        events[129]["textures"] = [{
+            "unit": 0, "sampler_name": "tex0", "target": "CUBE",
+            "name": 77, "width": 4, "height": 4,
+            "internal_format": "COMPRESSED_DXT1_ALPHA",
+            "sampler": {"min": "0x2601", "mag": "0x2601",
+                        "wrap_s": "0x812f", "wrap_t": "0x812f"},
+            "levels": [{
+                "level": 0, "width": 4, "height": 4,
+                "pixel_format": "DXT1_ALPHA", "bytes": len(compressed),
+                "file": "compressed.dxt", "sha256": compressed_sha,
+                "faces": [{"face": 0, "file": "cube-face.bin",
+                           "sha256": face_sha, "bytes": len(face)}],
+            }],
+        }]
+        events_path.write_text(
+            "".join(json.dumps(event, sort_keys=True) + "\n"
+                    for event in events))
+        trace = m6_frame.load_trace(directory, verify_blobs=True)
+        materialized = m6_frame.materialize_replay_input(
+            directory, trace, Path(tempfile.mkdtemp(dir=self.temporary.name)))
+        copied = {path.name for path in
+                  (Path(materialized["frame_dir"]) / "blobs").iterdir()}
+        self.assertIn("cube-face.bin", copied)
+        self.assertIn("compressed.dxt", copied)
+        manifest = json.loads(manifest_path.read_text())
+        seal = json.loads(seal_path.read_text())
+        seal.update({
+            "event_stream_bytes": events_path.stat().st_size,
+            "event_stream_sha256": _sha(events_path),
+            "manifest_sha256": _sha(manifest_path),
+        })
+        seal_path.write_text(json.dumps(seal, indent=2) + "\n")
+        metal = Path(tempfile.mkdtemp(dir=self.temporary.name)) / "metal"
+        self._metal_fixture(directory, metal)
+        evaluated = gfx_prefix_check.evaluate(directory, metal)
+        self.assertEqual(evaluated["verdict"], "EXACT_SELECTION",
+                         evaluated["problems"])
+        self.assertFalse(evaluated["exact"])
+        self.assertIsNone(evaluated["verified_prefix"])
+        self.assertEqual(evaluated["verified_events"], [118, 120, 129])
+
     def test_legacy_embedded_observation_manifest_is_readable(self):
         frame, _metal = self._fixture()
         manifest = json.loads((frame / "frame-trace.json").read_text())
@@ -577,6 +635,35 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "EXACT_PREFIX", result["problems"])
         self.assertEqual(result["evidence"]["authority"], "derived")
         self.assertFalse(result["exact"] is False)
+
+    def test_shared_post_event_colour_output_disables_independence(self):
+        frame, metal = self._fixture()
+        fake = [{
+            "file": "prefix-color-shared.bin", "input_file": "tex-input.bin",
+            "sha256": "0" * 64,
+            "expected_by": [{"kind": "observation", "role": "color",
+                             "event": 0, "timing": "post_event",
+                             "resource": "fb:0"}]}]
+        with mock.patch.object(m6_frame, "replay_input_overlap",
+                               return_value=fake):
+            result = self._evaluate(frame, metal)
+        self.assertFalse(result["independent_equality"])
+        self.assertTrue(any("not independently attributable" in problem
+                            for problem in result["evidence_limitations"]))
+
+    def test_final_reference_overlap_is_reported_but_does_not_downgrade(self):
+        frame, metal = self._fixture()
+        fake = [{
+            "file": "frame-reference.bgra", "input_file": "tex-input.bin",
+            "sha256": "0" * 64,
+            "expected_by": [{"kind": "final_reference",
+                             "role": "final_reference", "event": None,
+                             "timing": None, "resource": None}]}]
+        with mock.patch.object(m6_frame, "replay_input_overlap",
+                               return_value=fake):
+            result = self._evaluate(frame, metal)
+        self.assertTrue(result["independent_equality"])
+        self.assertTrue(result["shared_input_outputs"])
 
     def test_authentic_authority_requires_pinned_trusted_evidence(self):
         frame, metal = self._fixture()
@@ -758,6 +845,36 @@ class Event20PrefixTests(unittest.TestCase):
             result["problems"])
         self.assertIn(result["events"][20]["status"], {"missing", "invalid"})
 
+    def test_missing_metal_output_file_is_incomplete(self):
+        frame, metal = self._fixture()
+        path = self._event_file(metal, 5)
+        path.unlink()
+        result = self._evaluate(frame, metal)
+        self.assertEqual(result["verdict"], "INCOMPLETE_EVIDENCE")
+        self.assertIn(result["events"][5]["status"], {"missing", "invalid"})
+
+    def test_wrong_resource_identity_is_invalid(self):
+        frame, metal = self._fixture()
+        replay_path = metal / "replay.json"
+        replay = json.loads(replay_path.read_text())
+        replay["checkpoints"][0]["resource"] = "tex:999"
+        replay_path.write_text(json.dumps(replay, indent=2) + "\n")
+        result = self._evaluate(frame, metal)
+        self.assertEqual(result["verdict"], "INCOMPLETE_EVIDENCE")
+        self.assertTrue(any("resource" in problem
+                            for problem in result["problems"]),
+                        result["problems"])
+
+    def test_absent_trusted_evidence_is_invalid(self):
+        frame, metal = self._fixture()
+        missing = frame.parent / "missing-trusted"
+        result = gfx_prefix_check.evaluate(
+            frame, metal, require_end=20, trusted_root=missing)
+        self.assertEqual(result["verdict"], "INCOMPLETE_EVIDENCE")
+        self.assertTrue(any("trusted evidence" in problem
+                            for problem in result["problems"]),
+                        result["problems"])
+
     def test_observation_from_another_seal_is_rejected(self):
         frame, metal = self._fixture()
         receipt_path = metal / "shader-receipt.json"
@@ -835,6 +952,8 @@ class CandidateEnvironmentTests(unittest.TestCase):
             self.assertEqual(environment["HOME"], str(Path(temporary) / "home"))
 
 
+@unittest.skipUnless(sys.platform == "darwin",
+                     "compiled Metal candidate boundary is macOS-only")
 class CandidateTrustBoundaryTests(unittest.TestCase):
     """The compiled candidate executes without expected reference pixels."""
 
@@ -984,6 +1103,10 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
         execution_dir = Path(result["execution_dir"])
         self.assertFalse((execution_dir / "metal" / "attack-succeeded").exists())
         replay_input = execution_dir / "replay-input"
+        replay_manifest = json.loads(
+            (replay_input / "frame-trace.json").read_text())
+        self.assertNotIn("reference", replay_manifest["frame"])
+        self.assertNotIn("reference_sha256", replay_manifest["frame"])
         observation = next(record for record in
                            [json.loads(line) for line in
                             (self.frame / "prefix-observations.jsonl")
@@ -1048,6 +1171,7 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
         self._assert_patch_built(result, workspace)
         isolation = result["execution"]["reference_isolation"]
         self.assertEqual(isolation["mechanism"], "seatbelt")
+        self.assertTrue(isolation["profile_sha256"])
         self.assertTrue(any(str(self.trusted_root.resolve()) == path
                             for path in isolation["protected_paths"]))
         execution = Path(result["execution_dir"])

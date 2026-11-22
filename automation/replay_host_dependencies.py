@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +47,8 @@ BUILD_ENV_KEYS = (
 _LOCAL_INCLUDE = re.compile(
     r'^\s*#\s*(?:include|import)\s+"([^"]+)"', re.MULTILINE)
 _COMPILER_CACHE: dict[tuple[str, int], dict] = {}
+_COMPILER_DEP_CACHE: dict[tuple[str, int, str], tuple[list[Path],
+                                                      list[tuple[str, int]]]] = {}
 _BUILD_ENVIRONMENT_KEYS = (
     "PATH", "HOME", "TMPDIR", "SDKROOT", "MACOSX_DEPLOYMENT_TARGET",
     "ARCHFLAGS", "DEVELOPER_DIR", "LANG", "LC_ALL",
@@ -89,9 +92,63 @@ def _system_dependency(path: Path) -> bool:
                for root in roots if Path(root).exists())
 
 
+def _native_dependency_scan() -> bool:
+    return sys.platform == "darwin" and shutil.which("clang") is not None
+
+
+def _quoted_dependency_paths(source: Path, root: Path, *,
+                             strict: bool) -> list[Path]:
+    """Portable fallback closure for non-native hosts.
+
+    This is intentionally a quoted-include scan, not a claim of macOS compiler
+    provenance.  ``build_identity`` records that distinction explicitly.
+    """
+    pending = [source]
+    closure: list[Path] = []
+    seen: set[Path] = set()
+    while pending:
+        path = pending.pop()
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not resolved.is_file():
+            continue
+        seen.add(resolved)
+        closure.append(resolved)
+        try:
+            text = resolved.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in _LOCAL_INCLUDE.finditer(text):
+            candidate = (resolved.parent / match.group(1)).resolve()
+            if not candidate.is_file():
+                candidate = (root / "benchmark" / match.group(1)).resolve()
+            if (candidate.is_file()
+                    and (_relative(candidate, root) is not None
+                         or _system_dependency(candidate))):
+                pending.append(candidate)
+            elif strict:
+                raise OSError(
+                    f"unattested source include {match.group(1)!r} in "
+                    f"{_relative(resolved, root) or resolved}")
+    return closure
+
+
 def _compiler_dependencies(path: Path, compiler: str | None) -> list[Path]:
     """Ask the compiler for one source's non-system dependency closure."""
     compiler_path = compiler_identity(compiler)["path"] or compiler or "clang"
+    try:
+        source_mtime = path.stat().st_mtime_ns
+    except OSError:
+        source_mtime = 0
+    key = (str(path.resolve()), source_mtime, compiler_path)
+    cached = _COMPILER_DEP_CACHE.get(key)
+    if cached is not None:
+        dependencies, stamps = cached
+        if all(Path(item).stat().st_mtime_ns == stamp
+               for item, stamp in stamps if Path(item).is_file()):
+            return dependencies
     completed = subprocess.run(
         [compiler_path, "-arch", "arm64", "-fobjc-arc", "-MM", "-MT", "dep",
          str(path)],
@@ -120,6 +177,9 @@ def _compiler_dependencies(path: Path, compiler: str | None) -> list[Path]:
                 token = ""
         else:
             token += character
+    stamps = [(str(item), item.stat().st_mtime_ns if item.is_file() else -1)
+              for item in result]
+    _COMPILER_DEP_CACHE[key] = (result, stamps)
     return result
 
 
@@ -157,7 +217,10 @@ def dependency_paths(root: Path | str = ROOT,
                     raise OSError(
                         f"unattested source include {match.group(1)!r} in "
                         f"{_relative(source, root) or source}")
-        for dependency in [source, *_compiler_dependencies(source, compiler)]:
+        deps = (_compiler_dependencies(source, compiler)
+                if _native_dependency_scan()
+                else _quoted_dependency_paths(source, root, strict=strict))
+        for dependency in [source, *deps]:
             try:
                 resolved = dependency.resolve()
             except OSError:
@@ -232,6 +295,9 @@ def build_identity(root: Path | str = ROOT, sources=REPLAY_SOURCES,
     environment = build_environment()
     value = {
         "schema": "gfx-replay-host-build-identity/v1",
+        "platform": sys.platform,
+        "dependency_authority": ("compiler" if _native_dependency_scan()
+                                 else "quoted-include"),
         "dependencies": dependencies,
         "compiler": compiler_identity(compiler),
         "flags": list(flags),

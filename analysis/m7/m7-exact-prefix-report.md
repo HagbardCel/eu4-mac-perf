@@ -100,8 +100,8 @@ The checker materializes a **reference-free replay input** for the candidate.
 The sanitized event representation is built first (removing
 `default_checkpoint`), and the blob allowlist is an explicit inventory of the
 paths the replay consumes (`seed`, `pre_image`, `source_image`, attributes,
-indices, shaders, uniforms and texture levels), not a recursive copy of every
-object containing a `file` key. Final reference images, default-checkpoint images and
+indices, shaders, uniforms, uncompressed/compressed texture levels and cube
+faces), not a recursive copy of every object containing a `file` key. Final reference images, default-checkpoint images and
 observation payloads are omitted even when their content-addressed name
 collides with an input; the shader translation runs in trusted infrastructure
 and supplies only translated shader artifacts. Overlap is reported as
@@ -109,14 +109,24 @@ and supplies only translated shader artifacts. Overlap is reported as
 `independent_equality=false` when a compared output is also a renderer input.
 The M7 acceptance adapter requires `independent_equality=true` before a pass.
 
+Overlap is compared by SHA-256 content, not filename.  A post-event colour
+payload that is accessible under any input name disables
+`independent_equality`; initial observations, depth/stencil diagnostics,
+default checkpoints and the final reference are reported but do not affect the
+colour-equality claim.  The final-reference entry is an explicit role, not a
+sentinel event index.
+
 The candidate replay is wrapped in the platform's existing Seatbelt mechanism
 (`sandbox-exec`). The profile denies reads and writes of the trusted frame,
 trusted-evidence root and original capture directory. If Seatbelt is
 unavailable, candidate execution is refused rather than run without isolation.
 The execution record names the mechanism and protected paths. Compiler
-dependency closure is taken from `clang -MM`, with all non-system includes
-required to reside in the attested snapshot; the build environment is a fixed
-allowlist that drops `CPATH`, `DYLD_*`, `LD_*` and related injection variables.
+dependency closure is taken from `clang -MM` on macOS, with all non-system
+includes required to reside in the attested snapshot.  On non-macOS hosts the
+existing quoted-include closure is used for portable identity and is labelled
+`dependency_authority=quoted-include`, so it is never presented as verified
+macOS compiler provenance.  The build environment is a fixed allowlist that
+drops `CPATH`, `DYLD_*`, `LD_*` and related injection variables.
 
 The candidate still controls the native renderer and its GPU readback loop.
 This is an input-separation boundary, **not a sandbox**: arbitrary native
@@ -264,8 +274,8 @@ under `.local/m7/event20/case-prefix` and is regenerable with
   `EXACT_SELECTION`, never `EXACT_PREFIX`.
 * Legacy seal re-evaluation (offline, existing Metal outputs): unchanged
   `FIRST_DIVERGENCE` at event 1, prefix `[0, 0]`, authentic authority.
-* Final offline gate `20261122T121121Z-83ca142e`: 4,470 ran / 4,434 executed /
-  36 skipped / 0 failures / 0 errors, 849.2 s (skips are pre-existing
+* Final offline gate `20261122T131015Z-1bcc7dfe`: 4,479 ran / 4,443 executed /
+  36 skipped / 0 failures / 0 errors, 1,437.8 s (skips are pre-existing
   environment-gated suites, not the compiled-candidate tests).
 
 ### Candidate bypass results
