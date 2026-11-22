@@ -43,10 +43,10 @@ combine observations from another seal.  Do not edit the checker,
    first confirmed divergence. They are separate observations.
 2. Run the synthetic drawable-format observer and the focused offline tests.
    Do not launch EU4 if the observer is incomplete or the prefix tests fail.
-3. This campaign is `autonomous_reconstruction`: it cannot launch EU4. Live
-   capture is a separate, operator-controlled preparation stage in a
-   `controlled_capture` campaign, with one operator-issued authorization per
-   launch. If the existing evidence is insufficient, stop with
+3. Live capture is a separate, operator-controlled preparation stage: an
+   `autonomous_reconstruction` campaign must not launch EU4, and a
+   `controlled_capture` campaign may launch only with an operator-issued
+   one-use authorization. If the existing evidence is insufficient, stop with
    `requires_additional_evidence` and name the exact capture request (caller
    set, prefix scope, required observations) for the operator; do not attempt a
    capture from this objective and never construct a custom launcher or bypass

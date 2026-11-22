@@ -22,7 +22,7 @@ do not describe the current policy.
 | --- | --- |
 | Tracked sidecar | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-autonomy-offline.json` |
 | Campaign state (new, fresh) | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator-offline.json` |
-| Run root | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1` |
+| Campaign run root (sidecar `run_root`) | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-autonomy-offline/run` |
 | Candidate workspace | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-autonomy-offline/workspace` |
 | Trusted reference | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/trusted/offline-b` |
 | Checker outputs | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1` |
@@ -43,7 +43,8 @@ set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
 set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
 set -l STATE $REPO/.local/m7/autonomy-offline/state-operator-offline.json
 set -l SIDECAR $REPO/dsh/campaigns/m7-autonomy-offline.json
-set -l RUN $REPO/.local/m7/autonomy-offline/run/operator-1
+set -l RUN $REPO/.local/dsh/m7-autonomy-offline/run
+set -l CHECKER $REPO/.local/m7/autonomy-offline/run/operator-1
 set -l WS $REPO/.local/dsh/m7-autonomy-offline/workspace
 set -l TRUSTED $REPO/.local/m7/autonomy-offline/trusted/offline-b
 cd $REPO
@@ -58,7 +59,7 @@ $PY -c 'from automation import campaign_guard; g = campaign_guard.from_env(); pr
 
 # 2. Fresh state and run root: both must be absent for a new campaign.
 test -f $STATE; and echo "STATE EXISTS - pick a new suffix before launch"; or echo "state is fresh"
-test -d $RUN; and echo "RUN ROOT EXISTS - pick a new suffix before launch"; or echo "run root is fresh"
+test -d $CHECKER; and echo "CHECKER ROOT EXISTS - pick a new suffix before launch"; or echo "checker root is fresh"
 
 # 3. Seed defect and clean candidate worktree.
 git -C $WS rev-parse HEAD
@@ -88,11 +89,11 @@ set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
 set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
 set -l STATE $REPO/.local/m7/autonomy-offline/state-operator-offline.json
 set -l SIDECAR $REPO/dsh/campaigns/m7-autonomy-offline.json
-set -l RUN $REPO/.local/m7/autonomy-offline/run/operator-1
+set -l CHECKER $REPO/.local/m7/autonomy-offline/run/operator-1
 
 env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=$PY \
     EU4_CAMPAIGN_STATE=$STATE \
-    EU4_M7_AUTONOMY_RUN_DIR=$RUN \
+    EU4_M7_AUTONOMY_RUN_DIR=$CHECKER \
     $REPO/dsh/scripts/run.sh \
       --campaign $SIDECAR \
       --campaign-state $STATE \
@@ -122,12 +123,13 @@ Do not add budget, round or correction limits to the goal.
 set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
 set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
 set -l STATE $REPO/.local/m7/autonomy-offline/state-operator-offline.json
-set -l RUN $REPO/.local/m7/autonomy-offline/run/operator-1
+set -l RUN $REPO/.local/dsh/m7-autonomy-offline/run
+set -l CHECKER $REPO/.local/m7/autonomy-offline/run/operator-1
 
 $PY -m automation.campaign_guard status --state $STATE
 cat $RUN/sessions/*/validations.jsonl 2>/dev/null | tail -10
 find $RUN -name experiment-rationale.json -maxdepth 4 2>/dev/null | tail -5
-find $RUN -name 'trusted-execution.json' -maxdepth 5 2>/dev/null | tail -3
+find $CHECKER -name 'trusted-execution.json' -maxdepth 5 2>/dev/null | tail -3
 ls -lt ~/.local/share/eu4-dsh/logs | head
 ls -lt ~/.local/share/eu4-dsh/sessions | head
 ```
