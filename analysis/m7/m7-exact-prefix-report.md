@@ -96,13 +96,25 @@ digests, immutable copied reference outside the candidate workspace,
 post-execution output rehashing, and one charged replay reservation.
 Candidate-authored `replay.json`, receipts and pixels are never authority.
 
-The checker now materializes a **reference-free replay input** for the
-candidate: only the manifest, event stream and blobs the events consume as
-renderer inputs. Final reference images, default-checkpoint images and
-observation payloads are omitted; the shader translation runs in trusted
-infrastructure against the original frame and supplies only translated shader
-artifacts. The candidate also receives no `EU4_*` evidence-location
-environment and runs with its own execution directory as `cwd`.
+The checker materializes a **reference-free replay input** for the candidate.
+The sanitized event representation is built first (removing
+`default_checkpoint`), and the blob allowlist is derived from that
+representation. Final reference images, default-checkpoint images and
+observation payloads are omitted even when their content-addressed name
+collides with an input; the shader translation runs in trusted infrastructure
+and supplies only translated shader artifacts. Overlap is reported as
+`shared_input_outputs` with the affected observation/checkpoint, and
+`independent_equality=false` when a compared output is also a renderer input.
+The M7 acceptance adapter requires `independent_equality=true` before a pass.
+
+The candidate replay is wrapped in the platform's existing Seatbelt mechanism
+(`sandbox-exec`). The profile denies reads and writes of the trusted frame,
+trusted-evidence root and original capture directory. If Seatbelt is
+unavailable, candidate execution is refused rather than run without isolation.
+The execution record names the mechanism and protected paths. Compiler
+dependency closure is taken from `clang -MM`, with all non-system includes
+required to reside in the attested snapshot; the build environment is a fixed
+allowlist that drops `CPATH`, `DYLD_*`, `LD_*` and related injection variables.
 
 The candidate still controls the native renderer and its GPU readback loop.
 This is an input-separation boundary, **not a sandbox**: arbitrary native
@@ -116,11 +128,15 @@ Quoted source includes must resolve inside the candidate checkout; an absolute
 or escaping include is rejected as unattested rather than compiled from the
 host. System/SDK headers remain part of the trusted toolchain identity.
 
-Evidence of the boundary: `tests.test_m7_event20_prefix.
-CandidateTrustBoundaryTests` compiles a modified candidate whose checkpoint
-writer attempts to copy `blobs/<reference_file>`, executes it through the real
-candidate-build path, and asserts the attempt is prevented and no marker is
-written. A second test performs two validations with different candidate
+Evidence of the boundary: `CandidateTrustBoundaryTests` builds a deterministic
+replayable fixture in test preparation (no pre-existing `.local` evidence
+required) and compiles real modified candidates. Three attacks are exercised:
+copying `blobs/<reference_file>` from the sanitized replay input, reading the
+absolute trusted-reference directory, and replacing checkpoint output
+generation. Each test asserts the patch is present in the built source digest;
+the first two assert no marker is written and `independent_equality=true`; the
+interception test asserts the output marker is present and no exact verdict is
+returned. A second test performs two validations with different candidate
 revisions under one campaign root: new execution directories, new host digest,
 new pixels and new provenance.
 
@@ -232,11 +248,12 @@ under `.local/m7/event20/case-prefix` and is regenerable with
 * Focused: `tests.test_m6_frame`, `tests.test_gfx_frame_graph`,
   `tests.test_gfx_independent_replay`, `tests.test_m7_event20_prefix`,
   `tests.test_replay_host_dependencies`, `tests.test_m7_shadow_receipt` and
-  `tests.test_m7_continuous_replay`: 362+ tests, 0 failures.
-* Compiled candidate boundary: `CandidateTrustBoundaryTests` performs two real
-  candidate-source builds and Metal replays under one campaign root.  The
-  copying attack is prevented; execution directories, host digests and pixels
-  differ between revisions; translation is reused from the content cache.
+  `tests.test_m7_continuous_replay`: 0 failures, 101.3 s.
+* Compiled candidate boundary: `CandidateTrustBoundaryTests` performs real
+  candidate-source builds and Metal replays.  All three bypass attempts are
+  prevented or caught; patches are verified against the built source digest;
+  execution directories, host digests and pixels differ between revisions;
+  translation is reused from the content cache.
 * Native: `TraceStateHostTests` asserts state restoration, sentinel-error
   preservation and fail-closed unsupported draw-buffer, incomplete-framebuffer,
   cube-map and renderbuffer configurations (`observation=1 negative=1`).
@@ -245,8 +262,27 @@ under `.local/m7/event20/case-prefix` and is regenerable with
   `EXACT_SELECTION`, never `EXACT_PREFIX`.
 * Legacy seal re-evaluation (offline, existing Metal outputs): unchanged
   `FIRST_DIVERGENCE` at event 1, prefix `[0, 0]`, authentic authority.
-* Final offline gate `20261122T105458Z-321033cc`: 4,463 ran / 4,427 executed /
-  36 skipped / 0 failures / 0 errors, 759.4 s.
+* Final offline gate `20261122T113751Z-6691f830`: 4,469 ran / 4,433 executed /
+  36 skipped / 0 failures / 0 errors, 804.3 s (skips are pre-existing
+  environment-gated suites, not the compiled-candidate tests).
+
+### Candidate bypass results
+
+| Attempt | Result |
+| --- | --- |
+| Copy `blobs/<reference_file>` from the sanitized replay input | reference payload absent; no marker; patch digest bound in the build record |
+| Read the absolute trusted-reference directory | Seatbelt denies the read; no marker; execution record names `seatbelt` and the protected roots |
+| Replace checkpoint output generation | marker present, wrong/short payload, no `EXACT_PREFIX` |
+| Two revisions, one campaign root | distinct `exec-*` dirs, distinct host digests and pixels; translation cache hit |
+
+The candidate tests do not skip: the fixture is generated during test
+preparation from a real triangle draw and a trusted replay, and the source
+patch is checked against `execution.candidate.source_digests`.
+
+Historical M6 seals remain usable: `tests.test_m6_frame`,
+`tests.test_m7_shadow_receipt`, `tests.test_m7_continuous_replay` and the
+legacy-seal re-evaluation pass.  The new receipt/evidence schemas accept the
+legacy M7 names.
 
 ## Limitations
 
@@ -260,9 +296,11 @@ under `.local/m7/event20/case-prefix` and is regenerable with
   than `GL_COLOR_ATTACHMENT0`, cube/array/3D texture attachments and
   renderbuffer colour attachments. A renderbuffer is identified as `fb:<n>`,
   never as a texture that shares its numeric GL name.
-* Candidate code is not sandboxed. The boundary removes authenticated expected
-  pixels from its inputs and keeps acceptance provenance in trusted code; it
-  does not prevent arbitrary native code from fabricating plausible outputs.
+* Candidate replay is Seatbelt-isolated from the trusted frame/evidence roots,
+  but candidate code is not a general sandbox and still runs native code with
+  access to other host files.  Expected-only payloads are absent from its
+  inputs; a payload that is also a legitimate renderer input is reported and
+  cannot support an independent-equality acceptance.
 * Default-framebuffer observations rely on the drawable extent reported by the
   host hook; a context that exposes neither extent nor viewport fails closed.
 * Depth/stencil payloads are not part of the equality claim and are not

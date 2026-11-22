@@ -46,6 +46,10 @@ BUILD_ENV_KEYS = (
 _LOCAL_INCLUDE = re.compile(
     r'^\s*#\s*(?:include|import)\s+"([^"]+)"', re.MULTILINE)
 _COMPILER_CACHE: dict[tuple[str, int], dict] = {}
+_BUILD_ENVIRONMENT_KEYS = (
+    "PATH", "HOME", "TMPDIR", "SDKROOT", "MACOSX_DEPLOYMENT_TARGET",
+    "ARCHFLAGS", "DEVELOPER_DIR", "LANG", "LC_ALL",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -63,60 +67,126 @@ def _relative(path: Path, root: Path) -> str | None:
         return None
 
 
+def build_environment() -> dict[str, str]:
+    """Fixed build environment: no unrecorded include/library injection."""
+    return {key: os.environ[key] for key in _BUILD_ENVIRONMENT_KEYS
+            if key in os.environ}
+
+
+def _system_dependency(path: Path) -> bool:
+    """True for toolchain/SDK files that are covered by compiler identity."""
+    roots = ["/usr", "/System", "/Library/Developer", "/Applications",
+             "/opt/homebrew", "/opt/local"]
+    sdk = os.environ.get("SDKROOT")
+    if sdk:
+        roots.append(sdk)
+    compiler = compiler_identity()["path"]
+    if compiler:
+        roots.append(str(Path(compiler).parent))
+    resolved = path.resolve()
+    return any(resolved == Path(root).resolve()
+               or Path(root).resolve() in resolved.parents
+               for root in roots if Path(root).exists())
+
+
+def _compiler_dependencies(path: Path, compiler: str | None) -> list[Path]:
+    """Ask the compiler for one source's non-system dependency closure."""
+    compiler_path = compiler_identity(compiler)["path"] or compiler or "clang"
+    completed = subprocess.run(
+        [compiler_path, "-arch", "arm64", "-fobjc-arc", "-MM", "-MT", "dep",
+         str(path)],
+        capture_output=True, text=True, check=False, timeout=120,
+        env=build_environment())
+    if completed.returncode != 0:
+        raise OSError(
+            (completed.stderr or completed.stdout or
+             "compiler dependency scan failed").strip()[-2000:])
+    text = completed.stdout.replace("\\\n", " ")
+    if ":" not in text:
+        raise OSError("compiler dependency output has no rule")
+    dependencies = text.split(":", 1)[1]
+    result: list[Path] = []
+    token = ""
+    escaped = False
+    for character in dependencies + " ":
+        if escaped:
+            token += character
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character.isspace():
+            if token:
+                result.append(Path(token))
+                token = ""
+        else:
+            token += character
+    return result
+
+
 def dependency_paths(root: Path | str = ROOT,
                      sources=REPLAY_SOURCES,
-                     *, strict: bool = False) -> dict[str, Path]:
-    """Return the source/header closure keyed by checkout-relative path.
+                     *, strict: bool = False,
+                     compiler: str | None = None) -> dict[str, Path]:
+    """Return the compiler-reported non-system dependency closure.
 
-    ``strict`` is used for a candidate build: every quoted include must resolve
-    inside the candidate checkout.  An absolute or escaping include otherwise
-    compiles from the host filesystem and is not covered by the snapshot/file
-    digests.
+    The compiler is the authority: a quoted include that escapes the checkout
+    is rejected in strict mode instead of compiling from the host filesystem.
+    The optional quoted-include scanner is no longer a separate authority.
     """
     root = Path(root).resolve()
-    bench = root / "benchmark"
     seen: dict[Path, str] = {}
-    pending = [Path(item) if Path(item).is_absolute() else root / item
-               for item in sources]
-    while pending:
-        path = pending.pop()
-        try:
-            path = path.resolve()
-        except OSError:
-            continue
-        if path in seen or not path.is_file():
-            continue
-        relative = _relative(path, root)
-        if relative is None:
-            continue
-        seen[path] = relative
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for match in _LOCAL_INCLUDE.finditer(text):
-            candidate = (path.parent / match.group(1)).resolve()
-            if not candidate.is_file():
-                candidate = (bench / match.group(1)).resolve()
-            relative_include = (_relative(candidate, root)
-                                if candidate.is_file() else None)
-            if relative_include is not None:
-                pending.append(candidate)
-            elif strict:
-                raise OSError(
-                    f"unattested source include {match.group(1)!r} in "
-                    f"{_relative(path, root) or path}")
+    for item in sources:
+        source = Path(item) if Path(item).is_absolute() else root / item
+        if not source.is_file():
+            raise OSError(f"replay source is absent: {source}")
+        if strict:
+            # Explicit guard so an absolute/escaping quoted include fails with a
+            # dependency error before the compiler reads the host file.  The
+            # compiler output below remains the closure authority.
+            try:
+                text = source.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+            for match in _LOCAL_INCLUDE.finditer(text):
+                candidate = (source.parent / match.group(1)).resolve()
+                if not candidate.is_file():
+                    candidate = (root / "benchmark" / match.group(1)).resolve()
+                if (candidate.is_file()
+                        and _relative(candidate, root) is None
+                        and not _system_dependency(candidate)):
+                    raise OSError(
+                        f"unattested source include {match.group(1)!r} in "
+                        f"{_relative(source, root) or source}")
+        for dependency in [source, *_compiler_dependencies(source, compiler)]:
+            try:
+                resolved = dependency.resolve()
+            except OSError:
+                continue
+            relative = _relative(resolved, root)
+            if relative is None:
+                if _system_dependency(resolved):
+                    continue
+                if strict:
+                    raise OSError(
+                        "unattested source dependency outside the checkout: "
+                        f"{resolved}")
+                continue
+            if not resolved.is_file():
+                if strict:
+                    raise OSError(f"source dependency is absent: {resolved}")
+                continue
+            seen[resolved] = relative
     return {relative: path for path, relative in sorted(
         seen.items(), key=lambda item: item[1])}
 
 
 def relative_dependencies(root: Path | str = ROOT,
-                          sources=REPLAY_SOURCES, *, strict: bool = False
-                          ) -> dict[str, str]:
+                          sources=REPLAY_SOURCES, *, strict: bool = False,
+                          compiler: str | None = None) -> dict[str, str]:
     """Hash the authoritative dependency closure."""
     return {relative: _sha256(path)
             for relative, path in dependency_paths(
-                root, sources, strict=strict).items()}
+                root, sources, strict=strict, compiler=compiler).items()}
 
 
 def compiler_identity(compiler: str | None = None) -> dict:
@@ -157,9 +227,9 @@ def build_identity(root: Path | str = ROOT, sources=REPLAY_SOURCES,
     """Hash all inputs that can change the replay-host binary."""
     flags = BUILD_FLAGS if flags is None else flags
     root = Path(root).resolve()
-    dependencies = relative_dependencies(root, sources, strict=strict)
-    environment = {key: os.environ.get(key)
-                   for key in BUILD_ENV_KEYS if os.environ.get(key) is not None}
+    dependencies = relative_dependencies(root, sources, strict=strict,
+                                         compiler=compiler)
+    environment = build_environment()
     value = {
         "schema": "gfx-replay-host-build-identity/v1",
         "dependencies": dependencies,
@@ -213,9 +283,10 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
         raise OSError("snapshot is missing a replay translation unit")
     compiler_info = compiler_identity(compiler)
     command = build_command(output, sources, compiler=compiler)
+    build_env = environment or build_environment()
     completed = subprocess.run(
         command, capture_output=True, text=True, check=False,
-        timeout=timeout, env=environment)
+        timeout=timeout, env=build_env)
     if completed.returncode != 0:
         raise OSError(
             (completed.stderr or completed.stdout or
@@ -227,9 +298,7 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
         "command": command,
         "compiler": compiler_info,
         "flags": list(BUILD_FLAGS),
-        "environment": {key: os.environ.get(key)
-                        for key in BUILD_ENV_KEYS
-                        if os.environ.get(key) is not None},
+        "environment": build_env,
         "source_root": str(snapshot_root),
         "source_files": sorted(identity["dependencies"]),
         "source_digests": identity["dependencies"],

@@ -37,6 +37,14 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     """Copy events 0..end and every referenced blob into a derived frame."""
     frame_dir = Path(frame_dir).expanduser().resolve()
     destination = Path(destination).expanduser().resolve()
+    if (destination == frame_dir
+            or destination in frame_dir.parents
+            or frame_dir in destination.parents):
+        raise PrefixCaseError(
+            "derived case destination overlaps the source frame")
+    if destination.exists():
+        raise PrefixCaseError(
+            "derived case destination already exists; choose a new path")
     if end < 0:
         raise PrefixCaseError("prefix end must be non-negative")
     seal = m6_frame.load_seal(frame_dir)
@@ -56,8 +64,6 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     initial = prefix["initial"]
     if len(post) != end + 1:
         raise PrefixCaseError("prefix observations are not contiguous")
-    if destination.exists():
-        shutil.rmtree(destination)
     (destination / "blobs").mkdir(parents=True)
     blob_names = m6_frame.event_blob_names(selected)
     for record in [initial, *post]:

@@ -242,32 +242,87 @@ def event_blob_names(events) -> set[str]:
     return names
 
 
+def _record_blob_names(record) -> set[str]:
+    return {Path(member["file"]).name
+            for member in iter_blob_members(record)
+            if isinstance(member.get("file"), str) and member["file"]}
+
+
+def expected_output_blobs(trace: dict) -> dict[str, list[dict]]:
+    """Inventory blobs that are expected observation outputs.
+
+    These are never renderer inputs, even when a content-addressed name happens
+    to collide with an input blob.  Each entry records the observation or
+    checkpoint that expects it so an unavoidable overlap can be reported.
+    """
+    expected: dict[str, list[dict]] = {}
+
+    def add(names, identity: dict) -> None:
+        for name in names:
+            expected.setdefault(name, []).append(identity)
+
+    prefix = trace.get("_prefix") or {}
+    for record in [prefix.get("initial"), *(prefix.get("post_events") or [])]:
+        if isinstance(record, dict):
+            add(_record_blob_names(record), {
+                "kind": "observation",
+                "event": record.get("event"),
+                "timing": record.get("timing"),
+                "resource": record.get("resource"),
+            })
+    for event in trace.get("_events") or []:
+        checkpoint = event.get("default_checkpoint")
+        if isinstance(checkpoint, dict):
+            add(_record_blob_names(checkpoint), {
+                "kind": "default_checkpoint",
+                "event": checkpoint.get("event"),
+                "resource": checkpoint.get("resource"),
+            })
+    frame = trace.get("frame") or {}
+    reference = frame.get("reference")
+    if isinstance(reference, str) and reference:
+        add({Path(reference).name}, {"kind": "final_reference"})
+    return expected
+
+
+def replay_input_overlap(trace: dict) -> list[dict]:
+    """Expected outputs whose bytes remain available as renderer inputs."""
+    events = [{key: value for key, value in event.items()
+               if key != "default_checkpoint"}
+              for event in trace.get("_events") or []]
+    expected = expected_output_blobs(trace)
+    return [
+        {"file": name, "expected_by": expected[name]}
+        for name in sorted(event_blob_names(events) & set(expected))
+    ]
+
+
 def materialize_replay_input(frame_dir: Path | str, trace: dict,
                              destination: Path | str) -> dict:
     """Create a replay input frame without expected output pixels.
 
-    The candidate renderer receives only the manifest, event stream and blobs
-    that the events consume as inputs.  Final reference images, default
-    checkpoint images and observation payloads are expected outputs and are
-    deliberately absent, so candidate code cannot copy an authenticated
-    reference byte stream into a checkpoint output.
+    The sanitized event representation is built first, then its blob allowlist
+    is derived from that representation.  Expected outputs (observations,
+    default checkpoints, final reference) are never copied, even if their
+    content-addressed name matches an input.  Any unavoidable overlap is
+    reported explicitly instead of silently certifying the output.
     """
     frame_dir = Path(frame_dir).resolve()
     destination = Path(destination).resolve()
     events = trace.get("_events") or []
     if not events:
         raise FrameError("replay input frame has no events")
-    names = event_blob_names(events)
-    expected: set[str] = set()
-    prefix = trace.get("_prefix") or {}
-    for record in [prefix.get("initial"), *(prefix.get("post_events") or [])]:
-        if record:
-            expected |= event_blob_names([record])
-    shared_input_outputs = sorted(names & expected)
+    sanitized_events = []
+    for event in events:
+        sanitized_events.append({key: value for key, value in event.items()
+                                 if key != "default_checkpoint"})
+    inputs = event_blob_names(sanitized_events)
+    expected = expected_output_blobs(trace)
+    shared = sorted(inputs & set(expected))
     destination.mkdir(parents=True, exist_ok=True)
     blobs = destination / "blobs"
     blobs.mkdir(exist_ok=True)
-    for name in sorted(names):
+    for name in sorted(inputs):
         source = frame_dir / "blobs" / name
         if not source.is_file():
             raise FrameError(f"replay input blob is absent: {name}")
@@ -277,11 +332,6 @@ def materialize_replay_input(frame_dir: Path | str, trace: dict,
     for key in ("prefix", "default_checkpoint_events",
                 "default_checkpoint_count", "default_checkpoint_event"):
         manifest.pop(key, None)
-    sanitized_events = []
-    for event in events:
-        item = {key: value for key, value in event.items()
-                if key != "default_checkpoint"}
-        sanitized_events.append(item)
     (destination / "frame-events.jsonl").write_text(
         "".join(json.dumps(event, sort_keys=True) + "\n"
                 for event in sanitized_events))
@@ -289,10 +339,14 @@ def materialize_replay_input(frame_dir: Path | str, trace: dict,
         json.dumps(manifest, indent=2) + "\n")
     return {
         "frame_dir": str(destination),
-        "blob_count": len(names),
+        "blob_count": len(inputs),
         "event_count": len(sanitized_events),
         "excluded": ["frame-reference", "default-checkpoint", "observation"],
-        "shared_input_outputs": shared_input_outputs,
+        "expected_only_blobs": len(set(expected) - inputs),
+        "shared_input_outputs": [
+            {"file": name, "expected_by": expected[name]}
+            for name in shared
+        ],
     }
 
 

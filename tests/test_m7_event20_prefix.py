@@ -30,6 +30,136 @@ BENCH = ROOT / "benchmark"
 CHECKER = ROOT / "campaigns" / "eu4-m7-event20" / "accept.py"
 
 
+def build_candidate_fixture(root: Path) -> Path:
+    """Build a small deterministic replayable prefix frame for trust tests.
+
+    A real triangle draw makes the frame replayable; event 0 is a default
+    framebuffer clear and its authenticated observation is the trusted host's
+    own output for that event.  The fixture is synthetic by construction and
+    never claims original-frame authority.
+    """
+    from tests.test_m6_frame import _write_blob, build_synthetic_trace
+
+    frame = Path(root) / "frame"
+    build_synthetic_trace(frame)
+    events = [json.loads(line) for line in
+              (frame / "frame-events.jsonl").read_text().splitlines()
+              if line.strip()]
+    draw = next(event for event in events if event["kind"] == "draw")
+    clear = next(event for event in events if event["kind"] == "clear")
+    clear["target"] = {"framebuffer": 0, "width": 4, "height": 3,
+                       "viewport": [0, 0, 4, 3]}
+    clear["flags"] = 1
+    clear["color"] = [0.25, 0.5, 0.75, 1.0]
+    vertex = (b"#version 120\nattribute vec3 in_POSITION;\n"
+              b"void main(){gl_Position=vec4(in_POSITION,1.0);}\n")
+    pixel = (b"#version 120\nvoid main(){gl_FragColor=vec4(1.0,0.0,0.0,1.0);}\n")
+    vertex_member = _write_blob(frame, "vs.vert", vertex)
+    pixel_member = _write_blob(frame, "fs.frag", pixel)
+    for stage in draw["program"]["shaders"]:
+        member = vertex_member if stage["stage"] == "vertex" else pixel_member
+        stage.update(file=member["file"], sha256=member["sha256"],
+                     bytes=member["bytes"])
+    (frame / "frame-events.jsonl").write_text(
+        "".join(json.dumps(event) + "\n" for event in events))
+    base = Path(root)
+    shaders = base / "shaders"
+    translated = subprocess.run(
+        [sys.executable, "-m", "automation.m6_frame", "translate",
+         "--frame", str(frame), "--out", str(shaders)],
+        capture_output=True, text=True, check=False)
+    if translated.returncode != 0:
+        raise RuntimeError("fixture shader translation failed")
+    host = m6_frame.build_replay_host()
+    request = base / "checkpoint-request.json"
+    request.write_text(json.dumps({"checkpoints": [{
+        "event": 0, "target": "0", "file": "event0.bgra",
+        "timing": "post_event"}]}))
+    metal = base / "metal"
+    metal.mkdir()
+    replayed = subprocess.run(
+        [str(host), "--frame", str(frame), "--shaders", str(shaders),
+         "--out", str(metal), "--checkpoints", str(request)],
+        capture_output=True, text=True, check=False)
+    if replayed.returncode != 0:
+        raise RuntimeError("fixture replay failed")
+    colour = (metal / "event0.bgra").read_bytes()
+    width, height = 4, 3
+    if len(colour) != width * height * 4:
+        raise RuntimeError("fixture checkpoint extent changed")
+    colour_sha = _sha(metal / "event0.bgra")
+    colour_name = "obs-event0.bgra"
+    (frame / "blobs" / colour_name).write_bytes(colour)
+    initial = bytes([0, 0, 0, 255] * (width * height))
+    initial_sha = hashlib.sha256(initial).hexdigest()
+    initial_name = "obs-initial.bgra"
+    (frame / "blobs" / initial_name).write_bytes(initial)
+    identity = {"internal_format": 0, "component_type": 0x8C17,
+                "red_bits": 8, "green_bits": 8, "blue_bits": 8,
+                "alpha_bits": 8, "depth_present": True,
+                "stencil_present": True}
+    observations = [
+        {"schema": "gfx-observation/v1", "event": 0,
+         "timing": "pre_event", "kind": "initial",
+         "target": {"framebuffer": 0}, "resource": "fb:0",
+         "target_name": "0", "pixel_format": "BGRA8",
+         "alpha_applicable": True, "origin": "lower_left",
+         "width": width, "height": height, "row_stride": width * 4,
+         "target_identity": identity,
+         "color": {"file": initial_name, "sha256": initial_sha,
+                   "bytes": len(initial), "pixel_format": "BGRA8"},
+         "depth": {"status": "not_used"}, "stencil": {"status": "not_used"}},
+        {"schema": "gfx-observation/v1", "event": 0,
+         "timing": "post_event", "kind": "clear",
+         "target": {"framebuffer": 0}, "resource": "fb:0",
+         "target_name": "0", "pixel_format": "BGRA8",
+         "alpha_applicable": True, "origin": "lower_left",
+         "width": width, "height": height, "row_stride": width * 4,
+         "target_identity": identity,
+         "color": {"file": colour_name, "sha256": colour_sha,
+                   "bytes": len(colour), "pixel_format": "BGRA8"},
+         "depth": {"status": "not_used"}, "stencil": {"status": "not_used"}},
+    ]
+    observation_path = frame / "prefix-observations.jsonl"
+    observation_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in observations))
+    manifest = json.loads((frame / "frame-trace.json").read_text())
+    manifest.update({"test_only": True, "prefix": {
+        "schema": "gfx-observations/v1", "mode": "prefix",
+        "authority": "synthetic", "end": 0, "status": "complete",
+        "count": 1, "post_event_count": 1, "initial": True,
+        "depth_stencil": False, "observation_file": observation_path.name,
+        "observation_sha256": _sha(observation_path),
+        "observation_bytes": observation_path.stat().st_size,
+        "budget": {}}})
+    (frame / "frame-trace.json").write_text(json.dumps(manifest))
+    reference = frame / "frame-reference.bgra"
+    seal = {
+        "schema": m6_frame.SEAL_SCHEMA, "sealed": True, "complete": True,
+        "struct_size": 2256, "abi_version": m6_frame.SEAL_ABI_VERSION,
+        "capture_frame_id": 1, "session_id": "synthetic-trust",
+        "pid": 1234, "process_start_ns": 1, "boundary": "present",
+        "present_index": 1, "scene_index": 0, "operation_count": len(events),
+        "draw_count": sum(1 for event in events if event["kind"] == "draw"),
+        "clear_count": sum(1 for event in events if event["kind"] == "clear"),
+        "copy_count": 0, "event_stream_file": "frame-events.jsonl",
+        "event_stream_bytes": (frame / "frame-events.jsonl").stat().st_size,
+        "event_stream_sha256": _sha(frame / "frame-events.jsonl"),
+        "event_stream_verified": True, "width": 4, "height": 3,
+        "pixel_format": "BGRA8", "trace_complete": True,
+        "trace_integrity": True, "readback_ok": True,
+        "reference_file": reference.name,
+        "reference_bytes": reference.stat().st_size,
+        "reference_sha256": _sha(reference),
+        "manifest_file": "frame-trace.json",
+        "manifest_sha256": _sha(frame / "frame-trace.json"),
+        "capture_dir": str(frame.resolve()), "gpu_status": "synthetic",
+        "failure_reason": "",
+    }
+    (frame / "frame-seal.json").write_text(json.dumps(seal))
+    return frame
+
+
 def input_record_for(result: dict) -> dict:
     return (result.get("execution") or {}).get("replay_input") or {}
 
@@ -447,6 +577,37 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertEqual(result["evidence"]["authority"], "derived")
         self.assertFalse(result["exact"] is False)
 
+    def test_authentic_authority_requires_pinned_trusted_evidence(self):
+        frame, metal = self._fixture()
+        manifest = json.loads((frame / "frame-trace.json").read_text())
+        manifest.pop("test_only", None)
+        manifest["prefix"]["authority"] = "authentic"
+        (frame / "frame-trace.json").write_text(
+            json.dumps(manifest, indent=2) + "\n")
+        seal = json.loads((frame / "frame-seal.json").read_text())
+        seal["manifest_sha256"] = _sha(frame / "frame-trace.json")
+        (frame / "frame-seal.json").write_text(
+            json.dumps(seal, indent=2) + "\n")
+        unpinned = gfx_prefix_check.evaluate(frame, metal, require_end=20)
+        self.assertEqual(unpinned["evidence"]["authority"], "unpinned")
+        self.assertFalse(unpinned["evidence"]["trusted_evidence"])
+        root = frame.parent / "trusted"
+        gfx_prefix_check.prepare_trusted_evidence(
+            frame, root, validate=True, read_only=False)
+        pinned = gfx_prefix_check.evaluate(
+            root / "frame", metal, require_end=20, trusted_root=root)
+        self.assertEqual(pinned["evidence"]["authority"], "authentic")
+        self.assertTrue(pinned["evidence"]["trusted_evidence"])
+
+    def test_derived_case_refuses_overlap_or_existing_destination(self):
+        frame, _metal = self._fixture()
+        with self.assertRaises(gfx_prefix_case.PrefixCaseError):
+            gfx_prefix_case.build_prefix_frame(frame, 1, frame)
+        existing = frame.parent / "existing-case"
+        existing.mkdir()
+        with self.assertRaises(gfx_prefix_case.PrefixCaseError):
+            gfx_prefix_case.build_prefix_frame(frame, 1, existing)
+
     def test_derived_prefix_frame_is_clearly_labelled(self):
         frame, _metal = self._fixture()
         temporary = tempfile.TemporaryDirectory()
@@ -655,17 +816,17 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertIn("trusted reference root", payload["diagnostics"])
 
 
-CANDIDATE_CASE = ROOT / ".local" / "m7" / "event20" / "case-prefix"
-
-
-@unittest.skipUnless(CANDIDATE_CASE.is_dir(),
-                     "derived replayable prefix fixture is absent")
 class CandidateTrustBoundaryTests(unittest.TestCase):
     """The compiled candidate executes without expected reference pixels."""
 
     @classmethod
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory()
+        cls.fixture = build_candidate_fixture(Path(cls.temporary.name))
+        cls.trusted_root = Path(cls.temporary.name) / "trusted"
+        gfx_prefix_check.prepare_trusted_evidence(
+            cls.fixture, cls.trusted_root, validate=True, read_only=False)
+        cls.frame = cls.trusted_root / "frame"
 
     @classmethod
     def tearDownClass(cls):
@@ -752,7 +913,7 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
 
     def _attack_body(self) -> str:
         return (
-            "        if (index == 1) {\n"
+            "        if (index == 0) {\n"
             "            /* Adversarial candidate: try to copy the expected original\n"
             "               GL reference payload instead of reading Metal. */\n"
             "            NSString *reference_name = item[@\"reference_file\"];\n"
@@ -785,12 +946,10 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
             "        }\n")
 
     def test_candidate_cannot_copy_reference_pixels_into_outputs(self):
-        base = Path(tempfile.mkdtemp(dir=self.temporary.name))
-        frame = CANDIDATE_CASE
         workspace, sidecar = self._candidate()
         self._patch_replay(workspace, self._attack_body())
-        # The attack needs the replay input path.  It is deliberately absent
-        # from the sanitized frame the candidate receives.
+        # The attack needs an absolute replay-input path.  It is deliberately
+        # absent from the sanitized frame the candidate receives.
         replay_path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
         source = replay_path.read_text()
         source = source.replace(
@@ -802,26 +961,24 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
             "    g_state = state;\n    g_attack_frame_path = frame_path;\n", 1)
         replay_path.write_text(source)
         result = gfx_prefix_check.evaluate(
-            frame, None, require_end=1, trusted_execution=True,
-            candidate_workspace=workspace, candidate_sidecar=sidecar)
-        self.assertEqual(result.get("execution", {}).get("mode"),
-                         "candidate-build-and-replay", result.get("problems"))
+            self.frame, None, require_end=0, trusted_execution=True,
+            candidate_workspace=workspace, candidate_sidecar=sidecar,
+            trusted_root=self.trusted_root)
+        self.assertIn("execution_dir", result, result.get("problems"))
+        self._assert_patch_built(result, workspace)
         execution_dir = Path(result["execution_dir"])
         self.assertFalse((execution_dir / "metal" / "attack-succeeded").exists())
         replay_input = execution_dir / "replay-input"
-        observations = frame / "prefix-observations.jsonl"
-        records = [json.loads(line) for line in observations.read_text().splitlines()
-                   if line.strip()]
-        event_one = next(record for record in records
-                         if record.get("event") == 1
-                         and record.get("timing") == "post_event")
-        name = (event_one.get("color") or {}).get("file")
+        observation = next(record for record in
+                           [json.loads(line) for line in
+                            (self.frame / "prefix-observations.jsonl")
+                            .read_text().splitlines() if line.strip()]
+                           if record.get("timing") == "post_event")
+        name = (observation.get("color") or {}).get("file")
         self.assertIsNotNone(name)
         self.assertFalse((replay_input / "blobs" / name).exists())
-        # Output payloads that are also legitimate renderer inputs are
-        # indistinguishable at this boundary and are recorded explicitly.
         self.assertIn("shared_input_outputs", input_record_for(result))
-        self.assertNotEqual(result["verdict"], "INCOMPLETE_EVIDENCE")
+        self.assertIs(result.get("independent_equality"), True)
 
     def test_external_candidate_include_is_not_attested(self):
         base = Path(tempfile.mkdtemp(dir=self.temporary.name))
@@ -829,23 +986,102 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
         path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
         path.write_text(path.read_text() + '\n#include "/etc/passwd"\n')
         result = gfx_prefix_check.evaluate(
-            CANDIDATE_CASE, None, require_end=1, trusted_execution=True,
-            candidate_workspace=workspace, candidate_sidecar=sidecar)
+            self.frame, None, require_end=0, trusted_execution=True,
+            candidate_workspace=workspace, candidate_sidecar=sidecar,
+            trusted_root=self.trusted_root)
         self.assertEqual(result["verdict"], "INCOMPLETE_EVIDENCE")
         self.assertTrue(any("unattested source include" in problem
                             for problem in result["problems"]),
                         result["problems"])
         self.assertFalse((base / "run").exists())
 
+    def _assert_patch_built(self, result: dict, workspace: Path) -> None:
+        expected = _sha(workspace / "benchmark" / "eu4_gfx_frame_replay.mm")
+        self.assertEqual(
+            result["execution"]["candidate"]["source_digests"][
+                "benchmark/eu4_gfx_frame_replay.mm"], expected)
+
+    def test_candidate_cannot_read_absolute_reference_directory(self):
+        base = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        workspace, sidecar = self._candidate()
+        attack = (
+            "        if (index == 0) {\n"
+            "            NSString *dir = @\"" + str(self.fixture) + "/blobs\";\n"
+            "            NSArray *names = [[NSFileManager defaultManager]\n"
+            "                contentsOfDirectoryAtPath:dir error:NULL];\n"
+            "            for (NSString *name in names) {\n"
+            "                if (![name isEqualToString:@\"obs-event0.bgra\"]) continue;\n"
+            "                NSData *stolen = [NSData dataWithContentsOfFile:\n"
+            "                    [dir stringByAppendingPathComponent:name]];\n"
+            "                if (stolen != nil) {\n"
+            "                    [stolen writeToFile:[output_path\n"
+            "                        stringByAppendingPathComponent:item[@\"file\"]]\n"
+            "                        atomically:YES];\n"
+            "                    [@\"copied\" writeToFile:[output_path\n"
+            "                        stringByAppendingPathComponent:@\"absolute-attack\"]\n"
+            "                        atomically:YES encoding:NSUTF8StringEncoding error:NULL];\n"
+            "                    continue;\n"
+            "                }\n"
+            "            }\n"
+            "        }\n")
+        self._patch_replay(workspace, attack)
+        result = gfx_prefix_check.evaluate(
+            self.frame, None, require_end=0, trusted_execution=True,
+            candidate_workspace=workspace, candidate_sidecar=sidecar,
+            trusted_root=self.trusted_root)
+        self.assertIn("execution_dir", result, result.get("problems"))
+        self._assert_patch_built(result, workspace)
+        isolation = result["execution"]["reference_isolation"]
+        self.assertEqual(isolation["mechanism"], "seatbelt")
+        self.assertTrue(any(str(self.trusted_root.resolve()) == path
+                            for path in isolation["protected_paths"]))
+        execution = Path(result["execution_dir"])
+        self.assertFalse((execution / "metal" / "absolute-attack").exists())
+        self.assertIs(result.get("independent_equality"), True)
+
+    def test_checkpoint_output_interception_is_caught(self):
+        workspace, sidecar = self._candidate()
+        body = (
+            "        if (index == 0) {\n"
+            "            NSString *path = [output_path stringByAppendingPathComponent:\n"
+            "                                  item[@\"file\"]];\n"
+            "            [@\"\" writeToFile:path atomically:YES];\n"
+            "            [@\"intercepted\" writeToFile:[output_path\n"
+            "                stringByAppendingPathComponent:@\"intercepted-marker\"]\n"
+            "                atomically:YES encoding:NSUTF8StringEncoding error:NULL];\n"
+            "            NSMutableDictionary *entry = [@{\n"
+            "                @\"event\": @(index), @\"target\": target_name,\n"
+            "                @\"resource\": item[@\"resource\"] ?: @\"\",\n"
+            "                @\"timing\": post_event ? @\"post_event\" : @\"pre_event\",\n"
+            "                @\"file\": item[@\"file\"], @\"ok\": @YES,\n"
+            "                @\"width\": info[@\"width\"] ?: @0,\n"
+            "                @\"height\": info[@\"height\"] ?: @0,\n"
+            "            } mutableCopy];\n"
+            "            [g_checkpoint_results addObject:entry];\n"
+            "            continue;\n"
+            "        }\n")
+        self._patch_replay(workspace, body)
+        result = gfx_prefix_check.evaluate(
+            self.frame, None, require_end=0, trusted_execution=True,
+            candidate_workspace=workspace, candidate_sidecar=sidecar,
+            trusted_root=self.trusted_root)
+        self.assertIn("execution_dir", result, result.get("problems"))
+        self._assert_patch_built(result, workspace)
+        execution = Path(result["execution_dir"])
+        self.assertTrue(
+            (execution / "metal" / "intercepted-marker").is_file(),
+            "the output-interception patch was not built")
+        self.assertNotEqual(result["verdict"], "EXACT_PREFIX")
+
     def test_two_rounds_use_new_execution_directories_and_pixels(self):
         base = Path(tempfile.mkdtemp(dir=self.temporary.name))
-        frame = CANDIDATE_CASE
+        frame = self.frame
         workspace, sidecar = self._candidate()
         run_root = base / "campaign-run"
         first = gfx_prefix_check.evaluate(
-            frame, None, require_end=1, trusted_execution=True,
+            frame, None, require_end=0, trusted_execution=True,
             candidate_workspace=workspace, candidate_sidecar=sidecar,
-            trusted_run_dir=run_root)
+            trusted_root=self.trusted_root, trusted_run_dir=run_root)
         first_execution = Path(first["execution_dir"])
         first_host = first["execution"]["replay_host_sha256"]
         first_metal = {
@@ -873,9 +1109,9 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
             1)
         replay_path.write_text(source)
         second = gfx_prefix_check.evaluate(
-            frame, None, require_end=1, trusted_execution=True,
+            frame, None, require_end=0, trusted_execution=True,
             candidate_workspace=workspace, candidate_sidecar=sidecar,
-            trusted_run_dir=run_root)
+            trusted_root=self.trusted_root, trusted_run_dir=run_root)
         second_execution = Path(second["execution_dir"])
         self.assertNotEqual(first_execution, second_execution)
         self.assertTrue(second_execution.is_dir())

@@ -114,12 +114,14 @@ def main(argv: list[str]) -> int:
     exact_prefix = result.get("verified_prefix") or {}
     if (generic == "EXACT_PREFIX"
             and authority == "authentic"
+            and result.get("independent_equality") is True
             and int(exact_prefix.get("end", -1)) >= 20):
         result = dict(result, campaign_verdict="EVENT20_EXACT")
         return _emit(
             "pass",
             "independent exact-prefix comparison verified events 0 through 20 "
-            "from the authentic sealed frame",
+            "from the authentic sealed frame; every compared output is "
+            "independently attributable",
             result)
     if generic == "UNSUPPORTED":
         return _emit(
@@ -127,6 +129,14 @@ def main(argv: list[str]) -> int:
             "the prefix contains unsupported auxiliary observations: "
             + ", ".join(str(event) for event in
                         result.get("excluded_events") or []),
+            result)
+    if generic == "EXACT_PREFIX" and result.get(
+            "independent_equality") is not True:
+        return _emit(
+            "inconclusive",
+            "the exact pixel match is not independently attributable: "
+            + "; ".join(result.get("evidence_limitations") or
+                        ["shared renderer input/output payload"]),
             result)
     if generic == "EXACT_PREFIX" and authority != "authentic":
         return _emit(

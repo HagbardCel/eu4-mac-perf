@@ -923,6 +923,55 @@ class ShaderCacheAttributeTests(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")
+class ReplayInputSanitizationTests(unittest.TestCase):
+    def test_expected_outputs_are_removed_before_the_blob_allowlist(self):
+        import tempfile
+        from pathlib import Path as _Path
+        with tempfile.TemporaryDirectory() as temporary:
+            frame = _Path(temporary) / "frame"
+            (frame / "blobs").mkdir(parents=True)
+            for name in ("input.bin", "expected.bin", "shared.bin",
+                         "frame-reference.bgra"):
+                (frame / "blobs" / name).write_bytes(name.encode())
+            events = [
+                {"kind": "draw", "index": 0,
+                 "default_checkpoint": {"file": "expected.bin"},
+                 "attributes": [{"data": "input.bin"}],
+                 "textures": [{"levels": [{"file": "shared.bin"}]}]},
+            ]
+            trace = {
+                "_events": events,
+                "_prefix": {
+                    "post_events": [
+                        {"event": 0, "timing": "post_event",
+                         "color": {"file": "shared.bin"}},
+                        {"event": 1, "timing": "post_event",
+                         "color": {"file": "expected.bin"}},
+                    ],
+                },
+                "frame": {"width": 4, "height": 4,
+                          "reference": "frame-reference.bgra"},
+                "schema": m6_frame.TRACE_SCHEMA,
+            }
+            destination = _Path(temporary) / "replay-input"
+            record = m6_frame.materialize_replay_input(
+                frame, trace, destination)
+            copied = {path.name for path in (destination / "blobs").iterdir()}
+            self.assertIn("input.bin", copied)
+            self.assertIn("shared.bin", copied)
+            self.assertNotIn("expected.bin", copied)
+            self.assertNotIn("frame-reference.bgra", copied)
+            self.assertEqual(record["shared_input_outputs"][0]["file"],
+                             "shared.bin")
+            self.assertEqual(record["shared_input_outputs"][0]["expected_by"][0]
+                             ["kind"], "observation")
+            self.assertGreaterEqual(record["expected_only_blobs"], 2)
+            sanitized = [json.loads(line) for line in
+                         (destination / "frame-events.jsonl").read_text()
+                         .splitlines() if line.strip()]
+            self.assertNotIn("default_checkpoint", sanitized[0])
+
+
 class TraceStateHostTests(unittest.TestCase):
     def test_texture_probe_preserves_bindings_and_active_unit(self) -> None:
         source = ROOT / "tests" / "gfx_trace_state_host.m"

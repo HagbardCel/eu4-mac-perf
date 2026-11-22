@@ -3491,6 +3491,17 @@ static int prefix_read_colour_locked(const prefix_target_state *target,
         fail_capture_locked("prefix_unsupported_format");
         return -1;
     }
+    if (!target->direct_texture && target->framebuffer != 0) {
+        GLint previous = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)target->framebuffer);
+        GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            fail_capture_locked("prefix_unsupported_target");
+            return -1;
+        }
+    }
     uint32_t texture = target->direct_texture
                            ? (uint32_t)target->color_name : 0;
     uint32_t framebuffer = target->direct_texture

@@ -486,6 +486,36 @@ def _execution_environment(execution_dir: Path) -> dict:
     return environment
 
 
+def _sandbox_profile(protected_paths: list[Path]) -> str:
+    """Seatbelt profile denying candidate access to reference evidence."""
+    rules = ["(version 1)", "(allow default)"]
+    for path in protected_paths:
+        resolved = Path(path).expanduser().resolve()
+        escaped = str(resolved).replace("\\", "\\\\").replace('"', '\\"')
+        rules.append(f'(deny file-read* (subpath "{escaped}"))')
+        rules.append(f'(deny file-write* (subpath "{escaped}"))')
+    return "\n".join(rules)
+
+
+def _isolated_replay_command(host: Path, argv: list[str],
+                             execution_dir: Path,
+                             protected_paths: list[Path] | None) -> list[str]:
+    """Wrap the candidate host in the platform's local reference isolation.
+
+    Seatbelt is the existing macOS mechanism.  If it is unavailable the checker
+    refuses to run a candidate rather than claiming isolation it does not have.
+    """
+    if not protected_paths:
+        return argv
+    sandbox = shutil.which("sandbox-exec")
+    if sandbox is None:
+        raise PrefixCheckError(
+            "candidate reference isolation is unavailable: sandbox-exec not "
+            "found")
+    profile = _sandbox_profile(protected_paths)
+    return [sandbox, "-p", profile, str(host), *argv]
+
+
 def _cached_candidate_build(snapshot_root: Path, destination: Path,
                             cache_root: Path) -> tuple[Path, dict]:
     """Build or reuse a candidate host keyed by its complete source identity."""
@@ -532,6 +562,7 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
                         trace: dict | None = None,
                         candidate_workspace: Path | str | None = None,
                         candidate_sidecar: Path | str | None = None,
+                        protected_paths: list[Path] | None = None,
                         diagnostics: dict | None = None) -> dict:
     """Execute one Metal replay in a fresh, self-contained execution directory.
 
@@ -609,10 +640,15 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
                 f"trusted replay host build failed: {exc}") from exc
     replay_dir = execution_dir / "metal"
     replay_dir.mkdir()
-    replay_command = [
-        str(host), "--frame", str(replay_input), "--shaders", str(shaders),
+    host_argv = [
+        "--frame", str(replay_input), "--shaders", str(shaders),
         "--out", str(replay_dir), "--checkpoints", str(request_path),
     ]
+    if candidate is not None:
+        replay_command = _isolated_replay_command(
+            Path(host), host_argv, execution_dir, protected_paths)
+    else:
+        replay_command = [str(host), *host_argv]
     started = time.time()
     completed = subprocess.run(
         replay_command, cwd=str(execution_dir),
@@ -650,10 +686,22 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
                 "checkpoint-request.json", "trusted-execution.json"):
             outputs.append({"file": path.name, "bytes": path.stat().st_size,
                             "sha256": _sha256(path)})
+    isolation = None
+    if candidate is not None:
+        protected = [str(Path(path).resolve())
+                     for path in (protected_paths or [])]
+        isolation = {
+            "mechanism": "seatbelt",
+            "protected_paths": protected,
+            "profile_sha256": hashlib.sha256(
+                _sandbox_profile(protected_paths or []).encode()).hexdigest()
+            if protected else None,
+        }
     execution = {
         "schema": "gfx-trusted-execution/v1",
         "mode": ("candidate-build-and-replay" if candidate is not None
                  else "checker-native-replay"),
+        "reference_isolation": isolation,
         "candidate": candidate,
         "outputs": outputs,
         "execution_dir": str(execution_dir),
@@ -753,8 +801,23 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     except (m6_frame.FrameError, OSError, ValueError) as exc:
         problems.append(f"sealed frame is not usable: {exc}")
         return _invalid_result(result, problems, status="invalid")
+    overlap = m6_frame.replay_input_overlap(trace)
+    result["shared_input_outputs"] = overlap
+    result["evidence_limitations"] = [
+        f"output {item['file']} is also a renderer input; its bytes cannot be "
+        "independently attributed to the candidate renderer"
+        for item in overlap
+    ]
+    provenance = gfx_observation.authority(trace, seal)
+    trusted_authority = trusted_record is not None
+    if provenance == "authentic" and not trusted_authority:
+        provenance = "unpinned"
+        result["evidence_limitations"].append(
+            "the frame claims authentic authority but is not rooted in "
+            "externally pinned trusted evidence")
     result["evidence"] = {
-        "authority": gfx_observation.authority(trace, seal),
+        "authority": provenance,
+        "trusted_evidence": trusted_authority,
         "session_id": seal.get("session_id"),
         "capture_frame_id": seal.get("capture_frame_id"),
         "manifest_sha256": seal.get("manifest_sha256"),
@@ -816,11 +879,19 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
         try:
             with campaign_guard.attempt("replays", evidence=evidence) as attempt:
                 try:
+                    protected = [frame_dir]
+                    if trusted_root is not None:
+                        protected.append(Path(trusted_root).expanduser().resolve())
+                    if trusted_record is not None:
+                        original = trusted_record.get("original_capture_dir")
+                        if original:
+                            protected.append(Path(str(original)))
                     trusted = _run_trusted_replay(
                         frame_dir, expected_request, trusted_run_dir,
                         trace=trace,
                         candidate_workspace=candidate_workspace,
                         candidate_sidecar=candidate_sidecar,
+                        protected_paths=protected,
                         diagnostics=execution_diagnostics)
                 except (PrefixCheckError, OSError,
                         subprocess.TimeoutExpired) as exc:
@@ -931,6 +1002,7 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     _require(validation.get("status") == "ok", problems,
              "checkpoint reconciliation reported invalid evidence")
 
+    shared_files = {item["file"] for item in overlap}
     sealed = {int(record["event"]): record
               for record in prefix.get("post_events") or []}
     excluded = {int(event) for event in prefix.get("excluded_events") or []}
@@ -958,6 +1030,9 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
             "candidate_pixel_format": entry.get("candidate_pixel_format"),
             "alpha_applicable": entry.get("alpha_applicable"),
             "compared_channels": entry.get("compared_channels"),
+            "independently_verified": bool(
+                (observation or {}).get("color", {}).get("file")
+                not in shared_files),
             "statistics": entry.get("statistics") or {},
         }
         problem = None
@@ -1039,6 +1114,23 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
             events_out, problems=problems, selection=selection)
     result.update(classification)
     result["exact"] = classification["verdict"] == "EXACT_PREFIX"
+    scope_events = set()
+    if mode == "prefix" and end is not None:
+        scope_events = set(range(end + 1))
+    elif mode == "selected":
+        scope_events = set(selection)
+    affected = set()
+    for item in overlap:
+        for identity in item.get("expected_by") or []:
+            if identity.get("kind") == "observation":
+                affected.add(identity.get("event"))
+            elif identity.get("kind") == "final_reference":
+                scope_events.add(-1)
+    result["independent_equality"] = not (affected & scope_events)
+    if not result["independent_equality"]:
+        result["evidence_limitations"].append(
+            "one or more compared outputs are also renderer inputs; the pixel "
+            "match is not independently attributable")
     result["problems_count"] = len(problems)
     return result
 

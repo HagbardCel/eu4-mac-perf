@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import json
 import subprocess
 import tempfile
@@ -135,6 +136,24 @@ class SnapshotIdentityTests(unittest.TestCase):
                 m6_frame.snapshot_replay_host(self.host, attempts=2)
 
 
+class BuildEnvironmentTests(unittest.TestCase):
+    def test_include_and_loader_injection_variables_are_dropped(self):
+        injected = {
+            "CPATH": "/tmp/injected",
+            "CPLUS_INCLUDE_PATH": "/tmp/injected",
+            "OBJC_INCLUDE_PATH": "/tmp/injected",
+            "DYLD_INSERT_LIBRARIES": "/tmp/injected.dylib",
+            "LD_PRELOAD": "/tmp/injected.so",
+            "PATH": "/usr/bin:/bin",
+        }
+        with mock.patch.dict(os.environ, injected, clear=False):
+            environment = replay_host_dependencies.build_environment()
+        self.assertEqual(environment.get("PATH"), "/usr/bin:/bin")
+        for name in ("CPATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH",
+                     "DYLD_INSERT_LIBRARIES", "LD_PRELOAD"):
+            self.assertNotIn(name, environment)
+
+
 class IncrementalBuildTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -152,6 +171,8 @@ class IncrementalBuildTests(unittest.TestCase):
         self.calls = []
 
         def fake_run(command, **kwargs):
+            if "-MM" in command:
+                return self._dependency_result(command)
             self.calls.append(list(command))
             output = Path(command[command.index("-o") + 1])
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -172,6 +193,20 @@ class IncrementalBuildTests(unittest.TestCase):
         for patch in self.patches:
             patch.start()
         self.addCleanup(self._stop_patches)
+
+    def _dependency_result(self, command):
+        source = Path(command[-1])
+        dependencies = [source]
+        for line in source.read_text().splitlines():
+            if '"' in line and ("include" in line or "import" in line):
+                name = line.split('"')[1]
+                candidate = source.parent / name
+                if candidate.is_file():
+                    dependencies.append(candidate)
+        return subprocess.CompletedProcess(
+            command, 0,
+            "dep: " + " ".join(str(item) for item in dependencies) + "\n",
+            "")
 
     def _stop_patches(self):
         for patch in reversed(self.patches):
@@ -212,10 +247,13 @@ class IncrementalBuildTests(unittest.TestCase):
 
     def test_timeout_removes_outputs_and_receipt(self):
         m6_frame.build_replay_host()
+        def timeout_run(command, **kwargs):
+            if "-MM" in command:
+                return self._dependency_result(command)
+            raise subprocess.TimeoutExpired(cmd="clang", timeout=180)
+
         with mock.patch.object(
-                m6_frame.subprocess, "run",
-                side_effect=subprocess.TimeoutExpired(cmd="clang",
-                                                      timeout=180)):
+                m6_frame.subprocess, "run", side_effect=timeout_run):
             with self.assertRaises(m6_frame.FrameError):
                 m6_frame.build_replay_host(force=True)
         self.assertFalse(self.output.exists())
@@ -226,6 +264,8 @@ class IncrementalBuildTests(unittest.TestCase):
         self.calls.clear()
 
         def slow_run(command, **kwargs):
+            if "-MM" in command:
+                return self._dependency_result(command)
             self.calls.append(list(command))
             output = Path(command[command.index("-o") + 1])
             time.sleep(0.1)
@@ -268,6 +308,8 @@ class IncrementalBuildTests(unittest.TestCase):
         self.semantics.write_text("failing semantics\n")
 
         def failing_run(command, **kwargs):
+            if "-MM" in command:
+                return self._dependency_result(command)
             self.calls.append(list(command))
             return subprocess.CompletedProcess(command, 1, "", "compile failed")
 
