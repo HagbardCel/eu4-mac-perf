@@ -20,12 +20,13 @@ checker reports that scope explicitly.
 - Never modify original reference evidence, the checker, the campaign limits or
   its receipts.
 - If the checker rejects the correction, use its diagnostics to revise your
-  hypothesis, provided the resource budget permits.
+  hypothesis and continue while a justified experiment remains.
 - Do not claim success based on your own screenshots or reports. Success
   requires an independent checker pass on actual GPU output produced from your
   modified source.
 - Do not merge. Stop with explicit evidence if the correction cannot be
-  justified or the budget is exhausted.
+  justified, the required observation or environment is unavailable, or the
+  operator's execution deadline has passed.
 
 ## Acceptance
 
@@ -41,5 +42,14 @@ The independent checker is
 - the source/build/host/output digests are bound in the receipt.
 
 The canonical event-20 acceptance criterion is unchanged and is not used by
-this offline smoke campaign.  This fixture qualifies the mechanism only; it
+this offline smoke campaign. This fixture qualifies the mechanism only; it
 does not establish original-frame equivalence.
+
+## Experiment policy
+
+There is no replay, correction, validation or goal-round quota. Before an
+expensive GPU experiment, review the existing evidence, state the precise
+evidence gap and what the experiment will establish, prefer cheaper/narrower
+checks, and reuse an existing result when the same deterministic experiment was
+already completed. A repeated failure is evidence for reassessment, not an
+automatic stop.

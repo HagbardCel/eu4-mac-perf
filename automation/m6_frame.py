@@ -1298,6 +1298,41 @@ def capture(args: argparse.Namespace) -> int:
     if output.exists():
         print(f"capture output already exists: {output}", file=sys.stderr)
         return 2
+    capture_guard = None
+    reservation = None
+    guard = campaign_guard.from_env()
+    if guard is not None:
+        try:
+            # Entering controlled-capture mode and authorizing one launch are
+            # separate operator decisions.  The capture tool never mints an
+            # authorization: the operator issues one with the campaign token and
+            # passes its identifier to this process.
+            guard.require()
+            status = guard.status()
+            if status.get("mode") != campaign_guard.MODE_CONTROLLED:
+                raise campaign_guard.CampaignRefusal(
+                    "live_capture_disabled",
+                    "this campaign is autonomous reconstruction; live capture "
+                    "requires a controlled_capture campaign")
+            reservation = (
+                os.environ.get("EU4_CAMPAIGN_AUTHORIZATION")
+                or os.environ.get("EU4_CAMPAIGN_RESERVATION") or "").strip()
+            if not reservation:
+                raise campaign_guard.CampaignRefusal(
+                    "launch_authorization_required",
+                    "a live launch needs an operator-issued authorization; run "
+                    "`campaign_guard authorize-launch` with the campaign token "
+                    "and export EU4_CAMPAIGN_AUTHORIZATION=<id>")
+            if not guard.validate_authorization(reservation):
+                raise campaign_guard.CampaignRefusal(
+                    "launch_authorization",
+                    f"{reservation} is not an open launch authorization for "
+                    "this campaign")
+            capture_guard = guard
+        except campaign_guard.CampaignRefusal as exc:
+            print(f"capture refused: {exc.kind}: {exc.detail}",
+                  file=sys.stderr)
+            return 3
     # The coordinator record is bound to this capture before any process is
     # started, so a stale record can never settle this launch.
     capture_id = str(uuid.uuid4())
@@ -1490,25 +1525,6 @@ def capture(args: argparse.Namespace) -> int:
             env_extra["EU4_GFX_FRAME_TRACE_TIMEOUT_MS"] = str(timeout_ms)
         if getattr(args, "seal_log", False):
             env_extra["EU4_GFX_FRAME_SEAL_LOG"] = "1"
-    capture_guard = None
-    reservation = None
-    if campaign_guard.from_env() is not None:
-        try:
-            capture_guard = campaign_guard.from_env()
-            frames = int(args.max_frames) if continuous else 1
-            wanted = {"eu4_launches": 1}
-            if seal_enabled:
-                wanted["sealed_frames"] = frames
-            if shadow_enabled:
-                wanted["shadow_executions"] = frames
-            reservation = capture_guard.reserve(
-                wanted, evidence={"output": str(output),
-                                  "continuous": continuous,
-                                  "max_frames": frames})
-        except campaign_guard.CampaignRefusal as exc:
-            print(f"capture refused: {exc.kind}: {exc.detail}",
-                  file=sys.stderr)
-            return 3
     coordinator = None
     if shadow_enabled:
         coordinator = subprocess.Popen(
@@ -1591,7 +1607,6 @@ def capture(args: argparse.Namespace) -> int:
             capture_guard.complete(
                 reservation, outcome="failed",
                 detail=f"{type(exc).__name__}: {exc}",
-                failure_action="eu4_launches",
                 evidence={"output": str(output)})
         if cleanup_errors:
             print("capture cleanup failed: " + "; ".join(cleanup_errors),
@@ -1835,24 +1850,6 @@ def capture(args: argparse.Namespace) -> int:
         seal_value = result.get("seal") or {}
         sealed_frames = (seal_value.get("frames")
                          if isinstance(seal_value, dict) else None) or []
-        consumed = {"eu4_launches": 1}
-        if seal_enabled:
-            consumed["sealed_frames"] = (
-                len(sealed_frames) if continuous else
-                (1 if "seal" in result and "seal_error" not in result
-                 else 0))
-        if shadow_enabled:
-            consumed["shadow_executions"] = (
-                len(sealed_frames) if continuous else
-                (1 if status == 0 or result.get("shadow") else 0))
-        if status == 8:
-            # Cleanup failure is a launch/restore failure, not a shadow
-            # execution failure.
-            failure_action = "eu4_launches"
-        elif shadow_enabled and status != 0:
-            failure_action = "shadow_executions"
-        else:
-            failure_action = "eu4_launches"
         detail = str(result.get("error") or result.get("seal_error")
                      or result.get("shadow_error") or "")
         if not cleanup_ok and detail != result.get("cleanup_failure"):
@@ -1862,8 +1859,6 @@ def capture(args: argparse.Namespace) -> int:
             reservation,
             outcome="ok" if status == 0 else "failed",
             detail=detail,
-            consumed=consumed if status == 0 else None,
-            failure_action=failure_action,
             evidence={"output": str(output), "status": status,
                       "pid": report.get("pid"),
                       "frames": len(sealed_frames),
@@ -2442,40 +2437,37 @@ def _replay_mark(evidence: dict | None, **values) -> None:
 
 
 def replay_command(args: argparse.Namespace) -> int:
-    """Reserve one replay, then execute the direct frame-replay entry point.
+    """Execute the direct frame-replay entry point.
 
-    ``eu4_replay frame`` runs this module as a child process.  Without a
-    reservation here that physical GPU execution was invisible to the campaign,
-    while the higher-level independent path charged one.  A nonzero direct
-    replay exit is a failed action: the reservation records the status, exit
-    code, stderr tail and command identity rather than settling success.
+    Replay executions are not budgeted, but an agent-facing replay must state a
+    concise experiment rationale, and an explicit campaign stop still refuses.
+    Execution safety remains the replay host's timeout and process cleanup; a
+    failed replay is reported by its own result and is never promoted to
+    equivalence.
     """
-    from automation import campaign_guard
+    from automation import campaign_guard, experiment_rationale
 
-    evidence = _replay_evidence(args)
     try:
-        with campaign_guard.attempt(
-                "replays", evidence=evidence) as attempt:
-            code = _replay_command_body(args, evidence=evidence)
-            _replay_mark(evidence, exit_code=int(code))
-            if code != 0:
-                _replay_mark(
-                    evidence,
-                    status=(evidence.get("status")
-                            if evidence.get("status") not in (None, "running")
-                            else "failed"),
-                    stderr_tail=(evidence.get("stderr_tail")
-                                 or f"replay exited {code}"),
-                )
-                if attempt is not None:
-                    attempt.fail(
-                        f"replay exited {code}: "
-                        f"{evidence.get('reason') or ''}",
-                        evidence=evidence)
-            return code
+        # Removing quotas must not also bypass explicit campaign cancellation.
+        campaign_guard.require_active_from_env()
     except campaign_guard.CampaignRefusal as exc:
         print(f"replay refused: {exc.kind}: {exc.detail}", file=sys.stderr)
         return 3
+    try:
+        rationale = experiment_rationale.require(
+            getattr(args, "rationale", None), run_root=Path.cwd())
+    except experiment_rationale.RationaleError as exc:
+        print(f"replay refused: rationale: {exc}", file=sys.stderr)
+        return 3
+    out = Path(args.out).expanduser().resolve()
+    code = _replay_command_body(args, evidence=_replay_evidence(args))
+    if code == 0:
+        try:
+            result = json.loads((out / "replay.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            result = {}
+        experiment_rationale.record(out, rationale, result=result)
+    return code
 
 
 def _replay_command_body(args: argparse.Namespace,
@@ -2558,7 +2550,20 @@ def _replay_command_body(args: argparse.Namespace,
         command.append("--capture-post")
     if args.depth_from_prefix:
         command.append("--depth-from-prefix")
-    ran = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1200)
+    from automation import launch_lease
+
+    with launch_lease.gpu_execution():
+        # A stop or deadline expiry while this replay waited for the GPU lock
+        # must not start the replay host.
+        try:
+            campaign_guard.require_active_from_env()
+        except campaign_guard.CampaignRefusal as exc:
+            _replay_mark(evidence, status="refused", reason=str(exc))
+            print(f"replay refused: {exc.kind}: {exc.detail}",
+                  file=sys.stderr)
+            return 3
+        ran = subprocess.run(command, capture_output=True, text=True,
+                             check=False, timeout=1200)
     result_path = out / "replay.json"
     if ran.returncode != 0 or not result_path.is_file():
         _replay_mark(evidence, status="error", returncode=ran.returncode,
@@ -4065,6 +4070,11 @@ def _parser() -> argparse.ArgumentParser:
     rep.add_argument("--stop-after", type=int, default=None)
     rep.add_argument("--force", action="store_true")
     rep.add_argument("--force-build", action="store_true")
+    rep.add_argument(
+        "--rationale",
+        default=None,
+        help="JSON file or inline JSON justifying this replay experiment",
+    )
     rep.add_argument("--seed-marked", action="store_true")
     rep.add_argument("--capture-post", action="store_true")
     rep.add_argument(

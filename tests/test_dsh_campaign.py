@@ -8,19 +8,12 @@ from pathlib import Path
 from automation.dsh_campaign import (
     DEFAULT_ALLOW_INCOMPLETE_INPUTS,
     DEFAULT_ALLOW_SYMLINKS,
-    DEFAULT_CONFIRMATION_ROUNDS,
     DEFAULT_LIVE_CAPTURE_ENABLED,
-    DEFAULT_MAX_IDENTICAL_RETRIES,
-    DEFAULT_MAX_REVIEW_ATTEMPTS,
-    DEFAULT_MAX_ROUNDS,
-    DEFAULT_MAX_VALIDATIONS,
     DEFAULT_REQUIRE_CHECKER_PASS,
     DEFAULT_REQUIRE_INDEPENDENT_REVIEW,
-    DEFAULT_RETRY_MODE,
     DEFAULT_RUN_ROOT,
     DEFAULT_STATE_ROOT,
     DEFAULT_VALIDATION_TIMEOUT_SECONDS,
-    DEFAULT_WALL_CLOCK_SECONDS,
     DEFAULT_WORKSPACE_BASE,
     SidecarError,
     load_sidecar,
@@ -48,10 +41,9 @@ class SidecarTests(unittest.TestCase):
                 "workspace": str(self.root / "ws"),
                 "policy": {"allowed_paths": ["marker.txt", "progress.md"]},
             },
-            "checker_retry": {"mode": "stateful", "confirmation_rounds": 1},
-            "goal": {"max_rounds": 4},
-            "limits": {"max_validations": 4, "validation_timeout_seconds": 30,
-                       "wall_clock_seconds": 600},
+            "goal": {},
+            "limits": {"validation_timeout_seconds": 30,
+                       "deadline_seconds": 600},
             "live_capture": {"enabled": False},
         }
         for key, value in overrides.items():
@@ -70,7 +62,6 @@ class SidecarTests(unittest.TestCase):
         self.assertNotIn("opencode_version", campaign)
         self.assertEqual(sidecar.campaign_id, "dsh-unit")
         self.assertEqual(sidecar.mode, "seed")
-        self.assertEqual(sidecar.retry_mode, "stateful")
         self.assertEqual(sidecar.checker.name, "accept.py")
         self.assertTrue(sidecar.objective_text.startswith("# DSH fixture campaign"))
         self.assertEqual(len(sidecar.objective_digest), 64)
@@ -92,18 +83,27 @@ class SidecarTests(unittest.TestCase):
             load_sidecar(self.write(live_capture={"enabled": True}))
         self.assertIn("exclusivity", str(caught.exception))
 
-    def test_stateful_requires_a_confirmation_round(self) -> None:
-        with self.assertRaises(SidecarError) as caught:
-            load_sidecar(self.write(
-                checker_retry={"mode": "stateful", "confirmation_rounds": 0}
-            ))
-        self.assertIn("confirmation_rounds", str(caught.exception))
+    def test_a_legacy_quota_block_is_accepted_but_not_consumed(self) -> None:
+        sidecar = load_sidecar(self.write(
+            checker_retry={"mode": "stateful", "confirmation_rounds": 1},
+            goal={"max_rounds": 4},
+            limits={"max_validations": 4, "max_review_attempts": 2,
+                    "validation_timeout_seconds": 30,
+                    "wall_clock_seconds": 600},
+        ))
+        self.assertFalse(hasattr(sidecar, "max_validations"))
+        self.assertFalse(hasattr(sidecar, "max_rounds"))
+        # The deadline is declared for the launcher and enforced by the guard;
+        # the sidecar object does not duplicate it.
+        self.assertFalse(hasattr(sidecar, "deadline_seconds"))
 
-    def test_deterministic_rejects_confirmation_rounds(self) -> None:
-        with self.assertRaises(SidecarError):
-            load_sidecar(self.write(
-                checker_retry={"mode": "deterministic", "confirmation_rounds": 1}
-            ))
+    def test_both_deadline_names_are_accepted_for_the_launcher(self) -> None:
+        for limits in (
+            {"validation_timeout_seconds": 30, "deadline_seconds": 900},
+            {"validation_timeout_seconds": 30, "wall_clock_seconds": 600},
+        ):
+            with self.subTest(limits=limits):
+                self.assertIsNotNone(load_sidecar(self.write(limits=limits)))
 
     def test_worktree_mode_requires_a_baseline(self) -> None:
         with self.assertRaises(SidecarError) as caught:
@@ -205,16 +205,9 @@ class ReaderDefaultTests(unittest.TestCase):
         # The constants themselves are the documented defaults.
         self.assertEqual(DEFAULT_RUN_ROOT, DEFAULT_STATE_ROOT)
         self.assertEqual(DEFAULT_WORKSPACE_BASE, "run_root")
-        self.assertEqual(DEFAULT_RETRY_MODE, "deterministic")
-        self.assertEqual(DEFAULT_CONFIRMATION_ROUNDS, 0)
-        self.assertEqual(DEFAULT_MAX_IDENTICAL_RETRIES, 0)
-        self.assertEqual(DEFAULT_MAX_ROUNDS, 6)
         self.assertTrue(DEFAULT_REQUIRE_CHECKER_PASS)
         self.assertFalse(DEFAULT_REQUIRE_INDEPENDENT_REVIEW)
-        self.assertEqual(DEFAULT_MAX_VALIDATIONS, 8)
         self.assertEqual(DEFAULT_VALIDATION_TIMEOUT_SECONDS, 60.0)
-        self.assertEqual(DEFAULT_WALL_CLOCK_SECONDS, 1800.0)
-        self.assertEqual(DEFAULT_MAX_REVIEW_ATTEMPTS, 2)
         self.assertFalse(DEFAULT_ALLOW_INCOMPLETE_INPUTS)
         self.assertFalse(DEFAULT_LIVE_CAPTURE_ENABLED)
         self.assertFalse(DEFAULT_ALLOW_SYMLINKS)
@@ -224,23 +217,12 @@ class ReaderDefaultTests(unittest.TestCase):
         # candidate.workspace is omitted: <workspace base>/workspace.
         self.assertEqual(sidecar.workspace,
                          (expected_run_root / "workspace").resolve())
-        self.assertEqual(sidecar.retry_mode, DEFAULT_RETRY_MODE)
-        self.assertEqual(sidecar.confirmation_rounds,
-                         DEFAULT_CONFIRMATION_ROUNDS)
-        self.assertEqual(sidecar.max_identical_retries,
-                         DEFAULT_MAX_IDENTICAL_RETRIES)
-        self.assertEqual(sidecar.max_rounds, DEFAULT_MAX_ROUNDS)
         self.assertEqual(sidecar.require_checker_pass,
                          DEFAULT_REQUIRE_CHECKER_PASS)
         self.assertEqual(sidecar.require_independent_review,
                          DEFAULT_REQUIRE_INDEPENDENT_REVIEW)
-        self.assertEqual(sidecar.max_validations, DEFAULT_MAX_VALIDATIONS)
         self.assertEqual(sidecar.validation_timeout_seconds,
                          DEFAULT_VALIDATION_TIMEOUT_SECONDS)
-        self.assertEqual(sidecar.wall_clock_seconds,
-                         DEFAULT_WALL_CLOCK_SECONDS)
-        self.assertEqual(sidecar.max_review_attempts,
-                         DEFAULT_MAX_REVIEW_ATTEMPTS)
         self.assertEqual(sidecar.evidence_paths, ())
         self.assertEqual(sidecar.replay_inputs, ())
         self.assertEqual(sidecar.allow_incomplete_inputs,
@@ -255,9 +237,6 @@ class ReaderDefaultTests(unittest.TestCase):
         def set_limits(key, value):
             return lambda data: data.setdefault("limits", {}).__setitem__(key, value)
 
-        def set_retry(key, value):
-            return lambda data: data.setdefault(
-                "checker_retry", {}).__setitem__(key, value)
 
         def set_candidate(key, value):
             return lambda data: data["candidate"].__setitem__(key, value)
@@ -269,20 +248,13 @@ class ReaderDefaultTests(unittest.TestCase):
             "candidate.workspace_base": set_candidate("workspace_base", 3),
             "candidate.policy.allow_symlinks": lambda data: data["candidate"][
                 "policy"].__setitem__("allow_symlinks", "true"),
-            "checker_retry.mode": set_retry("mode", 1),
-            "checker_retry.confirmation_rounds": set_retry(
-                "confirmation_rounds", "1"),
-            "checker_retry.max_identical_retries": set_retry(
-                "max_identical_retries", 1.5),
-            "goal.max_rounds": set_goal("max_rounds", "6"),
             "goal.require_checker_pass": set_goal("require_checker_pass", "yes"),
             "goal.require_independent_review": set_goal(
                 "require_independent_review", 0),
-            "limits.max_validations": set_limits("max_validations", "8"),
             "limits.validation_timeout_seconds": set_limits(
                 "validation_timeout_seconds", "60"),
+            "limits.deadline_seconds": set_limits("deadline_seconds", "1800"),
             "limits.wall_clock_seconds": set_limits("wall_clock_seconds", "1800"),
-            "limits.max_review_attempts": set_limits("max_review_attempts", 1.5),
             "evidence.paths": lambda data: data.__setitem__(
                 "evidence", {"paths": "progress.md"}),
             "live_capture.enabled": lambda data: data.__setitem__(
@@ -396,24 +368,12 @@ class LauncherSmokeCompatibilityTests(unittest.TestCase):
         self.assertEqual(first.forbidden_paths, ())
         self.assertEqual(second.forbidden_paths, ())
         self.assertEqual(first.policy_digest, second.policy_digest)
-        self.assertEqual(first.retry_mode, "deterministic")
-        self.assertEqual(second.retry_mode, "deterministic")
-        self.assertEqual(first.max_rounds, 6)
-        self.assertEqual(second.max_rounds, 6)
         self.assertTrue(first.require_checker_pass)
         self.assertTrue(second.require_checker_pass)
         self.assertFalse(first.require_independent_review)
         self.assertFalse(second.require_independent_review)
-        self.assertEqual(first.max_validations, 8)
-        self.assertEqual(second.max_validations, 8)
         self.assertEqual(first.validation_timeout_seconds, 60.0)
         self.assertEqual(second.validation_timeout_seconds, 60.0)
-        self.assertEqual(first.wall_clock_seconds, 900.0)
-        self.assertEqual(second.wall_clock_seconds, 1800.0)
-        self.assertEqual(first.max_identical_retries, 0)
-        self.assertEqual(second.max_identical_retries, 0)
-        self.assertEqual(first.max_review_attempts, 2)
-        self.assertEqual(second.max_review_attempts, 2)
         self.assertEqual(first.evidence_paths, ())
         self.assertEqual(second.evidence_paths, ())
         self.assertEqual(first.replay_inputs, ())
@@ -426,8 +386,30 @@ class LauncherSmokeCompatibilityTests(unittest.TestCase):
         # distinct; only the canonical source and its policy are shared.
         self.assertNotEqual(first.campaign_id, second.campaign_id)
         self.assertNotEqual(first.run_root, second.run_root)
-        self.assertNotEqual(first.wall_clock_seconds,
-                            second.wall_clock_seconds)
+        self.assertNotEqual(first.campaign_id, second.campaign_id)
+
+
+class DshSourceCampaignTests(unittest.TestCase):
+    """DSH campaigns must not declare native-runner quotas they ignore."""
+
+    def test_dsh_sources_do_not_declare_unused_round_quotas(self) -> None:
+        checked = 0
+        for sidecar_path in sorted((REPO / "dsh" / "campaigns").glob("*.json")):
+            sidecar = load_sidecar(sidecar_path)
+            data = json.loads(sidecar.source_campaign.read_text(encoding="utf-8"))
+            if data.get("runtime") != "dsh":
+                continue
+            checked += 1
+            for field in ("max_rounds", "max_seconds", "live_observation"):
+                self.assertNotIn(field, data, f"{sidecar_path}: {field}")
+        self.assertGreater(checked, 0)
+
+    def test_the_event20_objective_does_not_instruct_a_live_capture(self) -> None:
+        objective = (REPO / "campaigns" / "eu4-m7-event20" /
+                     "objective.md").read_text(encoding="utf-8")
+        self.assertNotIn("make **one** managed capture", objective)
+        self.assertIn("requires_additional_evidence", objective)
+        self.assertIn("operator-controlled", objective)
 
 
 if __name__ == "__main__":

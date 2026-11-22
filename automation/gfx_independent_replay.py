@@ -3727,6 +3727,9 @@ def _parser():
     parser.add_argument("--disable-render-target-vflip", action="store_true")
     parser.add_argument("--sampler-shift", type=int, default=None)
     parser.add_argument("--sampler-shift-min", type=int, default=7)
+    parser.add_argument(
+        "--rationale", default=None,
+        help="JSON file or inline JSON justifying this expensive experiment")
     return parser
 
 
@@ -3794,9 +3797,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.sampler_shift is not None:
         faults["sampler_shift"] = args.sampler_shift
         faults["sampler_shift_min"] = args.sampler_shift_min
+    from automation import experiment_rationale
+
+    try:
+        rationale = experiment_rationale.require(
+            args.rationale, run_root=Path.cwd())
+    except experiment_rationale.RationaleError as exc:
+        print(json.dumps({"status": "refused", "reason": str(exc)}, indent=2))
+        return 2
     try:
         report = replay(args.frame, args.out, shaders=args.shaders,
-                        faults=faults, policy=args.policy)
+                        faults=faults, policy=args.policy,
+                        rationale=rationale)
     except ReplayError as exc:
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
@@ -4045,12 +4057,15 @@ def replay_recipe(*, env: dict | None = None,
         except (OSError, m6_frame.FrameError):
             shader_identity = {"shaders_json_sha256": "", "artifacts_sha256": "",
                                "artifact_count": 0}
-    policy_sha = None
-    if policy is not None:
-        try:
-            policy_sha = _sha256_file(Path(policy))
-        except OSError:
-            policy_sha = None
+    # ``analyse_frame`` consumes DEFAULT_POLICY when no explicit policy is
+    # supplied, so the effective default must be part of the recipe identity
+    # too.  Otherwise a changed default silently reuses an old diagnosis.
+    policy_path = (DEFAULT_POLICY if policy is None
+                   else Path(policy).expanduser())
+    try:
+        policy_sha = _sha256_file(policy_path)
+    except OSError:
+        policy_sha = None
     recipe = {
         "schema": RECIPE_SCHEMA,
         "diagnostic": bool(faults) or bool(effective),
@@ -4061,6 +4076,7 @@ def replay_recipe(*, env: dict | None = None,
         "injected_env": injected,
         "scrubbed_env": scrubbed,
         "shader_identity": shader_identity,
+        "policy_path": str(policy_path),
         "policy_sha256": policy_sha,
         "precise_math": consumed.get("EU4_FRAME_REPLAY_PRECISE_MATH"),
         "environment_sha256": hashlib.sha256(json.dumps({
@@ -4161,50 +4177,40 @@ def replay(
     faults: dict | None = None,
     policy: Path | str | None = None,
     timeout: float = 1800.0,
+    rationale: dict | None = None,
 ) -> dict:
-    """Execute one replay under the externally configured campaign budget.
+    """Execute one independent replay.
 
-    The budget check happens before the host is built or any output is
-    prepared, so an exhausted campaign cannot spend another GPU execution.
+    Replays are not counted against a budget: an autonomous campaign may run as
+    many justified experiments as it can explain.  A safety stop is still
+    enforced.  A caller that supplies ``rationale`` states the question, the
+    existing evidence, the gap, the hypothesis, the expected information and the
+    cheaper alternatives already tried; the harness checks only that the record
+    is structurally complete and that its evidence resolves, then stores it
+    beside the result.  Scientific merit stays the agent's judgment, and no
+    result is cached or reused automatically.
     """
-    from automation import campaign_guard
+    from automation import campaign_guard, experiment_rationale
 
-    evidence = {
-        "entry_point": "automation.gfx_independent_replay.replay",
-        "frame_dir": str(frame_dir),
-        "out_dir": str(out_dir),
-        "command": [sys.executable, "-m",
-                    "automation.gfx_independent_replay",
-                    "replay", "--frame", str(frame_dir),
-                    "--out", str(out_dir)],
-    }
     try:
-        # Reserve before the host is built or any output is prepared.  The
-        # attempt boundary is shared with nested case/sequence entry points so
-        # exactly one reservation covers the physical replay.
-        with campaign_guard.attempt(
-                "replays", evidence=evidence) as attempt:
-            report = _replay_locked(
-                frame_dir, out_dir, shaders=shaders, faults=faults,
-                policy=policy, timeout=timeout)
-            failed = (report.get("status") == "invalid"
-                      or (report.get("execution") or {}).get("status")
-                      == "failed")
-            if failed and attempt is not None:
-                detail = " ".join(str(item) for item in (
-                    (report.get("execution") or {}).get("error"),
-                    (report.get("execution") or {}).get("failure"),
-                    report.get("status")) if item)
-                attempt.fail(detail, evidence={
-                    "status": report.get("status"),
-                    "exit_code": report.get("returncode"),
-                    "stderr_tail": str(report.get("stderr") or "")[-2000:],
-                    "command": report.get("command") or evidence["command"],
-                })
-            return report
+        campaign_guard.require_active_from_env()
     except campaign_guard.CampaignRefusal as exc:
         raise ReplayError("campaign_refused",
                           f"{exc.kind}: {exc.detail}") from exc
+    frame = Path(frame_dir).expanduser().resolve()
+    out = Path(out_dir).expanduser().resolve()
+    if rationale is not None:
+        problems = (experiment_rationale.validate(rationale)
+                    or experiment_rationale.evidence_problems(
+                        rationale, run_root=out.parent))
+        if problems:
+            raise ReplayError("rationale_invalid", "; ".join(problems))
+    result = _replay_locked(
+        frame, out, shaders=shaders, faults=faults,
+        policy=policy, timeout=timeout)
+    if rationale is not None:
+        experiment_rationale.record(out, rationale, result=result)
+    return result
 
 
 def _replay_locked(
@@ -4216,11 +4222,38 @@ def _replay_locked(
     policy: Path | str | None = None,
     timeout: float = 1800.0,
 ) -> dict:
-    """Execute one captured workload through the production Metal replay host."""
+    """Execute one captured workload through the production Metal replay host.
+
+    The early caller check rejects obviously invalid work without waiting.  The
+    check is repeated after the host-wide GPU lock is acquired: a stop or an
+    expired deadline while this execution waited must not start a replay.
+    """
+    from automation import campaign_guard, launch_lease
+
     frame_dir = Path(frame_dir).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
     shader_dir = _shader_dir(frame_dir, shaders)
     out_dir = prepare_replay_output(out_dir, [frame_dir, shader_dir])
+    with launch_lease.gpu_execution():
+        try:
+            campaign_guard.require_active_from_env()
+        except campaign_guard.CampaignRefusal as exc:
+            raise ReplayError("campaign_refused",
+                              f"{exc.kind}: {exc.detail}") from exc
+        return _replay_locked_serialized(
+            frame_dir, out_dir, shader_dir, faults=faults, policy=policy,
+            timeout=timeout)
+
+
+def _replay_locked_serialized(
+    frame_dir: Path,
+    out_dir: Path,
+    shader_dir: Path,
+    *,
+    faults: dict | None = None,
+    policy: Path | str | None = None,
+    timeout: float = 1800.0,
+) -> dict:
     graph = gfx_frame_graph.build(frame_dir)
     request = gfx_frame_graph.write_checkpoint_request(
         graph, out_dir / "checkpoint-request.json")

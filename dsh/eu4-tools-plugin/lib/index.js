@@ -183,6 +183,7 @@ export function definitions(run) {
         replay_out: string('replay/diagnosis output directory'),
         out: string('replay output directory (legacy alias)'),
         policy: string('comparison/state policy JSON'),
+        rationale: string('JSON file path or inline JSON justifying an expensive replay: question, evidence, gap, hypothesis, action, expected_information, cheaper_alternatives_checked'),
         require_seal: boolean('require an authoritative frame seal for diagnosis'),
         max_frames: integer('bounded M7 sequence length'),
         max_bytes: integer('bounded captured-sequence input budget'),

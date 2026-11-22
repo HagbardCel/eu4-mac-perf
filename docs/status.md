@@ -187,27 +187,28 @@ answers exactly one turn. The headless limitation is documented rather than
 disguised as round orchestration
 ([campaign contract](m7-autonomous-campaign.md)).
 
-EU4-specific resources are bounded outside the model by
-`automation/campaign_guard.py`: `EU4_CAMPAIGN_STATE` activates an exclusive,
-persisted budget for EU4 launches, sealed frames, shadow executions, replays,
-corrections and wall-clock time. The gate runs before `m6_frame capture` launches
-EU4 and before a Metal replay host is built, records the actual outcome (not the
-model's report), classifies failures, refuses an identical failure repeated
-twice until the strategy changes, and writes a structured stop. Every EU4
-process-spawn site consumes a one-use launch claim under the state lock
-immediately before `subprocess.Popen`; a reservation therefore authorizes at
-most one process and cannot be reused concurrently. The launchers accept
-`--campaign-state` and export it into the DSH session. The DSH bridge now
-enforces the sidecar's `max_validations`, `wall_clock_seconds` and
-`max_identical_retries` from a durable `validations.jsonl` attempt lifecycle:
-a start record precedes each checker execution, a result record follows it, and
-a start without a result still counts after a restart. Finalization's fresh run
-and frozen-candidate replay are charged through the same limits, while the
-administrative checker-compatibility probe is not.
+EU4-specific restrictions are limited to real boundaries and enforced outside
+the model by `automation/campaign_guard.py`: an execution mode
+(`autonomous_reconstruction` refuses live capture; `controlled_capture` permits
+the capture workflow), an operator-issued one-use launch authorization consumed
+atomically immediately before `subprocess.Popen`, an operator execution deadline
+seeded at launch, and a structured safety stop. Fixed replay, correction,
+sealed-frame, shadow-execution, validation and goal-round quotas were removed;
+the agent justifies expensive experiments instead of asking permission. A
+host-wide activation marker is authoritative and fail-closed: clearing the
+session's environment variables, pointing the variable at another state, or
+losing the state file cannot disable enforcement. The DSH bridge keeps the
+operator execution deadline (`limits.deadline_seconds`) and each checker's own
+subprocess timeout, and still writes a start/result attempt trail for audit and
+reconnect, but it no longer refuses on attempt count or a repeated failure. See the
+[governance](governance.md). The guard, sidecar, bridge and
+agent-entry-point lanes were re-verified offline (`tests.test_campaign_guard`,
+`tests.test_dsh_bridge`, `tests.test_governance_entrypoints`).
 
-Offline verification: `tests.test_campaign_guard` (budgets, deadline, failure
-classes, changed-strategy gate, concurrent accounting, one-use launch claims at
-both spawn boundaries, launch/replay action gates),
+Offline verification: `tests.test_campaign_guard` (mode downgrade refusal,
+operator-issued one-use launch authorizations at both spawn boundaries,
+concurrent claims, deadline and stop enforcement, fail-closed activation,
+explicit v1 migration, unlimited justified replays),
 `tests.test_dsh_bridge.CheckerAttemptAccountingTests`, and the existing pilot /
 multiround smoke contract. The earlier PR-3 limitation — no authentic
 multi-round campaign — was resolved by the recorded two-round workflow and the

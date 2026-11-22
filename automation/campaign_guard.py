@@ -1,87 +1,98 @@
 #!/usr/bin/env python3
-"""Externally enforced campaign budgets, reservations and stop state.
+"""Campaign safety enforcement: execution modes, one-use live-launch authorization, stop state.
 
-DSH owns orchestration: its native goal/round driver bounds the number of
-rounds, and the goal plugin denies model-initiated completion.  DSH does not
-know about EU4 launches, Metal shadow executions, candidate replays or
-correction attempts, so those limits are enforced here, outside the model
-prompt, at the action sites that actually consume the resource.
+This module used to enforce fixed budgets (replays, corrections, sealed frames,
+shadow executions, wall clock) plus an identical-failure block.  Those quotas
+were arbitrary limits on useful investigation and are gone.  What remains is
+only what protects a boundary:
 
-Accounting is reservation-first.  A resource is charged atomically under the
-state lock *before* the action starts; completion records the actual verified
-outcome and, when it is safe to prove the work never happened, releases the
-unused part of the reservation.  An interrupted or abandoned reservation keeps
-its full charge (conservative), so a crash cannot silently restore a spent
-execution allowance.
+* **execution mode** -- ``autonomous_reconstruction`` (the default) refuses live
+  capture entirely; ``controlled_capture`` permits the capture workflow.  The
+  mode is fixed at initialization and ``ensure`` refuses to change it, so a
+  prepared campaign cannot be silently downgraded to a weaker policy.
+* **operator-issued one-use launch authorization** -- entering capture mode and
+  authorizing one launch are separate decisions.  Every live launch needs an
+  authorization issued by the operator with the campaign token; the capture tool
+  never mints one.  The authorization is consumed atomically immediately before
+  ``subprocess.Popen``; a crash or second contender cannot reuse it, and it is
+  never refunded.
+* **stop state** -- an explicit operator stop, an unsafe environment, invalid
+  evidence or a missing observation ends campaign actions until a human acts.
 
-An EU4 launch reservation additionally carries a one-use claim.  Checking that
-a reservation is open is read-only; immediately before the process is created,
-the launch path atomically marks the reservation's ``eu4_launches`` entitlement
-as claimed.  A second claim against the same reservation is refused, including
-concurrent claims, so one reservation can authorize at most one EU4 process.  A
-claimed reservation stays open for the subsequent completion and outcome
-accounting, and a failed spawn conservatively keeps the consumed allowance.
+There is no model-accessible budget reset because there is no budget.  The one
+operator execution deadline is declared in the campaign sidecar and seeded into
+the state at launch; ``ensure`` never rewinds it, and this module refuses
+expensive actions after expiry.  Per-process timeouts live at the subprocess
+boundary.
 
-An identical failure repeated ``MAX_IDENTICAL_RETRIES`` times blocks that action
-for the campaign.  There is no model-accessible reset: only an administrative
-recovery authorized by the operator's token can clear a stop or a block, and it
-records the reason in the audit history.  A different textual "strategy" is not
-accepted as a recovery.
+An EU4 launch authorization is one-use: ``authorize-launch`` records it,
+``claim-launch`` consumes it immediately before process creation, and
+``complete`` records the verified outcome.  An interrupted claim keeps its full
+record: a crash cannot silently restore it.
 
-    python3 -m automation.campaign_guard init --state <path> [--budget k=v]...
-    python3 -m automation.campaign_guard reserve --state <path> \\
-        --action eu4_launches=1 --action sealed_frames=1
+Activation is host-wide and fail-closed.  ``EU4_CAMPAIGN_STATE`` names a state,
+but the host-wide marker next to the EU4 launch lease is authoritative: an
+explicit path naming a different campaign is a conflict and refuses every
+decision, and a marker naming a missing or corrupt state still refuses launches.
+There is no environment override for the marker path.  A completed campaign must
+be deactivated explicitly:
+
+    python3 -m automation.campaign_guard init --state <path> \\
+        --mode autonomous_reconstruction
+    python3 -m automation.campaign_guard authorize-launch --state <path>
+    python3 -m automation.campaign_guard claim-launch --state <path> \\
+        --authorization <id>
     python3 -m automation.campaign_guard complete --state <path> \\
-        --reservation <id> --outcome ok
+        --authorization <id> --outcome ok
     python3 -m automation.campaign_guard status --state <path>
     python3 -m automation.campaign_guard stop --state <path> --reason blocked
-
-A campaign state is opt-in: when ``EU4_CAMPAIGN_STATE`` is unset, the action
-sites behave exactly as before.
+    python3 -m automation.campaign_guard resume --state <path> --detail ...
+    python3 -m automation.campaign_guard deactivate --state <path>
+A state using the removed fixed-budget schema is refused: start a new campaign
+state instead of migrating an old quota file.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
-import contextvars
 import fcntl
 import hashlib
 import json
 import os
-import sys
 import time
 import uuid
 from pathlib import Path
 
-SCHEMA = "eu4-campaign-state/v1"
+from automation import launch_lease
+
+SCHEMA = "eu4-campaign-state/v2"
+LEGACY_SCHEMA = "eu4-campaign-state/v1"
 REFUSAL_SCHEMA = "eu4-campaign-refusal/v1"
+MARKER_SCHEMA = "eu4-campaign-active/v1"
+MARKER_NAME = "active-campaign.json"
 
-PILOT_BUDGETS = {
-    "eu4_launches": 1,
-    "sealed_frames": 1,
-    "shadow_executions": 1,
-    "replays": 2,
-    "corrections": 1,
-    "wall_clock_seconds": 1800,
-}
-MAX_IDENTICAL_RETRIES = 2
-MAX_HISTORY = 400
+MODE_AUTONOMOUS = "autonomous_reconstruction"
+MODE_CONTROLLED = "controlled_capture"
+MODES = (MODE_AUTONOMOUS, MODE_CONTROLLED)
 
+# Stop reasons are conditions a human or a trusted checker establishes.  An
+# arbitrary attempt counter is deliberately not one of them.
 STOP_REASONS = (
-    "budget_exhausted",
-    "deadline",
-    "repeated_failure",
-    "invalid_evidence",
-    "capture_failed",
-    "environment_unsafe",
     "objective_met",
     "blocked",
+    "invalid_evidence",
+    "evidence_missing",
+    "environment_unsafe",
+    "environment_unavailable",
+    "operator_stop",
 )
+
+MAX_HISTORY = 400
 
 
 class CampaignRefusal(RuntimeError):
-    """A campaign action was refused; ``kind`` names the stop condition."""
+    """A campaign action was refused; ``kind`` names the condition."""
 
     def __init__(self, kind: str, detail: str = ""):
         super().__init__(kind if not detail else f"{kind}: {detail}")
@@ -93,54 +104,36 @@ class CampaignRefusal(RuntimeError):
                 "detail": self.detail}
 
 
-def classify_failure(detail: str) -> str:
-    """Classify one operational failure without inventing a renderer cause."""
-    lowered = (detail or "").lower()
-    if "timed out" in lowered or "timeout" in lowered:
-        return "execution_timeout"
-    if any(token in lowered for token in (
-            "credential", "unauthorized", "authentication", "api key")):
-        return "missing_credential"
-    if any(token in lowered for token in (
-            "no metal device", "metal device is unavailable", "no gpu",
-            "graphics unavailable", "no display", "command buffer",
-            "command_status", "readback")):
-        return "gpu_execution_failure"
-    if any(token in lowered for token in (
-            "digest", "sha256", "identity", "provenance", "belongs to another",
-            "invalid")):
-        return "evidence_invalid"
-    if any(token in lowered for token in ("missing", "not found", "absent")):
-        return "evidence_missing"
-    return "tool_failure"
-
-
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _actions(value) -> dict[str, int]:
-    actions: dict[str, int] = {}
-    for item in value or ():
-        name, _, count = str(item).partition("=")
-        if not name or not _:
-            raise CampaignRefusal("invalid_action", item)
-        try:
-            amount = int(count)
-        except ValueError as exc:
-            raise CampaignRefusal("invalid_action", item) from exc
-        if amount < 0:
-            raise CampaignRefusal("invalid_action", item)
-        actions[name] = actions.get(name, 0) + amount
-    return actions
+def _marker_path() -> Path:
+    """Host-wide activation marker, beside the host-wide launch lease.
+
+    There is deliberately no environment override: a production shell must not
+    be able to repoint the marker and thereby disable an active campaign.
+    Tests replace this function in-process.
+    """
+    # Fixed host-wide location.  Deliberately independent of every environment
+    # override (including the launch-lease directory) so an active stop cannot
+    # be hidden by changing the environment.
+    return launch_lease.DEFAULT_LEASE_DIR / MARKER_NAME
+
+
+def _marker_lock_path() -> Path:
+    return _marker_path().with_name(_marker_path().name + ".lock")
 
 
 class Guard:
-    """One campaign's persistent reservation, budget and failure state."""
+    """One campaign's mode, launch authorizations and stop state."""
 
     def __init__(self, state_path: Path | str):
         self.path = Path(state_path).expanduser().resolve()
         self.lock_path = self.path.with_name(self.path.name + ".lock")
+        # Set when an explicit EU4_CAMPAIGN_STATE names a different campaign
+        # than the host-wide active marker.  Every decision then fails closed.
+        self.conflict: str | None = None
 
     # -- persistence ----------------------------------------------------
     @contextlib.contextmanager
@@ -166,217 +159,296 @@ class Guard:
                              encoding="utf-8")
         os.replace(temporary, self.path)
 
-    def _normalize(self, state: dict) -> dict:
-        state.setdefault("counts", {})
-        state.setdefault("failures", {})
-        state.setdefault("blocked_actions", {})
-        state.setdefault("reservations", {})
-        state.setdefault("history", [])
-        state.setdefault("exhausted", [])
-        state.setdefault("admin_token_sha256", None)
-        state.setdefault("auto_merge", False)
-        return state
-
     def state(self) -> dict:
         value = self._read()
-        if value is None or value.get("schema") != SCHEMA:
+        if value is None:
             raise CampaignRefusal("state_missing", str(self.path))
-        return self._normalize(value)
+        if value.get("schema") == LEGACY_SCHEMA:
+            raise CampaignRefusal(
+                "legacy_state",
+                "this state uses the removed fixed-budget schema; start a new "
+                "campaign state instead of migrating an old one")
+        if value.get("schema") != SCHEMA:
+            raise CampaignRefusal("state_invalid", str(self.path))
+        value.setdefault("launch_authorizations", {})
+        value.setdefault("history", [])
+        value.setdefault("stop", None)
+        value.setdefault("deadline_epoch", None)
+        return value
 
     # -- lifecycle ------------------------------------------------------
-    def init(self, *, campaign_id: str = "", budgets=None,
-             deadline_seconds: float | None = None,
+    def init(self, *, campaign_id: str = "", mode: str = MODE_AUTONOMOUS,
              worktree: str | None = None, objective_digest: str | None = None,
-             auto_merge: bool = False,
-             admin_token: str | None = None) -> dict:
+             admin_token: str | None = None,
+             deadline_seconds: float | None = None) -> dict:
+        if mode not in MODES:
+            raise CampaignRefusal("invalid_mode", mode)
+        if deadline_seconds is not None and (
+                isinstance(deadline_seconds, bool)
+                or not isinstance(deadline_seconds, (int, float))
+                or deadline_seconds <= 0):
+            raise CampaignRefusal("invalid_deadline", str(deadline_seconds))
         now = time.time()
-        values = dict(PILOT_BUDGETS)
-        for key, value in (budgets or {}).items():
-            if key not in values:
-                raise CampaignRefusal("unknown_budget", key)
-            if not isinstance(value, (int, float)) or isinstance(value, bool) \
-                    or value < 0:
-                raise CampaignRefusal("invalid_budget", f"{key}={value!r}")
-            values[key] = value
-        seconds = (values["wall_clock_seconds"] if deadline_seconds is None
-                   else float(deadline_seconds))
-        if seconds <= 0:
-            raise CampaignRefusal("invalid_budget", "wall_clock_seconds")
         state = {
             "schema": SCHEMA,
             "campaign_id": campaign_id or f"campaign-{int(now)}",
             "created_at": now,
-            "deadline_epoch": now + seconds,
-            "budgets": values,
-            "counts": {key: 0 for key in values},
-            "failures": {},
-            "blocked_actions": {},
-            "reservations": {},
-            "stop": None,
+            "mode": mode,
+            "live_capture": mode == MODE_CONTROLLED,
             "worktree": worktree,
             "objective_digest": objective_digest,
-            "auto_merge": bool(auto_merge),
+            "auto_merge": False,
+            "stop": None,
+            # The operator's unattended runtime allowance.  It starts when the
+            # launcher activates the campaign, not when it was prepared; a
+            # resume keeps the original epoch instead of silently extending it.
+            "deadline_epoch": (now + float(deadline_seconds)
+                               if deadline_seconds is not None else None),
+            # Only used by an operator to authorize a live launch in
+            # autonomous mode; it is never accepted from model tool arguments.
             "admin_token_sha256": (_sha256_text(admin_token)
                                    if admin_token else None),
-            "exhausted": [],
+            "launch_authorizations": {},
             "history": [],
         }
         with self._locked():
             if self.path.is_file():
                 raise CampaignRefusal("state_exists", str(self.path))
             self._write(state)
+        self.activate()
         return state
 
-    # -- decisions ------------------------------------------------------
-    def _lifecycle_refusal(self, state: dict, now: float) -> None:
-        """Refuse when the campaign itself may no longer act.
+    def ensure(self, *, campaign_id: str = "", mode: str = MODE_AUTONOMOUS,
+               worktree: str | None = None,
+               objective_digest: str | None = None,
+               admin_token: str | None = None,
+               deadline_seconds: float | None = None) -> dict:
+        """Create a state, or verify and resume an existing one.
 
-        This is deliberately separate from the budget check: a reservation has
-        already charged its resource, so the resource's remaining balance is
-        zero and must not make the reserved action look unaffordable.
+        An existing state is never rewritten with a different mode: changing
+        the mode of a campaign would weaken its safety policy.  Resuming keeps
+        the recorded stop and the original deadline; the deadline is set here
+        only when it was never set (the launcher calls this at launch time, so
+        preparation time does not silently consume the allowance).
         """
-        if state.get("stop"):
-            raise CampaignRefusal("stopped",
-                                  str(state["stop"].get("reason")))
-        if now > float(state.get("deadline_epoch") or 0):
-            raise CampaignRefusal("deadline",
-                                  "the campaign wall-clock deadline has passed")
-
-    def _refusal(self, state: dict, needed: dict[str, int],
-                 now: float) -> None:
-        self._lifecycle_refusal(state, now)
-        budgets = state.get("budgets") or {}
-        counts = state.get("counts") or {}
-        for action, amount in needed.items():
-            if action not in budgets:
-                raise CampaignRefusal("unknown_action", action)
-            if action == "wall_clock_seconds":
-                raise CampaignRefusal("invalid_action", action)
-            if amount <= 0:
-                continue
-            blocked = (state.get("blocked_actions") or {}).get(action)
-            if blocked:
-                raise CampaignRefusal("requires_admin_recovery", blocked)
-            budget = budgets.get(action)
-            used = int(counts.get(action, 0))
-            if budget is not None and used + amount > int(budget):
-                raise CampaignRefusal(
-                    "budget_exhausted",
-                    f"{action} needs {amount}, {used} of {budget} already "
-                    "spent or reserved")
-
-    def check(self, action: str, *, now: float | None = None) -> dict:
-        state = self.state()
-        now = time.time() if now is None else now
-        try:
-            self._refusal(state, {action: 1}, now)
-        except CampaignRefusal as exc:
-            return {"ok": False, "kind": exc.kind, "detail": exc.detail}
-        return {"ok": True, "kind": None, "detail": ""}
-
-    def require(self, action: str) -> None:
-        decision = self.check(action)
-        if not decision["ok"]:
-            raise CampaignRefusal(decision["kind"], decision.get("detail") or "")
-
-    # -- reservations ---------------------------------------------------
-    def reserve(self, actions: dict[str, int], *, evidence=None,
-                now: float | None = None) -> str:
-        """Atomically charge every requested allowance and reserve it.
-
-        All-or-nothing: if one action is unavailable nothing is charged, so a
-        caller can refuse before spawning any child process.
-        """
-        now = time.time() if now is None else now
-        needed = {key: int(value) for key, value in (actions or {}).items()}
+        if not self.path.is_file():
+            return dict(self.init(
+                campaign_id=campaign_id, mode=mode, worktree=worktree,
+                objective_digest=objective_digest, admin_token=admin_token,
+                deadline_seconds=deadline_seconds),
+                created=True)
         with self._locked():
             state = self.state()
-            self._refusal(state, needed, now)
-            identifier = (f"res-{time.time_ns()}-{os.getpid()}-"
+            if state.get("mode") != mode:
+                raise CampaignRefusal(
+                    "mode_conflict",
+                    f"existing campaign mode is {state.get('mode')!r}, "
+                    f"requested {mode!r}; prepare a new campaign state instead "
+                    "of changing the safety policy of an active one")
+            if (state.get("deadline_epoch") is None
+                    and deadline_seconds is not None):
+                state["deadline_epoch"] = time.time() + float(deadline_seconds)
+                state["history"].append({
+                    "action": "deadline", "outcome": "started",
+                    "at": time.time(),
+                    "detail": f"unattended allowance {deadline_seconds}s "
+                              "started at launch",
+                    "evidence": None,
+                })
+                del state["history"][:-MAX_HISTORY]
+                self._write(state)
+        self.activate()
+        return dict(state, created=False)
+
+    def activate(self) -> dict:
+        """Publish this campaign host-wide so unsetting env vars changes nothing.
+
+        Activating a *different* campaign never silently replaces the active
+        safety policy: the operator must deactivate the current campaign first.
+        A marker that exists but cannot be read is also not overwritten.
+        """
+        state = self.state()
+        path = _marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _marker_lock_path().open("a+") as marker_lock:
+            fcntl.flock(marker_lock.fileno(), fcntl.LOCK_EX)
+            try:
+                return self._activate_locked(state, path)
+            finally:
+                fcntl.flock(marker_lock.fileno(), fcntl.LOCK_UN)
+
+    def _activate_locked(self, state: dict, path: Path) -> dict:
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise CampaignRefusal(
+                    "marker_invalid",
+                    f"{path} exists but cannot be read ({exc}); inspect and "
+                    "deactivate it before starting another campaign") from exc
+            if not isinstance(existing, dict) or existing.get(
+                    "schema") != MARKER_SCHEMA:
+                raise CampaignRefusal(
+                    "marker_invalid",
+                    f"{path} is not a campaign marker; inspect and remove it "
+                    "before starting a campaign")
+            active = str(existing.get("state") or "")
+            if active and active != str(self.path):
+                raise CampaignRefusal(
+                    "campaign_active",
+                    f"another campaign is active ({active}); deactivate it "
+                    "before starting a different campaign")
+        value = {
+            "schema": MARKER_SCHEMA,
+            "state": str(self.path),
+            "campaign_id": state.get("campaign_id"),
+            "mode": state.get("mode"),
+            "updated_at": time.time(),
+        }
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8")
+        os.replace(temporary, path)
+        return value
+
+    def deactivate(self) -> bool:
+        """Remove the host-wide marker, but only if it names this state."""
+        path = _marker_path()
+        with _marker_lock_path().open("a+") as marker_lock:
+            fcntl.flock(marker_lock.fileno(), fcntl.LOCK_EX)
+            try:
+                return self._deactivate_locked(path)
+            finally:
+                fcntl.flock(marker_lock.fileno(), fcntl.LOCK_UN)
+
+    def _deactivate_locked(self, path: Path) -> bool:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(value, dict) or value.get("schema") != MARKER_SCHEMA:
+            return False
+        if str(value.get("state")) != str(self.path):
+            return False
+        path.unlink()
+        return True
+
+    # -- decisions ------------------------------------------------------
+    def _require_active(self, state: dict) -> None:
+        if self.conflict:
+            raise CampaignRefusal(
+                "campaign_conflict",
+                "the explicit campaign state does not match the host-wide "
+                f"active campaign; refusing the explicit override ({self.conflict})")
+        stop = state.get("stop")
+        if stop:
+            raise CampaignRefusal("stopped", str(stop.get("reason")))
+        deadline = state.get("deadline_epoch")
+        if deadline is not None and time.time() > float(deadline):
+            raise CampaignRefusal(
+                "deadline",
+                "the operator's unattended execution allowance has expired")
+
+    def require(self, *, what: str = "this action") -> None:
+        """Refuse when the campaign is stopped (no quotas exist to check)."""
+        self._require_active(self.state())
+
+    # -- launch authorization -------------------------------------------
+    def authorize_launch(self, *, evidence=None,
+                         operator_token: str | None = None) -> str:
+        """Record one live-launch authorization.
+
+        Every live launch needs an explicit operator authorization, in both
+        modes.  The token is compared against the hash stored at
+        initialization, which the launcher unsets before the agent session.
+        Entering controlled-capture mode and authorizing one launch are
+        therefore separate decisions.
+        """
+        with self._locked():
+            state = self.state()
+            self._require_active(state)
+            if state.get("mode") != MODE_CONTROLLED:
+                raise CampaignRefusal(
+                    "live_capture_disabled",
+                    "live launch authorization requires controlled_capture mode")
+            expected = state.get("admin_token_sha256")
+            if not expected or not operator_token \
+                    or _sha256_text(operator_token) != expected:
+                raise CampaignRefusal(
+                    "operator_authorization_required",
+                    "a live EU4 launch needs an operator-issued authorization; "
+                    "the campaign cannot mint one itself")
+            identifier = (f"auth-{time.time_ns()}-{os.getpid()}-"
                           f"{uuid.uuid4().hex[:8]}")
-            for action, amount in needed.items():
-                state["counts"][action] = int(
-                    state["counts"].get(action, 0)) + amount
-            state["reservations"][identifier] = {
-                "actions": needed,
-                "state": "reserved",
+            now = time.time()
+            state["launch_authorizations"][identifier] = {
+                "state": "authorized",
                 "created_at": now,
                 "campaign_id": state.get("campaign_id"),
                 "evidence": evidence,
+                "launch_claim": None,
             }
-            state["exhausted"] = sorted(
-                key for key, budget in (state.get("budgets") or {}).items()
-                if key != "wall_clock_seconds" and budget is not None
-                and int(state["counts"].get(key, 0)) >= int(budget))
             state["history"].append({
-                "action": "reserve",
-                "outcome": "reserved",
+                "action": "authorize_launch",
+                "outcome": "authorized",
                 "at": now,
-                "reservation": identifier,
-                "detail": ", ".join(f"{key}={value}"
-                                    for key, value in sorted(needed.items())),
+                "authorization": identifier,
+                "detail": "one-use EU4 launch authorization",
                 "evidence": evidence,
             })
             del state["history"][:-MAX_HISTORY]
             self._write(state)
         return identifier
 
-    def claim_launch(self, reservation_id: str, *, evidence=None,
+    def claim_launch(self, authorization_id: str, *, evidence=None,
                      now: float | None = None) -> dict:
-        """Atomically consume one reservation's EU4 launch entitlement.
+        """Atomically consume one authorization's EU4 launch entitlement.
 
-        This is the one-use claim at the process-creation boundary.  It refuses
-        unless the reservation is open, belongs to this campaign, still carries
-        a positive ``eu4_launches`` allowance, and has not been claimed before.
-        The claim is persisted under the state lock *before* the caller may call
+        This is the one-use claim at the process-creation boundary.  The claim is
+        persisted under the state lock *before* the caller may call
         ``subprocess.Popen``, so two contenders cannot both be authorized.
-
-        The budget is not re-checked: the reservation already charged its
-        resources, and a remaining balance of zero is therefore expected.  Only
-        the campaign lifecycle (stop and deadline) is re-verified here.  The
-        reservation is not closed by the claim; completion still records the
-        verified outcome (and a failed spawn keeps the full charge).
         """
         now = time.time() if now is None else now
         with self._locked():
             state = self.state()
-            self._lifecycle_refusal(state, now)
-            if not reservation_id:
+            self._require_active(state)
+            if state.get("mode") != MODE_CONTROLLED:
                 raise CampaignRefusal(
-                    "launch_reservation",
-                    "the campaign requires an open EU4 launch reservation")
-            reservation = (state.get("reservations") or {}).get(
-                str(reservation_id))
-            if not isinstance(reservation, dict):
-                raise CampaignRefusal("reservation_missing", str(reservation_id))
-            owner = reservation.get("campaign_id")
+                    "live_capture_disabled",
+                    "a live launch is only possible in controlled_capture mode")
+            if not authorization_id:
+                raise CampaignRefusal(
+                    "launch_authorization",
+                    "a live launch requires a launch authorization")
+            record = (state.get("launch_authorizations") or {}).get(
+                str(authorization_id))
+            if not isinstance(record, dict):
+                raise CampaignRefusal("authorization_missing",
+                                      str(authorization_id))
+            owner = record.get("campaign_id")
             if owner is not None and owner != state.get("campaign_id"):
                 raise CampaignRefusal(
-                    "reservation_campaign",
-                    f"{reservation_id} belongs to campaign {owner!r}, not "
+                    "authorization_campaign",
+                    f"{authorization_id} belongs to campaign {owner!r}, not "
                     f"{state.get('campaign_id')!r}")
-            if reservation.get("state") != "reserved":
+            if record.get("state") not in ("authorized", "claimed"):
                 raise CampaignRefusal(
-                    "reservation_closed",
-                    f"{reservation_id} is {reservation.get('state')!r}")
-            if int((reservation.get("actions") or {}).get(
-                    "eu4_launches", 0)) <= 0:
-                raise CampaignRefusal(
-                    "launch_reservation",
-                    f"{reservation_id} has no eu4_launches allowance")
-            if reservation.get("launch_claim"):
-                claimed = reservation["launch_claim"]
+                    "authorization_closed",
+                    f"{authorization_id} is {record.get('state')!r}")
+            if record.get("launch_claim"):
+                claimed = record["launch_claim"]
                 raise CampaignRefusal(
                     "launch_already_claimed",
-                    f"{reservation_id} already authorized a launch at "
+                    f"{authorization_id} already authorized a launch at "
                     f"{claimed.get('at')}")
             claim = {"action": "eu4_launches", "at": now}
-            reservation["launch_claim"] = claim
+            record["launch_claim"] = claim
+            record["state"] = "claimed"
             state["history"].append({
                 "action": "claim_launch",
                 "outcome": "claimed",
                 "at": now,
-                "reservation": str(reservation_id),
+                "authorization": str(authorization_id),
                 "detail": "one-use eu4_launches entitlement consumed",
                 "evidence": evidence,
             })
@@ -384,73 +456,37 @@ class Guard:
             self._write(state)
         return dict(claim)
 
-    def complete(self, reservation_id: str, *, outcome: str = "ok",
+    def complete(self, authorization_id: str, *, outcome: str = "ok",
                  detail: str = "", evidence=None,
-                 consumed: dict[str, int] | None = None,
-                 failure_action: str | None = None,
                  now: float | None = None) -> dict:
-        """Record the outcome of a reservation.
+        """Record the verified outcome of one launch authorization.
 
-        ``consumed`` reconciles a conservative multi-resource reservation with
-        verified actual outcomes; only a successfully completed action may
-        release its unused part.  A failure keeps the full charge.
+        A failed spawn keeps the consumed authorization: there is no refund,
+        because the process may have existed.
         """
         now = time.time() if now is None else now
         if outcome not in ("ok", "failed"):
             raise CampaignRefusal("invalid_outcome", outcome)
         with self._locked():
             state = self.state()
-            reservation = (state.get("reservations") or {}).get(
-                reservation_id)
-            if reservation is None:
-                raise CampaignRefusal("reservation_missing", reservation_id)
-            if reservation.get("state") != "reserved":
-                raise CampaignRefusal("reservation_closed",
-                                      f"{reservation_id} is "
-                                      f"{reservation.get('state')!r}")
-            actions = dict(reservation.get("actions") or {})
-            if outcome == "failed":
-                action = failure_action or next(iter(actions), None)
-                if action:
-                    kind = classify_failure(detail)
-                    key = f"{action}:{kind}:{(detail or '')[:120]}"
-                    failures = state.setdefault("failures", {})
-                    row = failures.get(key) or {
-                        "count": 0, "class": kind,
-                        "detail": (detail or "")[:500]}
-                    row["count"] = int(row.get("count", 0)) + 1
-                    row["last_at"] = now
-                    failures[key] = row
-                    if row["count"] >= MAX_IDENTICAL_RETRIES:
-                        state.setdefault("blocked_actions", {})[action] = (
-                            f"identical failure {key!r} occurred "
-                            f"{row['count']} times; administrative recovery is "
-                            "required before retrying this action")
-            elif consumed is not None:
-                for action, reserved_amount in actions.items():
-                    actual = int(consumed.get(action, reserved_amount))
-                    actual = max(0, min(actual, int(reserved_amount)))
-                    release = int(reserved_amount) - actual
-                    if release:
-                        state["counts"][action] = max(
-                            0, int(state["counts"].get(action, 0)) - release)
-                reservation["consumed"] = {
-                    key: int(consumed.get(key, actions[key]))
-                    for key in actions}
-            reservation["state"] = ("completed" if outcome == "ok"
-                                    else "failed")
-            reservation["completed_at"] = now
-            reservation["detail"] = (detail or "")[:500]
-            reservation["completion_evidence"] = evidence
-            state["exhausted"] = sorted(
-                key for key, budget in (state.get("budgets") or {}).items()
-                if key != "wall_clock_seconds" and budget is not None
-                and int(state["counts"].get(key, 0)) >= int(budget))
+            record = (state.get("launch_authorizations") or {}).get(
+                authorization_id)
+            if record is None:
+                raise CampaignRefusal("authorization_missing",
+                                      authorization_id)
+            if record.get("state") in ("completed", "failed", "abandoned"):
+                raise CampaignRefusal("authorization_closed",
+                                      f"{authorization_id} is "
+                                      f"{record.get('state')!r}")
+            record["state"] = ("completed" if outcome == "ok" else "failed")
+            record["completed_at"] = now
+            record["detail"] = (detail or "")[:500]
+            record["completion_evidence"] = evidence
             state["history"].append({
                 "action": "complete",
                 "outcome": outcome,
                 "at": now,
-                "reservation": reservation_id,
+                "authorization": authorization_id,
                 "detail": (detail or "")[:500],
                 "evidence": evidence,
             })
@@ -458,49 +494,51 @@ class Guard:
             self._write(state)
         return state
 
-    def validate_reservation(self, reservation_id: str, action: str) -> bool:
-        """True when the identifier holds an open reservation for the action.
+    def validate_authorization(self, authorization_id: str) -> bool:
+        """True when the identifier is an open authorization for a launch.
 
         Read-only preflight only.  A launch must additionally call
-        :meth:`claim_launch`; this check never consumes the entitlement.
+        :meth:`claim_launch`; this check never consumes the authorization.
         """
-        if not reservation_id:
+        if not authorization_id:
             return False
         try:
             state = self.state()
         except CampaignRefusal:
             return False
-        reservation = (state.get("reservations") or {}).get(
-            str(reservation_id))
-        if not isinstance(reservation, dict):
-            return False
-        return (reservation.get("state") == "reserved"
-                and action in (reservation.get("actions") or {}))
+        record = (state.get("launch_authorizations") or {}).get(
+            str(authorization_id))
+        return isinstance(record, dict) and record.get("state") in (
+            "authorized", "claimed")
 
     def abandon_stale(self, *, max_age_seconds: float,
                       now: float | None = None) -> dict:
-        """Mark abandoned reservations without restoring their charge."""
+        """Mark abandoned authorizations without restoring them.
+
+        An authorization older than ``max_age_seconds`` whose process never
+        reported an outcome is marked ``abandoned``; it is never reusable.
+        """
         now = time.time() if now is None else now
         with self._locked():
             state = self.state()
             changed = 0
-            for identifier, reservation in (
-                    state.get("reservations") or {}).items():
-                if reservation.get("state") != "reserved":
+            for identifier, record in (
+                    state.get("launch_authorizations") or {}).items():
+                if record.get("state") not in ("authorized", "claimed"):
                     continue
-                if now - float(reservation.get("created_at") or now) < float(
-                        max_age_seconds):
+                created = float(record.get("created_at") or now)
+                if now - created < float(max_age_seconds):
                     continue
-                reservation["state"] = "abandoned"
-                reservation["abandoned_at"] = now
+                record["state"] = "abandoned"
+                record["abandoned_at"] = now
                 changed += 1
                 state["history"].append({
                     "action": "abandon",
                     "outcome": "abandoned",
                     "at": now,
-                    "reservation": identifier,
-                    "detail": "reservation exceeded its maximum age; its "
-                              "charge is retained conservatively",
+                    "authorization": identifier,
+                    "detail": "authorization exceeded its maximum age; it is "
+                              "not reusable",
                     "evidence": None,
                 })
             if changed:
@@ -508,7 +546,7 @@ class Guard:
                 self._write(state)
         return state
 
-    # -- stop and authorized recovery -----------------------------------
+    # -- stop -----------------------------------------------------------
     def stop(self, reason: str, detail: str = "") -> dict:
         if reason not in STOP_REASONS:
             raise CampaignRefusal("unknown_stop_reason", reason)
@@ -516,416 +554,230 @@ class Guard:
             state = self.state()
             state["stop"] = {"reason": reason, "detail": detail[:1000],
                              "at": time.time()}
+            state["history"].append({
+                "action": "stop", "outcome": reason, "at": time.time(),
+                "detail": detail[:1000], "evidence": None})
+            del state["history"][:-MAX_HISTORY]
             self._write(state)
         return state
 
-    def admin_recover(self, *, token: str, reason: str,
-                      actions=None) -> dict:
-        """Operator-authorized recovery from a stop or blocked action.
+    def resume(self, *, detail: str = "") -> dict:
+        """Clear an operator stop after the condition was actually resolved.
 
-        The token hash is stored at initialization; the token is never accepted
-        from the model's tool arguments.  Every recovery is audited.
+        This is not a budget reset (there is no budget) and it never rewinds an
+        expired deadline.
         """
-        if not str(reason or "").strip():
-            raise CampaignRefusal("recovery_reason_required")
         with self._locked():
             state = self.state()
-            expected = state.get("admin_token_sha256")
-            if not expected:
-                raise CampaignRefusal(
-                    "admin_recovery_disabled",
-                    "this campaign was initialized without an administrative "
-                    "token")
-            if not token or _sha256_text(token) != expected:
-                raise CampaignRefusal("admin_authorization_invalid")
-            cleared = {"stop": state.get("stop") is not None,
-                       "actions": []}
-            state["stop"] = None
-            blocked = state.setdefault("blocked_actions", {})
-            targets = list(actions or blocked)
-            for action in targets:
-                if blocked.pop(action, None) is not None:
-                    cleared["actions"].append(action)
-            state["history"].append({
-                "action": "admin_recover",
-                "outcome": "authorized",
-                "at": time.time(),
-                "detail": reason[:500],
-                "evidence": {"cleared": cleared},
-            })
-            self._write(state)
+            stopped = state.get("stop")
+            if stopped:
+                state["stop"] = None
+                state["history"].append({
+                    "action": "resume", "outcome": "active",
+                    "at": time.time(),
+                    "detail": (detail or "operator resumed the campaign")[:500],
+                    "evidence": {"cleared_stop": stopped},
+                })
+                del state["history"][:-MAX_HISTORY]
+                self._write(state)
         return state
 
     def status(self) -> dict:
         state = self.state()
-        budgets = state.get("budgets") or {}
-        counts = state.get("counts") or {}
-        remaining = {key: (None if key == "wall_clock_seconds"
-                           else max(0, int(budget) - int(counts.get(key, 0))))
-                     for key, budget in budgets.items()}
-        open_reservations = [
-            {"reservation": identifier,
-             "actions": reservation.get("actions"),
-             "created_at": reservation.get("created_at"),
-             "launch_claimed": bool(reservation.get("launch_claim"))}
-            for identifier, reservation in
-            (state.get("reservations") or {}).items()
-            if reservation.get("state") == "reserved"]
+        counts: dict[str, int] = {}
+        open_rows = []
+        for identifier, record in (
+                state.get("launch_authorizations") or {}).items():
+            name = str(record.get("state"))
+            counts[name] = counts.get(name, 0) + 1
+            if name in ("authorized", "claimed"):
+                open_rows.append({
+                    "authorization": identifier,
+                    "state": name,
+                    "created_at": record.get("created_at"),
+                    "launch_claimed": bool(record.get("launch_claim")),
+                })
         return {
             "schema": SCHEMA,
             "campaign_id": state.get("campaign_id"),
+            "mode": state.get("mode"),
+            "live_capture": bool(state.get("live_capture")),
             "stop": state.get("stop"),
             "deadline_epoch": state.get("deadline_epoch"),
-            "seconds_remaining": max(
-                0.0, float(state.get("deadline_epoch") or 0) - time.time()),
-            "budgets": budgets,
-            "counts": counts,
-            "remaining": remaining,
-            "failure_classes": {
-                key: value.get("class")
-                for key, value in (state.get("failures") or {}).items()},
-            "blocked_actions": state.get("blocked_actions") or {},
-            "exhausted": state.get("exhausted") or [],
-            "open_reservations": open_reservations,
-            "reservation_count": len(state.get("reservations") or {}),
-            "admin_recovery_available": bool(
-                state.get("admin_token_sha256")),
+            "seconds_remaining": (
+                None if state.get("deadline_epoch") is None else
+                max(0.0, float(state["deadline_epoch"]) - time.time())),
             "auto_merge": state.get("auto_merge"),
             "worktree": state.get("worktree"),
+            "authorization_counts": counts,
+            "open_authorizations": open_rows,
             "history_count": len(state.get("history") or []),
         }
 
 
+def _marker_campaign() -> Guard | None:
+    """The host-wide active campaign, published by :meth:`Guard.activate`.
+
+    An existing marker always yields a guard, even when it names a missing or
+    malformed state: the launch entry points then refuse through
+    ``CampaignRefusal`` instead of treating the campaign as absent.  A marker
+    that cannot be parsed at all yields a sentinel guard whose state is missing,
+    which fails closed for the same reason.
+    """
+    path = _marker_path()
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return Guard(path)
+    if not isinstance(value, dict) or value.get("schema") != MARKER_SCHEMA:
+        return Guard(path)
+    state = value.get("state")
+    if not isinstance(state, str) or not state:
+        return Guard(path)
+    # Do not validate the state here.  A deleted or corrupt state must refuse
+    # launches, not read as "no campaign".
+    return Guard(state)
+
+
 def from_env() -> Guard | None:
-    """The configured campaign guard, or ``None`` when the feature is off."""
-    path = os.environ.get("EU4_CAMPAIGN_STATE", "").strip()
-    return Guard(path) if path else None
+    """The configured campaign guard, or ``None`` when no campaign exists.
+
+    The host-wide marker is authoritative.  An explicit ``EU4_CAMPAIGN_STATE``
+    that names a different state does not override it: the returned guard
+    carries a conflict and refuses every decision, so a stale environment
+    variable cannot bypass the active campaign's policy.
+    """
+    env_path = os.environ.get("EU4_CAMPAIGN_STATE", "").strip()
+    marker = _marker_campaign()
+    if marker is None:
+        return Guard(env_path) if env_path else None
+    if env_path:
+        explicit = Guard(env_path)
+        if str(explicit.path) != str(marker.path):
+            marker.conflict = str(explicit.path)
+    return marker
 
 
-def require_from_env(action: str) -> Guard | None:
-    """Refuse an action when the configured campaign has no allowance."""
+def refuse_unmanaged_launch(operation: str) -> None:
+    """Refuse a launch from a tool that is not the campaign capture path.
+
+    The legacy benchmark drivers acquire the host lease themselves and never
+    claim a campaign authorization, so they must not act while a campaign is
+    active: otherwise a campaign could escape to live capture by invoking a
+    lower-level command instead of ``automation.m6_frame capture``.
+    """
+    if from_env() is not None:
+        raise CampaignRefusal(
+            "launch_authorization",
+            f"{operation} is not the campaign capture path; use "
+            "automation.m6_frame capture so the launch is authorized")
+
+
+def require_active_from_env() -> Guard | None:
+    """Refuse an expensive action when the active campaign is stopped.
+
+    There is no quota to check: this only enforces a stop, so ordinary
+    investigation is never blocked by a remaining-allowance counter.
+    """
     guard = from_env()
     if guard is not None:
-        guard.require(action)
+        guard.require()
     return guard
 
 
-def _launch_token(reservation: str | None) -> str:
-    return (reservation if reservation is not None
-            else os.environ.get("EU4_CAMPAIGN_RESERVATION", "")).strip()
+def require_launch_authorization(authorization: str | None = None,
+                                 guard: "Guard | None" = None) -> None:
+    """Refuse an EU4 spawn that does not hold an open launch authorization.
 
-
-def require_launch_reservation(reservation: str | None = None,
-                               guard: "Guard | None" = None) -> None:
-    """Refuse an EU4 spawn that does not hold an open launch reservation.
-
-    ``reservation`` is the identity the trusted caller created with
-    :meth:`Guard.reserve`; the capture path passes it explicitly so a stale or
-    inherited process environment cannot authorize a launch.  When no explicit
-    identity is supplied, the ambient token is used only as a compatibility
-    fallback for direct CLI invocations, which a campaign still validates.
     Both launch choke points call this read-only preflight, so an alternative
-    tool cannot spend an unguarded launch while a campaign budget is active.
-    The one-use entitlement is consumed separately by
-    :func:`claim_launch_reservation` immediately before process creation.
+    tool cannot spend an unauthorized launch.  The one-use entitlement is
+    consumed separately by :func:`claim_launch_authorization` immediately before
+    process creation.
     """
     guard = guard if guard is not None else from_env()
     if guard is None:
         return
-    if not guard.validate_reservation(_launch_token(reservation),
-                                      "eu4_launches"):
+    # Refuse a stopped/expired/conflicting campaign before any caller spends
+    # preflight or build work, not only at the final atomic claim.
+    guard.require()
+    state = guard.state()
+    if state.get("mode") != MODE_CONTROLLED:
         raise CampaignRefusal(
-            "launch_reservation",
-            "the campaign requires an open EU4 launch reservation; start the "
+            "live_capture_disabled",
+            "a live launch is only possible in controlled_capture mode")
+    if not guard.validate_authorization(_launch_token(authorization)):
+        raise CampaignRefusal(
+            "launch_authorization",
+            "this campaign requires an open EU4 launch authorization; start the "
             "capture through automation.m6_frame capture")
 
 
-def claim_launch_reservation(reservation: str | None = None,
-                             guard: "Guard | None" = None,
-                             evidence=None) -> dict | None:
+def claim_launch_authorization(authorization: str | None = None,
+                               guard: "Guard | None" = None,
+                               evidence=None) -> dict | None:
     """Atomically claim the one-use EU4 launch entitlement, just before spawn.
 
-    Returns ``None`` when campaigns are disabled.  Otherwise the claim is
+    Returns ``None`` when no campaign is active.  Otherwise the claim is
     persisted before the caller is allowed to create the process; refusal means
     no process may be created.
     """
     guard = guard if guard is not None else from_env()
     if guard is None:
         return None
-    return guard.claim_launch(_launch_token(reservation), evidence=evidence)
+    return guard.claim_launch(_launch_token(authorization), evidence=evidence)
 
 
-_ACTIVE_ATTEMPT = contextvars.ContextVar("eu4_active_attempt", default=None)
-_ATTEMPT_ENV = "EU4_CAMPAIGN_ATTEMPT"
-_ATTEMPT_SCHEMA = "eu4-campaign-attempt/v1"
-
-
-class _AttemptHandle:
-    """One active reservation and its exactly-once settlement.
-
-    The outermost ``attempt`` owns the reservation.  Nested calls in the same
-    process share that reservation through a context variable; a child process
-    inherits a scoped token through the environment.  Neither may reserve the
-    action again.  A descendant failure settles the shared reservation exactly
-    once so the failure is durable even when the parent ignores the child's
-    exit status; the owner then observes that closed reservation instead of
-    recording a second completion.
-    """
-
-    def __init__(self, guard: "Guard", reservation: str, action: str,
-                 count: int, *, evidence=None, consumed=None,
-                 parent: "_AttemptHandle | None" = None,
-                 inherited: bool = False):
-        self.guard = guard
-        self.reservation = reservation
-        self.action = action
-        self.count = int(count)
-        self.parent = parent
-        self.inherited = inherited
-        self.evidence = dict(evidence or {})
-        self.consumed = consumed
-        self.outcome = "ok"
-        self.detail = ""
-        self.settled = False
-
-    def __getattr__(self, name):
-        # Keep older call sites that used ``with attempt(...) as guard`` working.
-        return getattr(self.guard, name)
-
-    @property
-    def owner(self) -> bool:
-        return self.parent is None and not self.inherited
-
-    def merge_evidence(self, evidence=None) -> None:
-        if isinstance(evidence, dict):
-            self.evidence.update(evidence)
-
-    def fail(self, detail: str = "", evidence=None) -> None:
-        """Mark the shared action failed; descendant failures settle once."""
-        self.outcome = "failed"
-        self.detail = detail or self.detail
-        self.merge_evidence(evidence)
-        if self.parent is not None:
-            # Same-process nesting: the owner records the single failure.
-            self.parent.fail(detail, evidence)
-            return
-        if self.inherited:
-            # A separate process has no live reference to the owner.  Persist
-            # the failure now; the owner treats the closed reservation as
-            # already settled.
-            self._settle()
-
-    def succeed(self, *, consumed: dict | None = None, evidence=None) -> None:
-        if self.outcome != "failed":
-            self.outcome = "ok"
-        if consumed is not None:
-            self.consumed = consumed
-        self.merge_evidence(evidence)
-
-    def _settle(self) -> None:
-        if self.settled:
-            return
-        self.settled = True
-        try:
-            self.guard.complete(
-                self.reservation,
-                outcome=self.outcome,
-                detail=self.detail,
-                consumed=self.consumed if self.outcome == "ok" else None,
-                evidence=self.evidence)
-        except CampaignRefusal as exc:
-            if exc.kind != "reservation_closed":
-                raise
-            # A descendant already settled the shared reservation.  Exactly
-            # one completion row exists; do not append a second one.
-
-    def _fail_from_exception(self, exc: BaseException) -> None:
-        self.fail(f"{type(exc).__name__}: {exc}")
-
-
-def _attempt_token(guard: "Guard", reservation: str, action: str,
-                   count: int) -> str:
-    return json.dumps({
-        "schema": _ATTEMPT_SCHEMA,
-        "state": str(guard.path),
-        "reservation": reservation,
-        "action": action,
-        "count": int(count),
-        "pid": os.getpid(),
-    }, sort_keys=True)
-
-
-def _inherited_attempt(guard: "Guard", action: str,
-                       count: int) -> str | None:
-    """Return the open ancestor reservation inherited by this process."""
-    raw = os.environ.get(_ATTEMPT_ENV, "").strip()
-    if not raw:
-        return None
-    try:
-        token = json.loads(raw)
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(token, dict) or token.get("schema") != _ATTEMPT_SCHEMA:
-        return None
-    if token.get("state") != str(guard.path) or token.get("action") != action:
-        return None
-    # Only a descendant process joins.  A concurrent thread in the owner
-    # process must contend through the ordinary state lock instead of sharing
-    # a reservation it did not create.
-    try:
-        token_pid = int(token.get("pid") or 0)
-    except (TypeError, ValueError):
-        return None
-    if token_pid == os.getpid():
-        return None
-    reservation_id = str(token.get("reservation") or "")
-    if not reservation_id:
-        return None
-    try:
-        state = guard.state()
-    except CampaignRefusal:
-        return None
-    reservation = (state.get("reservations") or {}).get(reservation_id)
-    if not isinstance(reservation, dict) or reservation.get("state") != "reserved":
-        return None
-    reserved = int((reservation.get("actions") or {}).get(action, 0))
-    if reserved < count:
-        raise CampaignRefusal(
-            "attempt_count",
-            f"nested {action}={count} exceeds the ancestor reservation "
-            f"of {reserved}")
-    return reservation_id
-
-
-@contextlib.contextmanager
-def attempt(action: str, *, count: int = 1, evidence=None,
-            consumed: dict | None = None):
-    """Reserve and then record one resource-consuming action exactly once.
-
-    The outermost caller reserves the total ``count``; nested same-process
-    calls and descendant processes join that reservation instead of charging it
-    again.  A process that dies mid-action leaves the persisted reservation
-    open, which is the durable record of interrupted work.
-    """
-    guard = from_env()
-    if guard is None:
-        yield None
-        return
-    if count < 1:
-        raise CampaignRefusal("attempt_count", "attempt count must be >= 1")
-    active = _ACTIVE_ATTEMPT.get()
-    if (active is not None
-            and str(active.guard.path) == str(guard.path)
-            and active.action == action):
-        if int(count) > active.count:
-            raise CampaignRefusal(
-                "attempt_count",
-                f"nested {action}={count} exceeds the active reservation "
-                f"of {active.count}")
-        inner = _AttemptHandle(
-            guard, active.reservation, action, count, evidence=evidence,
-            consumed=consumed, parent=active)
-        token = _ACTIVE_ATTEMPT.set(inner)
-        try:
-            yield inner
-        except BaseException as exc:  # noqa: BLE001 - record then propagate
-            inner._fail_from_exception(exc)
-            raise
-        finally:
-            _ACTIVE_ATTEMPT.reset(token)
-        return
-    inherited_reservation = _inherited_attempt(guard, action, count)
-    if inherited_reservation is not None:
-        joined = _AttemptHandle(
-            guard, inherited_reservation, action, count, evidence=evidence,
-            consumed=consumed, inherited=True)
-        token = _ACTIVE_ATTEMPT.set(joined)
-        try:
-            yield joined
-        except BaseException as exc:  # noqa: BLE001 - record then propagate
-            joined._fail_from_exception(exc)
-            raise
-        finally:
-            _ACTIVE_ATTEMPT.reset(token)
-        return
-    reservation = guard.reserve({action: int(count)}, evidence=evidence)
-    handle = _AttemptHandle(
-        guard, reservation, action, count, evidence=evidence, consumed=consumed)
-    token = _ACTIVE_ATTEMPT.set(handle)
-    previous = os.environ.get(_ATTEMPT_ENV)
-    os.environ[_ATTEMPT_ENV] = _attempt_token(guard, reservation, action, count)
-    try:
-        try:
-            yield handle
-        except BaseException as exc:  # noqa: BLE001 - record then propagate
-            handle._fail_from_exception(exc)
-            raise
-    finally:
-        _ACTIVE_ATTEMPT.reset(token)
-        if previous is None:
-            os.environ.pop(_ATTEMPT_ENV, None)
-        else:
-            os.environ[_ATTEMPT_ENV] = previous
-        handle._settle()
-
-def _budget_pairs(values) -> dict:
-    budgets = {}
-    for item in values or ():
-        name, _, value = str(item).partition("=")
-        if not name or not _:
-            raise SystemExit(f"invalid --budget {item!r}; use name=value")
-        try:
-            budgets[name] = int(value)
-        except ValueError:
-            budgets[name] = float(value)
-    return budgets
+def _launch_token(authorization: str | None) -> str:
+    if authorization is not None:
+        return authorization
+    return (os.environ.get("EU4_CAMPAIGN_AUTHORIZATION")
+            or os.environ.get("EU4_CAMPAIGN_RESERVATION") or "").strip()
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="operation", required=True)
-    init = sub.add_parser("init")
-    init.add_argument("--state", required=True, type=Path)
+
+    def common(name: str) -> argparse.ArgumentParser:
+        item = sub.add_parser(name)
+        item.add_argument("--state", required=True, type=Path)
+        return item
+
+    init = common("init")
     init.add_argument("--campaign-id", default="")
-    init.add_argument("--budget", action="append", default=[],
-                      help="override name=value (repeatable)")
-    init.add_argument("--deadline-seconds", type=float, default=None)
+    init.add_argument("--mode", choices=MODES, default=MODE_AUTONOMOUS)
     init.add_argument("--worktree", default=None)
     init.add_argument("--objective-digest", default=None)
-    command = sub.add_parser("reserve")
-    command.add_argument("--state", required=True, type=Path)
-    command.add_argument("--action", action="append", required=True,
-                         help="name=count (repeatable, all-or-nothing)")
+    init.add_argument("--deadline-seconds", type=float, default=None,
+                      help="operator unattended allowance, starting at launch")
+    ensure = common("ensure")
+    ensure.add_argument("--campaign-id", default="")
+    ensure.add_argument("--mode", choices=MODES, default=MODE_AUTONOMOUS)
+    ensure.add_argument("--worktree", default=None)
+    ensure.add_argument("--objective-digest", default=None)
+    ensure.add_argument("--deadline-seconds", type=float, default=None,
+                        help="operator unattended allowance, starting at launch")
+    command = common("authorize-launch")
     command.add_argument("--evidence", default=None)
-    command = sub.add_parser("complete")
-    command.add_argument("--state", required=True, type=Path)
-    command.add_argument("--reservation", required=True)
-    command.add_argument("--outcome", default="ok",
-                         choices=("ok", "failed"))
+    command = common("claim-launch")
+    command.add_argument("--authorization", required=True)
+    command.add_argument("--evidence", default=None)
+    command = common("complete")
+    command.add_argument("--authorization", required=True)
+    command.add_argument("--outcome", default="ok", choices=("ok", "failed"))
     command.add_argument("--detail", default="")
-    command = sub.add_parser("check")
-    command.add_argument("--state", required=True, type=Path)
-    command.add_argument("--action", required=True)
-    command = sub.add_parser("ensure")
-    command.add_argument("--state", required=True, type=Path)
-    command.add_argument("--campaign-id", default="")
-    command.add_argument("--budget", action="append", default=[])
-    command.add_argument("--deadline-seconds", type=float, default=None)
-    command.add_argument("--worktree", default=None)
-    command.add_argument("--objective-digest", default=None)
-    command = sub.add_parser("status")
-    command.add_argument("--state", required=True, type=Path)
-    command = sub.add_parser("stop")
-    command.add_argument("--state", required=True, type=Path)
-    command.add_argument("--reason", required=True, choices=STOP_REASONS)
-    command.add_argument("--detail", default="")
-    command = sub.add_parser("abandon-stale")
-    command.add_argument("--state", required=True, type=Path)
+    command = common("status")
+    stop = common("stop")
+    stop.add_argument("--reason", required=True, choices=STOP_REASONS)
+    stop.add_argument("--detail", default="")
+    command = common("abandon-stale")
     command.add_argument("--max-age-seconds", type=float, required=True)
-    command = sub.add_parser("admin-recover")
-    command.add_argument("--state", required=True, type=Path)
-    command.add_argument("--reason", required=True)
-    command.add_argument("--action", action="append", default=[])
+    command = common("activate")
+    command = common("deactivate")
+    command = common("resume")
+    command.add_argument("--detail", default="")
     return parser
 
 
@@ -933,78 +785,42 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     guard = Guard(args.state)
     try:
-        if args.operation == "ensure":
-            budgets = _budget_pairs(args.budget)
-            if not guard.path.is_file():
-                value = guard.init(
-                    campaign_id=args.campaign_id,
-                    budgets=budgets,
-                    deadline_seconds=args.deadline_seconds,
-                    worktree=args.worktree,
-                    objective_digest=args.objective_digest,
-                    admin_token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN") or None)
-                value = {"ok": True, "created": True, "status": value}
-            else:
-                # Check and refresh under the state lock: a reservation, stop or
-                # failure written after the read must not be overwritten by this
-                # earlier snapshot.
-                with guard._locked():
-                    state = guard.state()
-                    current = {
-                        key: state.get("budgets", {}).get(key)
-                        for key in budgets
-                    }
-                    problems = []
-                    if current != budgets:
-                        problems.append(
-                            f"existing budgets {current} != requested {budgets}")
-                    if any(int(state.get("counts", {}).get(key, 0) or 0) != 0
-                           for key in state.get("counts", {})):
-                        problems.append("existing state has consumed budget")
-                    if state.get("reservations"):
-                        problems.append("existing state has reservations")
-                    if state.get("stop"):
-                        problems.append("existing state is stopped")
-                    if problems:
-                        raise CampaignRefusal(
-                            "state_in_use", "; ".join(problems))
-                    # The state is unused: refresh the wall-clock window so a
-                    # prepared handoff does not expire while waiting for launch.
-                    seconds = budgets.get(
-                        "wall_clock_seconds",
-                        args.deadline_seconds
-                        if args.deadline_seconds is not None
-                        else PILOT_BUDGETS["wall_clock_seconds"])
-                    state["deadline_epoch"] = time.time() + float(seconds)
-                    guard._write(state)
-                value = {"ok": True, "created": False, "status": state}
-        elif args.operation == "init":
+        if args.operation == "init":
             value = guard.init(
-                campaign_id=args.campaign_id,
-                budgets=_budget_pairs(args.budget),
-                deadline_seconds=args.deadline_seconds,
+                campaign_id=args.campaign_id, mode=args.mode,
                 worktree=args.worktree,
                 objective_digest=args.objective_digest,
-                admin_token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN") or None)
-        elif args.operation == "reserve":
-            identifier = guard.reserve(_actions(args.action),
+                admin_token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN") or None,
+                deadline_seconds=args.deadline_seconds)
+        elif args.operation == "ensure":
+            value = guard.ensure(
+                campaign_id=args.campaign_id, mode=args.mode,
+                worktree=args.worktree,
+                objective_digest=args.objective_digest,
+                admin_token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN") or None,
+                deadline_seconds=args.deadline_seconds)
+        elif args.operation == "authorize-launch":
+            value = {"ok": True, "authorization": guard.authorize_launch(
+                evidence=args.evidence,
+                operator_token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN")
+                or None)}
+        elif args.operation == "claim-launch":
+            value = guard.claim_launch(args.authorization,
                                        evidence=args.evidence)
-            value = {"ok": True, "reservation": identifier,
-                     "status": guard.status()}
         elif args.operation == "complete":
-            value = guard.complete(args.reservation, outcome=args.outcome,
+            value = guard.complete(args.authorization, outcome=args.outcome,
                                    detail=args.detail)
-        elif args.operation == "check":
-            value = guard.check(args.action)
         elif args.operation == "status":
             value = guard.status()
         elif args.operation == "abandon-stale":
             guard.abandon_stale(max_age_seconds=args.max_age_seconds)
             value = guard.status()
-        elif args.operation == "admin-recover":
-            value = guard.admin_recover(
-                token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN") or "",
-                reason=args.reason, actions=args.action or None)
+        elif args.operation == "activate":
+            value = guard.activate()
+        elif args.operation == "deactivate":
+            value = {"ok": guard.deactivate()}
+        elif args.operation == "resume":
+            value = guard.resume(detail=args.detail)
         else:
             value = guard.stop(args.reason, args.detail)
     except CampaignRefusal as exc:

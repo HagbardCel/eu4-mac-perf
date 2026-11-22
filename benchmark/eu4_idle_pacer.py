@@ -225,6 +225,12 @@ def run(args: argparse.Namespace) -> None:
             env.update(EU4_PACE_LOG=str(run_dir/"pacer.csv"),
                        EU4_PACE_CONTROL=str(control_path), DYLD_INSERT_LIBRARIES=str(LIBRARY))
             with (run_dir/"game.stdout").open("wb") as stdout, (run_dir/"game.stderr").open("wb") as stderr:
+                from automation import campaign_guard, test_profiles
+                try:
+                    test_profiles.ensure_live_launch("eu4_idle_pacer.run")
+                except test_profiles.LiveProfileError as exc:
+                    raise base.BenchmarkError(str(exc)) from exc
+                campaign_guard.refuse_unmanaged_launch("eu4_idle_pacer.run")
                 lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
                 try:
                     game = subprocess.Popen(["./eu4",*launcher["exeArgs"]], cwd=base.GOG_EXE.parent,

@@ -197,12 +197,23 @@ class CliExitContractTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary) / "out"
+            rationale = Path(temporary) / "rationale.json"
+            rationale.write_text(json.dumps({
+                "question": "does the checkpoint bind?",
+                "evidence": [temporary],
+                "gap": "checkpoint binding was not checked",
+                "hypothesis": "an invalid checkpoint blocks qualification",
+                "action": "CLI replay",
+                "expected_information": "exit code and status",
+                "cheaper_alternatives_checked": True,
+            }))
             with mock.patch.object(gfx_independent_replay, "replay",
                                    return_value=report), \
                  contextlib.redirect_stdout(io.StringIO()):
                 code = gfx_independent_replay.main([
                     "--frame", str(Path(temporary) / "frame"),
                     "--out", str(out),
+                    "--rationale", str(rationale),
                 ])
         self.assertEqual(code, 1)
 

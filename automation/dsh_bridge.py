@@ -108,6 +108,17 @@ class _AcceptShim:
         self.root = sidecar.campaign_root
         self.accept = list(sidecar.accept)
         self.accept_timeout = sidecar.validation_timeout_seconds
+        # Bind the checked campaign explicitly at the checker boundary.  The
+        # event-20 checker used to fall back to its historical sidecar and to
+        # accept an ambient trusted-root override; neither may redirect the
+        # selected DSH campaign.
+        self.accept_env = {
+            "EU4_M7_CANDIDATE_SIDECAR": str(sidecar.sidecar_path),
+        }
+        self.accept_env_scrub = (
+            "EU4_M7_CANDIDATE_SIDECAR",
+            "EU4_M7_EVENT20_TRUSTED_ROOT",
+        )
 
 
 def _roots(sidecar: Sidecar) -> dict:
@@ -522,9 +533,11 @@ def _startup_block(sidecar: Sidecar, roots: dict, session=None) -> dict:
         "closing": {
             "require_checker_pass": sidecar.require_checker_pass,
             "require_independent_review": sidecar.require_independent_review,
-            "max_rounds": sidecar.max_rounds,
-            "max_validations": sidecar.max_validations,
-            "wall_clock_seconds": sidecar.wall_clock_seconds,
+            "validation_timeout_seconds": sidecar.validation_timeout_seconds,
+            "autonomy": (
+                "no validation, replay or goal-round quota; continue while a "
+                "justified experiment remains and stop only on verified success, "
+                "a concrete blocker or the operator deadline"),
         },
         "first_command": first_command,
     }
@@ -564,7 +577,7 @@ _MISSING_AUTHORITY = object()
 
 # A legacy anchor predates the authority snapshot. These are the fields it did
 # record; the remaining authority fields are covered by sidecar_sha256, which
-# changes whenever the sidecar -- and therefore the budget or policy source --
+# changes whenever the sidecar -- and therefore the limits or policy source --
 # changes at all.
 LEGACY_AUTHORITY_PATHS = {
     "campaign_id": ("identities", "campaign_id"),
@@ -586,7 +599,7 @@ LEGACY_AUTHORITY_PATHS = {
 def _authority_surface(sidecar: Sidecar) -> dict:
     """Authority facts that need no candidate walk.
 
-    These are enough to name a changed workspace, policy or budget before any
+    These are enough to name a changed workspace, policy or limits before any
     candidate inspection can fail for a reason that hides the real drift.
     """
     return {
@@ -598,14 +611,7 @@ def _authority_surface(sidecar: Sidecar) -> dict:
         "policy.allowed_paths": list(sidecar.allowed_paths),
         "policy.forbidden_paths": list(sidecar.forbidden_paths),
         "policy.allow_symlinks": bool(sidecar.allow_symlinks),
-        "budget.max_rounds": sidecar.max_rounds,
-        "budget.max_validations": sidecar.max_validations,
-        "budget.wall_clock_seconds": sidecar.wall_clock_seconds,
-        "budget.validation_timeout_seconds": sidecar.validation_timeout_seconds,
-        "budget.retry_mode": sidecar.retry_mode,
-        "budget.confirmation_rounds": sidecar.confirmation_rounds,
-        "budget.max_identical_retries": sidecar.max_identical_retries,
-        "budget.max_review_attempts": sidecar.max_review_attempts,
+        "limits.validation_timeout_seconds": sidecar.validation_timeout_seconds,
         "closing.require_checker_pass": bool(sidecar.require_checker_pass),
         "closing.require_independent_review": bool(
             sidecar.require_independent_review),
@@ -631,7 +637,7 @@ def _authority_snapshot(sidecar: Sidecar, identities: dict) -> dict:
             "evidence_inputs_digest"),
         # Candidate commit/digest are mutable by design: an agent edits and
         # commits the candidate.  They are qualification inputs, not authority;
-        # only the campaign baseline commit and checker/policy/budget are
+        # only the campaign baseline commit and checker/policy/limits are
         # frozen by the anchor.
         "candidate.mode": candidate.get("mode"),
     })
@@ -658,7 +664,7 @@ def _authority_drift(stored: dict, current: dict) -> list[str]:
     """Names of authority fields that no longer match the stored anchor.
 
     A new anchor records the whole snapshot. A legacy anchor is compared on the
-    fields it recorded (including the workspace path); budget and policy source
+    fields it recorded (including the workspace path); limits and policy source
     changes are still caught by sidecar_sha256, because both live in the
     sidecar. Missing anchor fields are not treated as authorization.
     """
@@ -699,11 +705,15 @@ def _qualification_state(sidecar: Sidecar, identities: dict,
             "state": "stale",
             "detail": "the receipt does not describe the current candidate",
         }
-    verdict = (receipt.get("outcome") or {}).get("checker_verdict")
+    outcome = receipt.get("outcome") or {}
+    verdict = outcome.get("checker_verdict")
+    excerpt = str(outcome.get("diagnostics_excerpt") or "")[:800]
     return {
         "state": "pass" if verdict == "pass" else "not_passed",
         "checker_verdict": verdict,
         "receipt_digest": receipt.get("receipt_digest"),
+        # Bounded checker prose is a locator for the agent, not a verdict.
+        "diagnostics_excerpt": excerpt,
     }
 
 
@@ -912,7 +922,8 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
     attempts = _validation_attempts(_campaign_attempt_history(sidecar.run_root))
     startup_text = _startup_text(
         startup, attempts=attempts, identity_digest=identity_digest,
-        verification=verification)
+        verification=verification,
+        candidate_digest=(identities.get("candidate") or {}).get("digest"))
     # The anchor above is campaign-wide trusted material. Only now, after every
     # refusal point, create the isolated session root; the record names the
     # validated session and its writable root, and a reconnect finds the same
@@ -1009,9 +1020,9 @@ def _validation_attempts(history: list[dict]) -> list[dict]:
 
     New records have a ``start`` row written before the checker runs and a
     ``result`` row after it.  A start without a result is an interrupted
-    attempt: it still counts against ``max_validations`` after a restart.  Older
-    logs have one self-contained row per attempt and remain readable; each such
-    row is treated as its own attempt.
+    attempt; it stays visible in the audit trail after a restart.  Older logs
+    have one self-contained row per attempt and remain readable; each such row
+    is treated as its own attempt.
     """
     attempts: dict[str, dict] = {}
     order: list[str] = []
@@ -1046,19 +1057,18 @@ def _validation_attempts(history: list[dict]) -> list[dict]:
 
 def _startup_text(block: dict, *, attempts: list[dict],
                  identity_digest: str | None = None,
-                 verification: dict | None = None) -> str:
+                 verification: dict | None = None,
+                 candidate_digest: str | None = None) -> str:
     """Compact first-context text for the initial goal message.
 
     It is derived only from the prepared anchor and persisted attempt records;
-    it never invents a trusted checker, a case locator, a remaining budget, or
+    it never invents a trusted checker, a case locator, a remaining allowance, or
     an authority that the anchor did not verify.
     """
     closing = block.get("closing") or {}
     policy = block.get("policy") or {}
     verification = verification or {"state": "none"}
     used = len(attempts)
-    maximum = int(closing.get("max_validations") or 0)
-    remaining = max(0, maximum - used) if maximum else None
     last = attempts[-1] if attempts else None
     verification_line = f"- verification: {verification.get('state')}"
     if verification.get("checker_verdict"):
@@ -1077,21 +1087,26 @@ def _startup_text(block: dict, *, attempts: list[dict],
         f"- campaign: {block.get('campaign_id')} "
         f"(sidecar={block.get('sidecar')}, run_root={block.get('run_root')})",
         f"- identity: digest={digest[:16] or 'unavailable'} "
-        "(verified against the prepared anchor: workspace, policy, budget, "
+        "(verified against the prepared anchor: workspace, policy, limits, "
         "sidecar and campaign)",
         f"- policy: digest={str(policy.get('digest') or '')[:16] or 'unavailable'}"
         f"; allow_symlinks={bool(policy.get('allow_symlinks'))}",
         f"- writable scope: {', '.join(block.get('allowed_paths') or []) or 'campaign defaults'}",
         f"- forbidden: {', '.join(block.get('forbidden_paths') or []) or 'none declared'}",
-        f"- budget: validations used {used}"
-        + (f" of {maximum} (remaining {remaining})" if maximum else
-           " (no validation cap declared)")
-        + f"; wall_clock_seconds={closing.get('wall_clock_seconds')}"
-        + f"; max_rounds={closing.get('max_rounds')}",
+        f"- candidate: digest={str(candidate_digest or '')[:16] or 'unavailable'}"
+        " (current workspace head; evidence is bound to this revision)",
+        f"- autonomy: no validation, replay or goal-round quota"
+        + f"; per-checker timeout={closing.get('validation_timeout_seconds')}s"
+        + "; the operator deadline is enforced by the campaign guard",
+        f"- attempts recorded (audit only, not a quota): {used}",
         f"- live capture: "
         f"{'enabled' if (block.get('live_capture') or {}).get('enabled') else 'disabled'}"
         " (host-wide process lease still required)",
         verification_line,
+        ("- last checker excerpt: "
+         + " ".join(str(verification.get("diagnostics_excerpt") or "").split())[:600]
+         if verification.get("diagnostics_excerpt") else
+         "- last checker excerpt: none recorded"),
         "- last attempt: " + (
             f"{last.get('operation')} classification={last.get('classification')} "
             f"qualified={last.get('qualified')} digest={str(last.get('digest') or '')[:16]}"
@@ -1114,12 +1129,7 @@ def _startup_text(block: dict, *, attempts: list[dict],
 def _start_attempt(where, *, operation: str,
                    candidate_digest: str | None,
                    attempt_id: str | None = None) -> str:
-    """Persist an attempt before the expensive checker can start.
-
-    ``where`` is a session layout or a plain root.  The campaign-wide claim is
-    written separately (:func:`_claim_attempt`) before this detailed row, so an
-    interruption between the two still consumes the allowance.
-    """
+    """Persist an attempt before the expensive checker can start."""
     attempt_id = attempt_id or (
         f"val-{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}")
     _append_validation(_state_root(where), {
@@ -1158,7 +1168,7 @@ def _campaign_validation_roots(run_root: Path) -> list[Path]:
 
     The campaign root keeps the legacy shared log; each isolated session has its
     own ``sessions/<id>/validations.jsonl``.  Symlinked or non-directory entries
-    are skipped: a log is read-only input to the budget decision, and an
+    are skipped: a log is read-only input to the audit trail, and an
     unresolved link must not widen what the campaign reads.
     """
     root = Path(run_root)
@@ -1177,25 +1187,8 @@ def _campaign_validation_roots(run_root: Path) -> list[Path]:
 
 
 def _campaign_attempt_history(run_root: Path) -> list[dict]:
-    """Merge the campaign-wide claims with every detailed attempt log.
-
-    Claims come first so that a claimed-but-not-yet-detailed attempt is a
-    ``start`` row; the detailed ``start``/``result`` rows for the same
-    ``attempt_id`` then update that attempt in place.  An interrupted claim
-    therefore stays counted, and a completed attempt is not double-counted.
-    """
+    """Merge the campaign root and every session's attempt log."""
     rows: list[dict] = []
-    for claim in session_state.CampaignClaims(run_root).rows():
-        attempt_id = claim.get("attempt_id")
-        if not attempt_id:
-            continue
-        rows.append({
-            "attempt_id": attempt_id,
-            "phase": "start",
-            "at": claim.get("at"),
-            "operation": claim.get("operation"),
-            "session_id": claim.get("session_id"),
-        })
     seen: set[tuple[str, str]] = set()
     for root in _campaign_validation_roots(run_root):
         for row in _validation_history(root):
@@ -1209,30 +1202,16 @@ def _campaign_attempt_history(run_root: Path) -> list[dict]:
     return rows
 
 
-def _claim_attempt(sidecar: Sidecar, layout_value, *, operation: str,
-                   session_id: str | None,
-                   candidate_digest: str | None) -> tuple[dict, str | None]:
-    """Atomically claim one checker execution campaign-wide, then log it.
-
-    The claim enforces ``max_validations`` inside the ledger lock, so the
-    advisory :func:`_campaign_budget_stop` check is not the only protection
-    against two sessions spending the same last attempt.
-    """
-    attempt_id = (f"val-{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}")
-    claim = session_state.CampaignClaims(sidecar.run_root).claim(
-        operation=operation,
-        attempt_id=attempt_id,
-        session_id=session_id,
-        limit=sidecar.max_validations,
-    )
-    if not claim.get("ok"):
-        return claim, None
+def _begin_attempt(layout_value, *, operation: str,
+                   candidate_digest: str | None) -> str:
+    """Start one checker attempt in the session's validations log."""
+    attempt_id = f"val-{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     _start_attempt(layout_value, operation=operation,
                    candidate_digest=candidate_digest, attempt_id=attempt_id)
-    return claim, attempt_id
+    return attempt_id
 
 
-def _budget_stop_payload(sidecar: Sidecar, stop: dict,
+def _policy_stop_payload(sidecar: Sidecar, stop: dict,
                          history: list[dict], current: dict) -> dict:
     return {
         "ok": True,
@@ -1243,84 +1222,39 @@ def _budget_stop_payload(sidecar: Sidecar, stop: dict,
         "goal_policy": GOAL_POLICY["unavailable"],
         "detail": stop.get("detail") or stop.get("kind"),
         "validations": len(_validation_attempts(history)),
-        "max_validations": sidecar.max_validations,
         "candidate_digest": (current.get("candidate") or {}).get("digest"),
     }
 
 
-def _prepared_epoch(run_root: Path) -> float | None:
-    anchor = _read_anchor(receipts.paths(run_root).identity) or {}
-    stamped = str(anchor.get("prepared_at") or "")
-    if not stamped:
-        return None
-    try:
-        return datetime.fromisoformat(
-            stamped.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
+def _campaign_safety_stop() -> dict | None:
+    """A campaign-wide stop or an expired guard deadline, or ``None``.
 
-
-def _campaign_budget_stop(sidecar: Sidecar, history: list[dict],
-                          now: float) -> dict | None:
-    """Refuse another validation when an external sidecar limit is exhausted.
-
-    The allowance counts *attempts*, not log rows: the pre-checker ``start`` and
-    post-checker ``result`` rows of one attempt share an identifier and count
-    once.  A start with no result (the bridge was interrupted mid-checker)
-    remains counted.  The identical-failure gate only considers classified
-    terminal failures, so an interrupted attempt consumes budget without
-    inventing a failure class.
+    The bridge holds the trusted checker, but a stopped campaign must refuse
+    every expensive operation, not only the replay wrappers.  The host-wide
+    activation marker makes this check work without inheriting a state path.
     """
-    attempts = _validation_attempts(history)
-    if sidecar.max_validations and len(attempts) >= sidecar.max_validations:
-        return {
-            "kind": "budget_exhausted",
-            "detail": f"{len(attempts)} validation attempt(s) reached "
-                      f"max_validations={sidecar.max_validations}",
-        }
-    if sidecar.wall_clock_seconds:
-        started = _prepared_epoch(sidecar.run_root)
-        if started is None and attempts:
-            started = min(float(row.get("at") or now) for row in attempts)
-        if started is not None and now - started > sidecar.wall_clock_seconds:
-            return {
-                "kind": "deadline",
-                "detail": f"the campaign exceeded its "
-                          f"{sidecar.wall_clock_seconds}s wall-clock budget",
-            }
-    failures = [row for row in attempts
-                if row.get("terminal")
-                and not row.get("qualified", False)
-                and row.get("classification")]
-    if failures and sidecar.max_identical_retries:
-        last = failures[-1]
-        key = (last.get("classification"), last.get("digest"))
-        same = [row for row in failures
-                if (row.get("classification"), row.get("digest")) == key]
-        if len(same) > sidecar.max_identical_retries:
-            return {
-                "kind": "repeated_failure",
-                "detail": f"the identical failure {key[0]!r}/{key[1]!r} "
-                          f"occurred {len(same)} times; change the diagnostic "
-                          "strategy before validating again",
-            }
+    from automation import campaign_guard
+
+    try:
+        campaign_guard.require_active_from_env()
+    except campaign_guard.CampaignRefusal as exc:
+        return {"kind": exc.kind, "detail": exc.detail}
     return None
 
 
 def op_validate(args) -> int:
     """Run the trusted checker once and record the qualification.
 
-    DSH's round cap bounds how many times the model may ask.  The sidecar's
-    ``max_validations``, ``wall_clock_seconds`` and ``max_identical_retries``
-    are enforced here from the bridge's own attempt log, so an exhausted or
-    repeating campaign is refused before another checker run.
+    DSH decides when the agent continues.  The only campaign-wide refusal here
+    is the operator's execution deadline; attempts are logged for audit and for
+    the reconnect summary but never counted against a quota.
     """
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
     session_id = getattr(args, "session_id", None) or None
     # Resolve, do not create: a refusal (missing/corrupt anchor, exhausted
-    # budget) must not leave an empty per-session root behind.
+    # limits) must not leave an empty per-session root behind.
     session = _session_layout(sidecar.run_root, session_id, create=False,
                               must_exist=False)
     try:
@@ -1337,37 +1271,23 @@ def op_validate(args) -> int:
         _check_anchor(_prepared_identities(sidecar), before)
         digest = before["candidate"]["digest"]
 
-        # External limits: the campaign-wide history (legacy shared log, every
-        # session log and the atomic claim ledger) refuses before another
-        # checker run, independently of what the model intends.
+        # A safety stop or an expired operator allowance refuses expensive
+        # work; the attempt history is audited, not used as an allowance.
         history = _campaign_attempt_history(sidecar.run_root)
-        stop = _campaign_budget_stop(sidecar, history, time.time())
+        stop = _campaign_safety_stop()
         if stop is not None:
-            payload = _budget_stop_payload(sidecar, stop, history, before)
+            payload = _policy_stop_payload(sidecar, stop, history, before)
             payload["operation"] = "validate"
             emit(payload)
             return EXIT_OK
 
-        # The claim is atomic and campaign-wide; the detailed start row is
-        # written beside it in this session's log.  If the process is
-        # interrupted anywhere after this point the attempt stays charged.
-        # Only now, after every refusal point, create the isolated root.
+        # The detailed start row is written in this session's log so an
+        # interrupted attempt is visible after a reconnect.  Only now, after
+        # every refusal point, create the isolated root.
         if session.isolated:
             session = _session_layout(sidecar.run_root, session_id, create=True)
-        claim, attempt_id = _claim_attempt(
-            sidecar, session, operation="validate",
-            session_id=session_id, candidate_digest=digest)
-        if not claim.get("ok"):
-            stop = {
-                "kind": claim.get("kind", "budget_exhausted"),
-                "detail": (
-                    f"{claim.get('used')} validation attempt(s) reached "
-                    f"max_validations={sidecar.max_validations} campaign-wide"),
-            }
-            payload = _budget_stop_payload(sidecar, stop, history, before)
-            payload["operation"] = "validate"
-            emit(payload)
-            return EXIT_OK
+        attempt_id = _begin_attempt(
+            session, operation="validate", candidate_digest=digest)
         started = time.monotonic()
         checker_exception = None
         try:
@@ -1605,18 +1525,12 @@ def _replay_frozen(sidecar: Sidecar, frozen: dict, *,
         # Reproduction is another physical checker execution: it is charged
         # against the same campaign-wide limits before it starts.
         history = _campaign_attempt_history(sidecar.run_root)
-        stop = _campaign_budget_stop(sidecar, history, time.time())
+        stop = _campaign_safety_stop()
         if stop is not None:
             raise Refusal(stop["kind"], stop["detail"])
-        claim, attempt_id = _claim_attempt(
-            sidecar, session if session is not None else sidecar.run_root,
-            operation="finalize-replay", session_id=session_id,
-            candidate_digest=commit)
-        if not claim.get("ok"):
-            raise Refusal(
-                claim.get("kind", "budget_exhausted"),
-                f"{claim.get('used')} validation attempt(s) reached "
-                f"max_validations={sidecar.max_validations} campaign-wide")
+        attempt_id = _begin_attempt(
+            session if session is not None else sidecar.run_root,
+            operation="finalize-replay", candidate_digest=commit)
         started = time.monotonic()
         checker_exception = None
         try:
@@ -1916,8 +1830,7 @@ def op_checker_compat(args) -> int:
         if workspace is not None:
             try:
                 # Administrative diagnostic on the pristine baseline: it never
-                # qualifies a candidate and is deliberately not charged against
-                # the campaign's max_validations allowance.
+                # qualifies a candidate and is recorded separately.
                 outcome = run_accept(_AcceptShim(sidecar), workspace)
             finally:
                 # A temporary worktree is still a registered git worktree.
@@ -2216,7 +2129,7 @@ def op_finalize(args) -> int:
     stored = _setup(sidecar.run_root)
     session_id = getattr(args, "session_id", None) or None
     # Resolve, do not create: a refusal (missing/corrupt anchor, exhausted
-    # budget) must not leave an empty per-session root behind.
+    # limits) must not leave an empty per-session root behind.
     session = _session_layout(sidecar.run_root, session_id, create=False,
                               must_exist=False)
     try:
@@ -2275,30 +2188,19 @@ def op_finalize(args) -> int:
 
 
         # A fresh qualification run is a checker execution: it is charged
-        # against the same campaign-wide limits as validate and refuses before
+        # against the same operator deadline as validate and refuses before
         # starting.
         history = _campaign_attempt_history(sidecar.run_root)
-        stop = _campaign_budget_stop(sidecar, history, time.time())
+        stop = _campaign_safety_stop()
         if stop is not None:
-            payload = _budget_stop_payload(sidecar, stop, history, current)
+            payload = _policy_stop_payload(sidecar, stop, history, current)
             payload["operation"] = "finalize"
             emit(payload)
             return EXIT_OK
 
-        claim, attempt_id = _claim_attempt(
-            sidecar, session, operation="finalize", session_id=session_id,
+        attempt_id = _begin_attempt(
+            session, operation="finalize",
             candidate_digest=(current.get("candidate") or {}).get("digest"))
-        if not claim.get("ok"):
-            stop = {
-                "kind": claim.get("kind", "budget_exhausted"),
-                "detail": (
-                    f"{claim.get('used')} validation attempt(s) reached "
-                    f"max_validations={sidecar.max_validations} campaign-wide"),
-            }
-            payload = _budget_stop_payload(sidecar, stop, history, current)
-            payload["operation"] = "finalize"
-            emit(payload)
-            return EXIT_OK
         started = time.monotonic()
         checker_exception = None
         try:
@@ -2423,7 +2325,7 @@ def op_context(args) -> int:
     The initial goal message cannot cover a session resumed after a restart, so
     this operation rebuilds the same compact facts from the sidecar, anchor and
     durable attempt history without mutating the campaign. It also *verifies*
-    the boundary: the sidecar, workspace, policy, budget and campaign
+    the boundary: the sidecar, workspace, policy, limits and campaign
     identities must still match the anchor recorded by ``prepare``. Any drift is
     an explicit refusal that names the changed fields; no authorized-looking
     startup text is emitted.
@@ -2464,7 +2366,7 @@ def op_context(args) -> int:
         )
 
     # Compare the facts that need no candidate walk first: a changed workspace,
-    # policy or budget must be reported as such even when the new workspace or
+    # policy or limits must be reported as such even when the new workspace or
     # policy would make the execution-root or candidate walk refuse for a
     # different reason.
     drift = _authority_drift(anchor, _authority_surface(sidecar))
@@ -2503,7 +2405,8 @@ def op_context(args) -> int:
     attempts = _validation_attempts(_campaign_attempt_history(sidecar.run_root))
     text = _startup_text(
         block, attempts=attempts, identity_digest=identity_digest,
-        verification=verification)
+        verification=verification,
+        candidate_digest=(identities.get("candidate") or {}).get("digest"))
     emit({
         "ok": True,
         "operation": "context",
@@ -2570,15 +2473,6 @@ def main(argv: list[str] | None = None) -> int:
     except SidecarError as exc:
         emit({"ok": False, "operation": args.operation, "classification": "integrity_refusal",
               "kind": "sidecar", "goal_policy": GOAL_POLICY["unavailable"],
-              "detail": str(exc)})
-        return EXIT_INTEGRITY
-    except session_state.ClaimLedgerError as exc:
-        # The campaign-wide allowance cannot be counted from corrupt state.
-        # Refusing is the only fail-closed outcome: continuing with a partial
-        # or empty read would silently reset the validation budget.
-        emit({"ok": False, "operation": args.operation,
-              "classification": "integrity_refusal", "kind": "claim_ledger",
-              "goal_policy": GOAL_POLICY["unavailable"],
               "detail": str(exc)})
         return EXIT_INTEGRITY
     except Refusal as exc:

@@ -2707,33 +2707,38 @@ def verify(case_dir: Path | str) -> dict:
 
 
 def replay_case(case_dir: Path | str, out_dir: Path | str,
-                *, faults: dict | None = None) -> dict:
+                *, faults: dict | None = None,
+                rationale: dict | None = None) -> dict:
     case_dir = Path(case_dir).expanduser().resolve()
     verification = verify(case_dir)
     if not verification["ok"]:
         raise CaseError("verification", "; ".join(verification["problems"]))
     manifest = json.loads((case_dir / "case.json").read_text())
     if manifest.get("schema") == SEQUENCE_SCHEMA:
-        from automation import campaign_guard
+        from automation import campaign_guard, experiment_rationale
 
         try:
-            sequence = _json(case_dir / "sequence.json")
-            supplied = len(sequence.get("frames") or [])
-            target = int(sequence.get("target_index") or supplied)
-            with campaign_guard.attempt(
-                    "replays", count=max(1, supplied),
-                    evidence={"case": str(case_dir),
-                              "supplied_frames": supplied,
-                              "target_index": target}):
-                return _replay_sequence_case(
-                    case_dir, Path(out_dir).expanduser().resolve(),
-                    faults=faults)
+            # Replays are not budgeted; only a safety stop refuses.
+            campaign_guard.require_active_from_env()
         except campaign_guard.CampaignRefusal as exc:
             raise CaseError("campaign_refused",
                             f"{exc.kind}: {exc.detail}") from exc
+        if rationale is not None:
+            problems = (experiment_rationale.validate(rationale)
+                        or experiment_rationale.evidence_problems(
+                            rationale, run_root=Path.cwd()))
+            if problems:
+                raise CaseError("rationale_invalid", "; ".join(problems))
+        report = _replay_sequence_case(
+            case_dir, Path(out_dir).expanduser().resolve(), faults=faults)
+        if rationale is not None:
+            experiment_rationale.record(
+                Path(out_dir).expanduser().resolve(), rationale,
+                result=report)
+        return report
     return gfx_independent_replay.replay(
         case_dir / "capture", out_dir, shaders=case_dir / "shaders",
-        faults=faults,
+        faults=faults, rationale=rationale,
     )
 
 def _parser() -> argparse.ArgumentParser:
@@ -2752,6 +2757,9 @@ def _parser() -> argparse.ArgumentParser:
     replay_parser = sub.add_parser("replay")
     replay_parser.add_argument("--case", required=True, type=Path)
     replay_parser.add_argument("--out", required=True, type=Path)
+    replay_parser.add_argument("--rationale", default=None,
+                               help="JSON file or inline JSON justifying this "
+                                    "expensive experiment")
     replay_parser.add_argument("--disable-render-target-vflip", action="store_true")
     replay_parser.add_argument("--sampler-shift", type=int, default=None)
     replay_parser.add_argument("--sampler-shift-min", type=int, default=7)
@@ -2774,13 +2782,23 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(value, indent=2))
             return 0 if value["ok"] else 2
         if args.command == "replay":
+            from automation import experiment_rationale
+
+            try:
+                rationale = experiment_rationale.require(
+                    args.rationale, run_root=Path.cwd())
+            except experiment_rationale.RationaleError as exc:
+                print(json.dumps({"status": "refused",
+                                  "reason": str(exc)}, indent=2))
+                return 2
             faults: dict = {}
             if args.disable_render_target_vflip:
                 faults["disable_render_target_vflip"] = True
             if args.sampler_shift is not None:
                 faults["sampler_shift"] = args.sampler_shift
                 faults["sampler_shift_min"] = args.sampler_shift_min
-            value = replay_case(args.case, args.out, faults=faults)
+            value = replay_case(args.case, args.out, faults=faults,
+                                rationale=rationale)
             outcome = value.get("outcome") or {}
             print(json.dumps({
                 "status": value.get("status"),

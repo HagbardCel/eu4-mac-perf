@@ -14,6 +14,25 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+RATIONALE = (
+    '{"question": "q", "evidence": ["."], "gap": "g", '
+    '"hypothesis": "h", "action": "a", "expected_information": "e", '
+    '"cheaper_alternatives_checked": true}'
+)
+
+
+def _with_rationale(argv):
+    """Test helper: executing replays need a rationale; verification does not.
+
+    The dedicated refusal test calls ``eu4_replay`` directly, without this
+    helper, so the requirement is still exercised.
+    """
+    items = list(argv)
+    if items and items[0] == "eu4_replay" and "--rationale" not in items:
+        items += ["--rationale", RATIONALE]
+    return items
+
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -37,6 +56,7 @@ class ToolTests(unittest.TestCase):
 
     def call(self, argv, env=None):
         output = self.root / "tool.json"
+        argv = _with_rationale(argv)
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             if env:
@@ -218,7 +238,7 @@ class ToolTests(unittest.TestCase):
             "first_divergence": {"kind": "invalid_checkpoint"},
         }
         args = SimpleNamespace(
-            replay_op="independent", frame="frame", replay_out=str(self.root / "out"),
+            replay_op="independent", rationale=RATIONALE, frame="frame", replay_out=str(self.root / "out"),
             shaders=None, disable_render_target_vflip=False,
             sampler_shift=None, sampler_shift_min=7,
         )
@@ -229,6 +249,24 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(value["status"], "invalid")
         self.assertEqual(value["result"]["checkpoint_validation"]["status"],
                          "invalid")
+
+    def test_an_expenseive_replay_without_a_rationale_is_refused(self):
+        from types import SimpleNamespace
+        from automation import gfx_independent_replay
+
+        args = SimpleNamespace(
+            replay_op="independent", frame="frame",
+            replay_out=str(self.root / "out"), shaders=None,
+            disable_render_target_vflip=False, sampler_shift=None,
+            sampler_shift_min=7, rationale=None,
+        )
+        with mock.patch.object(
+                gfx_independent_replay, "replay",
+                side_effect=AssertionError("the replay must not run")):
+            value = agent_tools.eu4_replay(args)
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "refused")
+        self.assertIn("rationale", value["reason"])
 
     def independent_replay_report(self, classification, **overrides):
         frame = {
@@ -316,7 +354,7 @@ class ToolTests(unittest.TestCase):
         from automation import gfx_independent_replay
 
         args = SimpleNamespace(
-            replay_op="independent", frame="frame",
+            replay_op="independent", rationale=RATIONALE, frame="frame",
             replay_out=str(self.root / "out"), shaders=None,
             disable_render_target_vflip=False, sampler_shift=None,
             sampler_shift_min=7,
@@ -352,7 +390,7 @@ class ToolTests(unittest.TestCase):
         report["classification"] = "incomplete_diagnostics"
         report["qualification"]["classification"] = "incomplete_diagnostics"
         args = SimpleNamespace(
-            replay_op="independent", frame="frame",
+            replay_op="independent", rationale=RATIONALE, frame="frame",
             replay_out=str(self.root / "out"), shaders=None,
             disable_render_target_vflip=False, sampler_shift=None,
             sampler_shift_min=7,
@@ -384,7 +422,7 @@ class ToolTests(unittest.TestCase):
         report["first_divergence"]["next_checkpoint"] = {
             "event": 1, "reason": "z" * 30000}
         args = SimpleNamespace(
-            replay_op="independent", frame="frame",
+            replay_op="independent", rationale=RATIONALE, frame="frame",
             replay_out=str(self.root / "out"), shaders=None,
             disable_render_target_vflip=False, sampler_shift=None,
             sampler_shift_min=7,
@@ -421,7 +459,7 @@ class ToolTests(unittest.TestCase):
         report = self.independent_replay_report("invalid_provenance")
         report["evaluation"] = {"status": "invalid", "reasons": reasons}
         args = SimpleNamespace(
-            replay_op="independent", frame="frame",
+            replay_op="independent", rationale=RATIONALE, frame="frame",
             replay_out=str(self.root / "out"), shaders=None,
             disable_render_target_vflip=False, sampler_shift=None,
             sampler_shift_min=7,
@@ -2045,6 +2083,7 @@ class StrategyBCaseToolTests(ToolTests):
                 "eu4_replay", "case", "--case", str(case),
                 "--out", str(replay_out),
                 "--envelope-out", str(envelope),
+                "--rationale", RATIONALE,
             ])
         self.assertEqual(code, 0)
         self.assertEqual(replay.call_args.args[1], replay_out)
@@ -2356,7 +2395,8 @@ class SubprocessDiagnosticTests(unittest.TestCase):
     def call(self, argv):
         output = self.root / "tool.json"
         with contextlib.redirect_stdout(io.StringIO()):
-            code = agent_tools.main(["--out", str(output), *argv])
+            code = agent_tools.main(
+                ["--out", str(output), *_with_rationale(argv)])
         return code, json.loads(output.read_text())
 
     def completed(self, body, *, code=0, stderr="", command=None):

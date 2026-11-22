@@ -24,6 +24,25 @@ The complete offline discovery still includes native harness builds and
 offscreen Metal hosts. Those are not live game evidence; they are portable
 software/hardware checks that the historical suite already relies on.
 
+### Execution tiers
+
+The full offline suite is an ~11-minute gate (4,383 tests / 665 s on the
+governance-simplification head; the base was 4,414 / 807 s), so it is not the
+per-edit loop:
+
+| tier | selection | when |
+|---|---|---|
+| focused | `--module tests.test_x [--module …]` for the changed component and its fast unit tests | after every edit |
+| PR verification | focused modules plus the neighbouring security/integrity suites and one representative integration scenario | before requesting independent review |
+| full | `run --profile offline --label full` | integration milestones and broad changes |
+
+The tiers are selections of the same `automation.test_runner`; there is no
+second test orchestration framework. Governance changes use
+`tests.test_campaign_guard`, `tests.test_experiment_rationale`,
+`tests.test_governance_entrypoints`, `tests.test_dsh_campaign` as their focused
+slice (91 tests, 0.43 s) and the bridge/launch/replay/checker suites as the PR
+slice (941 tests, 41.6 s).
+
 ### Required and classified tests
 
 - `automation/test_profiles.MANDATORY_OFFLINE_MODULES` is the qualification

@@ -240,20 +240,43 @@ class LauncherEnvironmentTests(unittest.TestCase):
         env = os.environ.copy()
         for key in ("EU4_DSH_WORKSPACE", "EU4_DSH_INFRA_ROOT", "EU4_DSH_SKILL_ROOT"):
             env.pop(key, None)
+        temp = self.root / "tmp"
+        temp.mkdir(exist_ok=True)
         env.update({
             "EU4_DSH_HOME": str(self.home),
             "EU4_DSH_PYTHON": sys.executable,
             "PATH": f"{self.bin}{os.pathsep}{env['PATH']}",
             "FAKE_DSH_OUT": str(self.out),
+            # Isolate the fixed host-wide lease/marker directory: it is the OS
+            # temp dir, so a test child uses its own temp root.
+            "TMPDIR": str(temp),
         })
         env.update(extra or {})
         return env
 
     def _run(self, args: list[str], cwd: Path, extra_env: dict | None = None):
-        return subprocess.run(
+        ran = subprocess.run(
             [str(RUN), *args], cwd=cwd, env=self._env(extra_env),
             capture_output=True, text=True, check=False, timeout=180,
         )
+        self._cleanup_marker()
+        return ran
+
+    def _cleanup_marker(self):
+        """Remove a marker this test created; never touch an operator marker."""
+        from automation import campaign_guard
+
+        path = campaign_guard._marker_path()
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        state = str(value.get("state") or "")
+        if str(self.root) in state:
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
     def _editable_worktree(self) -> Path:
         workspace = self.root / "editable-worktree"
@@ -294,7 +317,9 @@ class LauncherEnvironmentTests(unittest.TestCase):
     def test_campaign_prepare_rejects_a_declared_wrong_workspace(self) -> None:
         sidecar, _ = self._campaign_sidecar()
         ran = self._run(
-            ["--campaign", str(sidecar)], self.root,
+            ["--campaign", str(sidecar),
+             "--campaign-state", str(self.root / "campaign-state.json")],
+            self.root,
             {"EU4_DSH_WORKSPACE": str(REPO)},
         )
         self.assertNotEqual(ran.returncode, 0, ran.stdout)
@@ -303,7 +328,10 @@ class LauncherEnvironmentTests(unittest.TestCase):
 
     def test_campaign_prepare_passes_without_the_workspace_variable(self) -> None:
         sidecar, workspace = self._campaign_sidecar()
-        ran = self._run(["--campaign", str(sidecar)], self.root)
+        ran = self._run(
+            ["--campaign", str(sidecar),
+             "--campaign-state", str(self.root / "campaign-state.json")],
+            self.root)
         self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
         self.assertTrue(workspace.is_dir(), "prepare did not seed the candidate")
         recorded = json.loads(self.out.read_text(encoding="utf-8"))

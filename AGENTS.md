@@ -114,7 +114,9 @@ Before starting another live EU4 run:
 
 Use `python3 -m automation.agent_tools <tool> ...` (or the native DSH tools) for
 these steps; do not compose new launch/capture scripts. A new EU4 launch needs a
-specific diagnostic objective, but no separate approval process. If two
+specific diagnostic objective and an operator-issued one-use launch
+authorization for a `controlled_capture` campaign; the offline autonomous
+campaign cannot launch EU4. If two
 launches for the same defect are inconclusive, redesign the instrumentation or
 experiment before a third. Use normal permissions first; request sandbox
 escalation only after a genuine denial.

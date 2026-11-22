@@ -946,8 +946,8 @@ class CleanupFailureTests(unittest.TestCase):
                 libraries[role] = path
 
             from automation import launch_lease
-            with mock.patch.dict("os.environ",
-                                 {"EU4_LAUNCH_LEASE_DIR": str(root / "lease")}), \
+            with mock.patch("automation.launch_lease.lease_dir",
+                            return_value=root / "lease"), \
                  mock.patch.object(gfx_launch, "preflight_user_data",
                                    return_value={"writable": True}), \
                  mock.patch.object(gfx_launch, "build_libraries",
@@ -1049,8 +1049,8 @@ class BackgroundLifecycleOrderTests(unittest.TestCase):
             return fake_display
 
         try:
-            with mock.patch.dict("os.environ",
-                                 {"EU4_LAUNCH_LEASE_DIR": str(root / "lease")}), \
+            with mock.patch("automation.launch_lease.lease_dir",
+                            return_value=root / "lease"), \
                  mock.patch.object(gfx_launch, "preflight_user_data",
                                    return_value={"writable": True,
                                                  "user_data": str(user)}), \
@@ -1082,8 +1082,8 @@ class BackgroundLifecycleOrderTests(unittest.TestCase):
         temporary, root, user, settings, scenario, ledger, libraries = self.make_case()
         original = settings.read_text()
         try:
-            with mock.patch.dict("os.environ",
-                                 {"EU4_LAUNCH_LEASE_DIR": str(root / "lease")}), \
+            with mock.patch("automation.launch_lease.lease_dir",
+                            return_value=root / "lease"), \
                  mock.patch.object(gfx_launch, "preflight_user_data",
                                    return_value={"writable": True,
                                                  "user_data": str(user)}), \
@@ -1136,8 +1136,8 @@ class CleanupActionFailureTests(unittest.TestCase):
                 path = root / f"{role}.dylib"
                 path.write_bytes(role.encode())
                 libraries[role] = path
-            with mock.patch.dict("os.environ",
-                                 {"EU4_LAUNCH_LEASE_DIR": str(root / "lease")}), \
+            with mock.patch("automation.launch_lease.lease_dir",
+                            return_value=root / "lease"), \
                  mock.patch.object(gfx_launch, "preflight_user_data",
                                    return_value={"writable": True}), \
                  mock.patch.object(gfx_launch, "build_libraries",
@@ -1214,8 +1214,8 @@ class PostReferenceCleanupTests(unittest.TestCase):
                     observe_dir=observe, process=process, identity=identity,
                     token=token)
             from automation import launch_lease as real_lease
-            with mock.patch.dict("os.environ",
-                                 {"EU4_LAUNCH_LEASE_DIR": str(root / "lease")}), \
+            with mock.patch("automation.launch_lease.lease_dir",
+                            return_value=root / "lease"), \
                  mock.patch.object(gfx_launch, "preflight_user_data",
                                    return_value={"writable": True}), \
                  mock.patch.object(gfx_launch, "build_libraries",

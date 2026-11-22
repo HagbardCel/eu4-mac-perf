@@ -486,6 +486,14 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                 manifest["test_stub_hook_enabled"] = False
                 env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
+                    from automation import campaign_guard, test_profiles
+                    try:
+                        test_profiles.ensure_live_launch(
+                            "submission_experiment.run")
+                    except test_profiles.LiveProfileError as exc:
+                        raise base.BenchmarkError(str(exc)) from exc
+                    campaign_guard.refuse_unmanaged_launch(
+                        "submission_experiment.run")
                     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
                     try:
                         game = subprocess.Popen(
@@ -681,6 +689,14 @@ def run_border_mode_census(output_root: Path) -> Path:
                 manifest["test_stub_hook_enabled"] = False
                 env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
+                    from automation import campaign_guard, test_profiles
+                    try:
+                        test_profiles.ensure_live_launch(
+                            "submission_experiment.run")
+                    except test_profiles.LiveProfileError as exc:
+                        raise base.BenchmarkError(str(exc)) from exc
+                    campaign_guard.refuse_unmanaged_launch(
+                        "submission_experiment.run")
                     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
                     try:
                         game = subprocess.Popen(
@@ -859,6 +875,14 @@ def run_experiment(
                 env = control.dylib_env(control_path, auto.PROBE)
                 env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
+                    from automation import campaign_guard, test_profiles
+                    try:
+                        test_profiles.ensure_live_launch(
+                            "submission_experiment.run")
+                    except test_profiles.LiveProfileError as exc:
+                        raise base.BenchmarkError(str(exc)) from exc
+                    campaign_guard.refuse_unmanaged_launch(
+                        "submission_experiment.run")
                     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
                     try:
                         game = subprocess.Popen(

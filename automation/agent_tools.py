@@ -3339,11 +3339,28 @@ def _strategy_b_verify_result(case_path: Path, schema: str,
         diagnostic=diagnostic, evidence=evidence, qualified=False)
 
 
+def _replay_rationale(args: argparse.Namespace):
+    """Validate the agent-supplied experiment rationale before any GPU work."""
+    from automation import experiment_rationale
+
+    try:
+        return experiment_rationale.require(
+            getattr(args, "rationale", None), run_root=Path.cwd()), None
+    except experiment_rationale.RationaleError as exc:
+        return None, _envelope(
+            "eu4_replay", "refused", {"kind": "rationale_required"},
+            diagnostic="refused", evidence="invalid",
+            reason=str(exc))
+
+
 def eu4_replay(args: argparse.Namespace) -> dict:
     if args.replay_op == "independent":
         if not args.frame or not args.replay_out:
             return _envelope("eu4_replay", "error",
                              reason="independent replay requires --frame and --replay-out")
+        rationale, refusal = _replay_rationale(args)
+        if refusal is not None:
+            return refusal
         faults: dict = {}
         if getattr(args, "disable_render_target_vflip", False):
             faults["disable_render_target_vflip"] = True
@@ -3351,7 +3368,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             faults["sampler_shift"] = args.sampler_shift
             faults["sampler_shift_min"] = args.sampler_shift_min
         report = gfx_independent_replay.replay(
-            Path(args.frame), Path(args.replay_out), shaders=args.shaders, faults=faults)
+            Path(args.frame), Path(args.replay_out), shaders=args.shaders,
+            faults=faults, rationale=rationale)
         status, diagnostic, verdict, evidence, qualified = (
             _diagnosis_outcome(report))
         if bool(getattr(args, "full", False)):
@@ -3441,6 +3459,9 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         if not args.replay_out:
             return _envelope("eu4_replay", "error",
                              reason="sequence replay requires --replay-out/--out")
+        rationale, refusal = _replay_rationale(args)
+        if refusal is not None:
+            return refusal
         shaders = getattr(args, "shaders", None)
         if shaders is None:
             try:
@@ -3471,44 +3492,34 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         from automation import campaign_guard
 
         try:
-            with campaign_guard.attempt(
-                    "replays", count=max(1, len(frame_dirs)),
-                    evidence={"frames": [str(item) for item in frame_dirs],
-                              "supplied_frames": len(frame_dirs),
-                              "max_frames": max_frames}) as attempt_handle:
-                report = m7_continuous.run_campaign(
-                    frame_dirs, Path(args.replay_out), shaders=shaders,
-                    policy=getattr(args, "policy", None),
-                    max_frames=max_frames,
-                    max_bytes=int(getattr(args, "max_bytes", 0) or 0),
-                    max_seconds=float(getattr(args, "max_seconds", 0.0)
-                                      or 0.0),
-                    stop_on_difference=not bool(
-                        getattr(args, "continue_on_difference", False)),
-                    package_dir=getattr(args, "package_dir", None),
-                    timeout=float(getattr(args, "timeout", 3600.0) or 3600.0),
-                    frame_timeout=float(getattr(args, "frame_timeout", 180.0)
-                                        or 180.0),
-                    case_max_bytes=int(getattr(args, "case_max_bytes", 0)
-                                       or 0),
-                    require_engine_identity=bool(
-                        getattr(args, "require_engine_identity", False)),
-                    fault=fault,
-                )
-                if (attempt_handle is not None
-                        and str(report.get("status") or "") in ("failed",
-                                                                "incomplete")):
-                    attempt_handle.fail(
-                        "sequence campaign did not complete: "
-                        + str(report.get("error")
-                              or report.get("stop_reason") or "unknown"),
-                        evidence={
-                            "status": report.get("status"),
-                            "stop_reason": report.get("stop_reason"),
-                            "error": report.get("error"),
-                            "supplied_frames": len(frame_dirs),
-                            "completed_frames": len(report.get("frames") or []),
-                        })
+            # Replays are not budgeted; a safety stop still ends the campaign.
+            campaign_guard.require_active_from_env()
+            report = m7_continuous.run_campaign(
+                frame_dirs, Path(args.replay_out), shaders=shaders,
+                policy=getattr(args, "policy", None),
+                max_frames=max_frames,
+                max_bytes=int(getattr(args, "max_bytes", 0) or 0),
+                max_seconds=float(getattr(args, "max_seconds", 0.0)
+                                  or 0.0),
+                stop_on_difference=not bool(
+                    getattr(args, "continue_on_difference", False)),
+                package_dir=getattr(args, "package_dir", None),
+                timeout=float(getattr(args, "timeout", 3600.0) or 3600.0),
+                frame_timeout=float(getattr(args, "frame_timeout", 180.0)
+                                    or 180.0),
+                case_max_bytes=int(getattr(args, "case_max_bytes", 0)
+                                   or 0),
+                require_engine_identity=bool(
+                    getattr(args, "require_engine_identity", False)),
+                fault=fault,
+            )
+        except campaign_guard.CampaignRefusal as exc:
+            return _envelope(
+                "eu4_replay", "refused",
+                {"frames": [str(item) for item in frame_dirs],
+                 "kind": exc.kind},
+                diagnostic="refused", evidence="invalid",
+                reason=f"campaign refused: {exc.kind}: {exc.detail}")
         except m7_continuous.ContinuousError as exc:
             policy_failure = exc.kind in ("policy_unavailable", "policy_invalid")
             return _envelope(
@@ -3593,9 +3604,13 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 return _strategy_b_verify_result(
                     case_path, schema, manifest, verification)
             if args.replay_out:
+                rationale, refusal = _replay_rationale(args)
+                if refusal is not None:
+                    return refusal
                 try:
                     report = gfx_replay_case.replay_case(
-                        case_path, Path(args.replay_out))
+                        case_path, Path(args.replay_out),
+                        rationale=rationale)
                 except (RuntimeError, OSError, ValueError) as exc:
                     return _envelope(
                         "eu4_replay", "failed", {
@@ -3646,8 +3661,12 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             return _envelope(
                 "eu4_replay", "error",
                 reason="frame replay requires --frame and --replay-out/--out")
+        rationale, refusal = _replay_rationale(args)
+        if refusal is not None:
+            return refusal
         argv = ["automation.m6_frame", "replay", "--frame", args.frame,
-                "--out", str(args.replay_out)]
+                "--out", str(args.replay_out),
+                "--rationale", str(args.rationale)]
         # ``m6_frame`` resolves ``<frame>/shaders`` when no explicit
         # translation is supplied.  Passing an empty ``--shaders`` value here
         # would crash argv construction before that fallback can run.
@@ -3877,6 +3896,9 @@ def _parser() -> argparse.ArgumentParser:
     replay.add_argument("--metal", default=None,
                         help="already-produced Metal result directory for diagnose")
     replay.add_argument("--shaders", default=None)
+    replay.add_argument("--rationale", default=None,
+                        help="JSON file or inline JSON justifying an "
+                             "expensive replay experiment")
     replay.add_argument("--replay-out", "--out", dest="replay_out",
                         type=Path, default=None)
     replay.add_argument("--policy", default=None,

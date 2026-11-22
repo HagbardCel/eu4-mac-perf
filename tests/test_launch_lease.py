@@ -32,7 +32,9 @@ STUB_LAUNCHER = textwrap.dedent(
     sys.path.insert(0, {root!r})
     from automation import launch_lease
     try:
-        lease = launch_lease.acquire(sys.argv[1], check_manual=False)
+        override = sys.argv[3] if len(sys.argv) > 3 else None
+        lease = launch_lease.acquire(sys.argv[1], check_manual=False,
+                                     lease_dir_override=override)
     except launch_lease.LeaseError as exc:
         print(exc.kind, exc.detail, file=sys.stderr)
         raise SystemExit(3)
@@ -52,9 +54,12 @@ class LeaseEnvironment:
         self.exe.parent.mkdir(parents=True)
         self.exe.write_bytes(b"stub executable")
         self.lease_dir = self.root / "lease"
-        self._env = patch.dict(os.environ, {"EU4_LAUNCH_LEASE_DIR": str(self.lease_dir)})
-        self._env.start()
-        test.addCleanup(self._env.stop)
+        self._lease = patch.object(
+            launch_lease, "lease_dir",
+            lambda override=None: (Path(override) if override is not None
+                                   else self.lease_dir))
+        self._lease.start()
+        test.addCleanup(self._lease.stop)
 
     def acquire(self, *, check_manual: bool = False) -> launch_lease.ProcessLease:
         return launch_lease.acquire(self.exe, check_manual=check_manual)
@@ -79,7 +84,8 @@ class ProcessLeaseTests(unittest.TestCase):
         # Same canonical executable, different cwd/output: same lease file.
         script = STUB_LAUNCHER.format(root=str(ROOT))
         ran = subprocess.run(
-            [sys.executable, "-c", script, str(env.exe), "5"],
+            [sys.executable, "-c", script, str(env.exe), "5",
+             str(env.lease_dir)],
             cwd=other,
             capture_output=True,
             text=True,
@@ -373,6 +379,35 @@ class TimeoutValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GpuExecutionLockTests(unittest.TestCase):
+    def test_trusted_gpu_executions_are_serialized(self):
+        import threading
+        import time
+
+        order = []
+        barrier = threading.Barrier(2)
+
+        def worker(name):
+            barrier.wait()
+            with launch_lease.gpu_execution():
+                order.append(name + "-enter")
+                time.sleep(0.05)
+                order.append(name + "-exit")
+
+        threads = [threading.Thread(target=worker, args=(name,))
+                   for name in ("a", "b")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(order), 4)
+        self.assertNotIn("a-enter", order[1:2] + ["b-enter"])
+        self.assertIn(order[:2], (["a-enter", "a-exit"],
+                                  ["b-enter", "b-exit"]))
+        self.assertIn(order[2:], (["b-enter", "b-exit"],
+                                  ["a-enter", "a-exit"]))
 
 
 class LeaseInspectionTests(unittest.TestCase):

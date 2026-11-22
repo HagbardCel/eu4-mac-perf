@@ -6,9 +6,12 @@ module only answers "is an EU4 already running for this installation?".
 
 Properties
 ----------
-* One shared lock directory outside any worktree
-  (``~/Library/Application Support/eu4-mac-perf/launch-lease``), overridable
-  with ``EU4_LAUNCH_LEASE_DIR`` for tests.
+* One fixed host-wide lock directory outside any worktree
+  (``/tmp/eu4-mac-perf-launch-lease-<uid>``).  The path is a literal, not
+  ``tempfile.gettempdir()`` and not an environment override: changing
+  ``TMPDIR`` or any ``EU4_*`` variable must not let a second process take a
+  different lock or hide the active campaign marker.  Tests inject
+  ``lease_dir`` in-process or through the explicit parameter.
 * The lock key is the canonical executable identity (resolved path plus device
   and inode), so two worktrees, output directories or DSH sessions contend for
   the same lease.
@@ -27,6 +30,7 @@ documented trust model of the project.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import datetime as dt
 import errno
@@ -36,7 +40,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -46,9 +49,34 @@ LEASE_SCHEMA = "eu4-launch-lease/v1"
 # lock. Locks are kernel file descriptions, so the directory only has to exist
 # long enough for the cooperating launchers; deleting a live lock file would
 # break exclusion, which is documented as the remaining limitation.
-DEFAULT_LEASE_DIR = Path(tempfile.gettempdir()) / (
+# Literal, not tempfile.gettempdir(): the marker and the lease must resolve to
+# the same host-wide directory for every process on the machine, regardless of
+# the caller's TMPDIR/ambiente.  /tmp is present on macOS and portable CI.
+DEFAULT_LEASE_DIR = Path("/tmp") / (
     f"eu4-mac-perf-launch-lease-{getattr(os, 'getuid', lambda: 0)()}"
 )
+
+
+@contextlib.contextmanager
+def gpu_execution():
+    """Host-wide serialization of trusted GPU replay executions.
+
+    One replay host per installation at a time keeps GPU/power behaviour
+    deterministic and avoids two untrusted experiments contending for the same
+    device.  The lock is advisory and host-wide, like the EU4 launch lease; it
+    does not account for attempts and never refuses for a quota.
+    """
+    path = DEFAULT_LEASE_DIR / "gpu-execution.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
 
 
 class LeaseError(RuntimeError):
@@ -59,9 +87,16 @@ class LeaseError(RuntimeError):
         self.holder = holder
 
 
-def lease_dir() -> Path:
-    override = os.environ.get("EU4_LAUNCH_LEASE_DIR")
-    return Path(override).expanduser() if override else DEFAULT_LEASE_DIR
+def lease_dir(override: Path | str | None = None) -> Path:
+    """The host-wide lease directory.
+
+    ``override`` exists for dependency injection in tests and for a child
+    process that inherits a test lease directory explicitly.  Production
+    callers never pass it and no environment variable can change it.
+    """
+    if override is not None:
+        return Path(override).expanduser()
+    return DEFAULT_LEASE_DIR
 
 
 def _now() -> str:
@@ -92,8 +127,9 @@ def lease_key(executable: Path | str) -> str:
     return f"{identity['device']}-{identity['inode']}-{identity['path']}"
 
 
-def lease_path(executable: Path | str) -> Path:
-    path = lease_dir()
+def lease_path(executable: Path | str,
+               override: Path | str | None = None) -> Path:
+    path = lease_dir(override)
     path.mkdir(parents=True, exist_ok=True)
     try:
         path.chmod(0o700)
@@ -289,7 +325,8 @@ class ProcessLease:
             pass
 
 
-def inspect(executable: Path | str) -> dict:
+def inspect(executable: Path | str, *,
+            lease_dir_override: Path | str | None = None) -> dict:
     """Report the current lease state without acquiring it.
 
     Returns ``{"state": "free"|"busy"|"manual", "holder": {...},
@@ -297,7 +334,7 @@ def inspect(executable: Path | str) -> dict:
     should not attempt a pointless launch; the lease itself remains the
     authority and is still acquired immediately before spawn.
     """
-    path = lease_path(executable)
+    path = lease_path(executable, override=lease_dir_override)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
     state = "free"
     holder = None
@@ -328,13 +365,14 @@ def acquire(
     wait: float = 0.0,
     output: Path | str | None = None,
     check_manual: bool = True,
+    lease_dir_override: Path | str | None = None,
 ) -> ProcessLease:
     """Acquire the host-wide lease for ``executable``.
 
     ``wait`` of zero refuses immediately when another cooperative launcher or a
     manually started game holds the installation. No JSON status is polled.
     """
-    path = lease_path(executable)
+    path = lease_path(executable, override=lease_dir_override)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
     deadline = time.monotonic() + max(0.0, wait)
     refused = False
