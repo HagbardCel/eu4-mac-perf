@@ -860,6 +860,19 @@ def op_prepare(args) -> int:
         lock.__exit__(None, None, None)
 
 
+def _accept_target(accept) -> int | None:
+    """The target declared by the campaign's own acceptance command."""
+    if not isinstance(accept, list):
+        return None
+    for index, part in enumerate(accept):
+        if str(part) == "--target-end" and index + 1 < len(accept):
+            try:
+                return int(accept[index + 1])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def _fixture_preflight(sidecar: Sidecar) -> None:
     """Refuse a campaign whose trusted fixture cannot qualify its target.
 
@@ -877,8 +890,9 @@ def _fixture_preflight(sidecar: Sidecar) -> None:
         raise Refusal("fixture_ineligible",
                       f"campaign configuration is unreadable: {exc}") from exc
     scope = campaign.get("fixture_scope") or {}
-    target = campaign.get("target_end", scope.get("end")
-                          if isinstance(scope, dict) else None)
+    target = _accept_target(campaign.get("accept"))
+    if target is None:
+        target = scope.get("end") if isinstance(scope, dict) else None
     if target is None:
         return
     trusted = (sidecar_raw.get("trusted_reference_root")
@@ -894,13 +908,17 @@ def _fixture_preflight(sidecar: Sidecar) -> None:
         raise Refusal(
             "fixture_ineligible",
             "trusted Metal replay requires macOS with the clang toolchain")
+    frame = Path(str(frame)).expanduser()
+    if not frame.is_absolute():
+        frame = infra_root() / frame
+    frame = frame.resolve()
     from automation import gfx_prefix_check
 
     try:
         root = gfx_prefix_check.resolve_trusted_reference(
             trusted, sidecar.workspace, root=infra_root())
         report = gfx_prefix_check.preflight_fixture(
-            Path(str(frame)), require_end=int(target), trusted_root=root)
+            frame, require_end=int(target), trusted_root=root)
         if sidecar.mode == "worktree":
             gfx_prefix_check.verify_candidate(sidecar.workspace,
                                               sidecar.sidecar_path)
