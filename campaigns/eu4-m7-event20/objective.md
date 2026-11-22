@@ -4,9 +4,7 @@ Objective: establish exact original-EU4-OpenGL versus Metal framebuffer equality
 for every event from event 0 through the campaign's configured target of one
 authenticated, sealed captured frame.
 
-The original EU4 OpenGL process is the only oracle.  The reconstructed OpenGL
-control is optional diagnostic evidence and is never the reference.  The
-configured target comes from the campaign's acceptance command
+The configured target comes from the campaign's acceptance command
 (`--target-end N`); this objective is shared by every successive prefix
 milestone.  The independent checker owns the verdict.
 
@@ -18,19 +16,48 @@ by default, and a capture needs a `controlled_capture` campaign plus an
 operator-issued one-use launch authorization. An operator-configured execution
 deadline bounds unattended cost; it is not a per-experiment budget.
 
-Before an expensive experiment, review the existing evidence, state the precise
-evidence gap and what the experiment will establish, prefer cheaper/narrower
-controls, and reuse a completed deterministic experiment instead of repeating
-it. A repeated failed hypothesis causes reassessment, not automatic termination.
+Before a meaningful GPU experiment, state the competing causal explanations, the
+specific change or observation that distinguishes them, the predicted outcome
+under each, and the cheapest available way to obtain that observation.  Prefer a
+narrow experiment that separates one mechanism over one that changes several
+renderer behaviors at once.  Reuse a completed deterministic experiment when its
+relevant inputs and execution conditions are unchanged, and use existing
+renderer-source/build identities and execution receipts to decide whether the
+validated renderer materially changed.  Do not rerun the independent checker
+because a diagnosis report, progress note or unrelated file changed; run it
+after a substantive renderer correction and before claiming an exact-prefix
+milestone.  A previous validation never establishes equivalence for new renderer
+code or altered reference inputs.
+
+After an experiment, classify the conclusion as **supported** (evidence favors
+the explanation), **falsified** (the tested intervention or prediction was
+contradicted) or **unresolved** (the experiment did not discriminate); these are
+reasoning conventions, not machine-readable fields.
+An unsuccessful texture-decoding substitution does not disprove every
+texture-precision mechanism, and an LOD clamp that leaves one output unchanged
+is not proof that every sample used LOD zero.  A repeated failed hypothesis
+causes reassessment, not automatic termination.
 
 The operator deadline is authoritative only through
 `python3 -m automation.campaign_guard status --state $EU4_CAMPAIGN_STATE`.
 Never report a deadline stop unless that status shows no remaining time or a
 campaign action is refused with `kind=deadline`; an unsupported correction path
-or a missing observation is reported as its actual cause.  Diagnostic reports
-belong under `analysis/m7/reports/`.
+or a missing observation is reported as its actual cause.
+
+Keep a compact running record of hypotheses, interventions, outcomes and
+evidence paths in `progress.md` or another allowed `analysis/m7/` location.  Do
+not rewrite a lengthy report after every unsuccessful experiment; produce a
+detailed report when a meaningful causal finding, a milestone or a genuine
+blocker is established.
 
 ## Evidence convention
+
+The **authoritative reference** is the framebuffer observations sealed from
+original EU4 running its original OpenGL renderer; it is the only oracle.  The
+**candidate** is the independently executed Metal renderer under correction.  A
+reconstructed OpenGL implementation is an **optional diagnostic control**: it
+may help explain a difference but neither establishes nor replaces the
+reference.
 
 Use the trusted reference root and sealed frame recorded by the selected
 campaign sidecar.  The checker verifies the seal, the event stream, the
@@ -42,13 +69,27 @@ checker, `automation/gfx_prefix_check.py`,
 `automation/gfx_independent_replay.py`, `automation/gfx_observation.py` or
 `automation/m6_frame.py`.
 
+At campaign start, inspect previous evidence relevant to the current first
+divergence.  Use a reconstructed OpenGL control only when it can discriminate a
+specific hypothesis.  An unavailable or unsupported reconstructed OpenGL
+control is not, by itself, a reason to declare `requires_additional_evidence`;
+record it and continue with the available authentic evidence.
+
 ## Sequence
 
-1. Inspect the existing sealed evidence before launching: the historical M7
-   pilot and the latest OpenGL-control experiment. Record identities and the
-   first confirmed divergence. They are separate observations.
-2. Run the synthetic drawable-format observer and the focused offline tests.
-   Do not launch EU4 if the observer is incomplete or the prefix tests fail.
+1. Inspect the existing sealed evidence and prior experiments relevant to the
+   current first divergence. Record identities, the first confirmed divergence
+   and which earlier results remain valid for the unchanged inputs.
+2. Run the synthetic drawable-format observer and focused offline tests only
+   when the current task and existing verification evidence require them. Do not
+   launch EU4 if a required observer is incomplete or a relevant prefix test
+   fails; a full preliminary battery is not required at every goal round.
+   Candidate-safe focused tests run entirely inside this worktree. Tests that
+   need additional Git worktrees, shared Git metadata writes or other
+   unavailable operations belong in operator-side verification: report the
+   inability to execute them in-session as an environment limitation, not a
+   renderer failure, and do not rerun a known-failing test merely because it
+   cannot create `.git/worktrees` entries.
 3. Live capture is a separate, operator-controlled preparation stage: an
    `autonomous_reconstruction` campaign must not launch EU4, and a
    `controlled_capture` campaign may launch only with an operator-issued
@@ -57,9 +98,11 @@ checker, `automation/gfx_prefix_check.py`,
    set, prefix scope, required observations) for the operator; do not attempt a
    capture from this objective and never construct a custom launcher or bypass
    the one-use launch guard.
-4. Run the independent checker. Record the earliest verified divergence and
-   preserve the sealed frame, Metal outputs, request, receipt, logs and the
-   portable replay case before diagnosing.
+4. Run the independent checker after a substantive renderer correction and
+   before claiming the requested exact-prefix milestone; reuse the current
+   checker cache and execution facilities. Record the earliest verified
+   divergence and preserve the sealed frame, Metal outputs, request, receipt,
+   logs and the portable replay case before diagnosing.
 5. Diagnose with the cheapest discriminating control that can distinguish the
    remaining mechanisms. State the question, the relevant evidence, the gap and
    the expected information before a GPU replay. Change only the smallest
@@ -69,12 +112,17 @@ checker, `automation/gfx_prefix_check.py`,
    next one while meaningful, justified investigation remains possible. Do not
    stop merely because an earlier correction exposed another divergence.
 7. If the evidence cannot support a causal correction, stop with
-   `requires_additional_evidence` and name the exact missing observation.
-8. If the defect belongs to a component outside the candidate's authorized
-   scope (for example trusted shader translation or capture instrumentation),
-   report the genuine candidate-scope limitation and the exact component. Do
-   not compensate by changing unrelated renderer behavior; a correction belongs
-   in the component that owns the defect.
+   `requires_additional_evidence` and name the exact missing observation. Do not
+   demand exhaustive investigation of every conceivable hypothesis; the test is
+   whether the next necessary discriminating experiment is available.
+8. Before declaring a candidate-scope limitation, give a concrete causal
+   attribution to an excluded component, or state precisely why the next
+   necessary discriminating experiment cannot be performed with available
+   evidence and authorized tools. If the defect belongs to a component outside
+   the candidate's authorized scope (for example trusted shader translation or
+   capture instrumentation), report the genuine candidate-scope limitation and
+   the exact component. Do not compensate by changing unrelated renderer
+   behavior; a correction belongs in the component that owns the defect.
 
 ## Stop conditions
 
