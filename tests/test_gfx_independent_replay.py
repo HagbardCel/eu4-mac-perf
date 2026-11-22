@@ -229,6 +229,17 @@ class R32FComparisonTests(unittest.TestCase):
         self.assertEqual(result["mismatched_pixels"], 4)
         self.assertEqual(result["max_ulp_error"], 1)
 
+    def test_r32f_bounds_cover_every_mismatch(self):
+        reference = struct.pack("<f", 0.0) * 3
+        candidate = (struct.pack("<f", 1.0) + struct.pack("<f", 0.0)
+                     + struct.pack("<f", 1.0))
+        result = gfx_independent_replay.compare_r32f(
+            reference, candidate, 3, 1)
+        self.assertEqual(result["mismatched_pixels"], 2)
+        self.assertEqual(result["first_differing_pixel"]["x"], 0)
+        self.assertEqual(result["differing_bounds"],
+                         {"x": 0, "y": 0, "width": 3, "height": 1})
+
     def test_r32f_is_compared_as_exact_float_bits(self):
         reference = struct.pack("<f", 1.0) * 4
         identical = gfx_independent_replay.compare_r32f(

@@ -244,6 +244,8 @@ def compare_r32f(reference: bytes, candidate: bytes, width: int,
     mismatched = 0
     max_ulp = 0
     first = None
+    min_x = min_y = None
+    max_x = max_y = None
     for pixel in range(total):
         offset = pixel * 4
         left = struct.unpack_from("<I", reference, offset)[0]
@@ -254,9 +256,14 @@ def compare_r32f(reference: bytes, candidate: bytes, width: int,
         distance = _float_ulp_distance(left, right)
         if distance > max_ulp:
             max_ulp = distance
+        x = pixel % width
+        y = pixel // width
         if first is None:
-            first = {"x": pixel % width, "y": pixel // width,
-                     "offset": pixel}
+            first = {"x": x, "y": y, "offset": pixel}
+        min_x = x if min_x is None else min(min_x, x)
+        max_x = x if max_x is None else max(max_x, x)
+        min_y = y if min_y is None else min(min_y, y)
+        max_y = y if max_y is None else max(max_y, y)
     return {
         "format_scope": "R32F",
         "pixels": total,
@@ -268,8 +275,10 @@ def compare_r32f(reference: bytes, candidate: bytes, width: int,
         "mean_abs_error": [0, 0, 0, 0],
         "mean_max_channel_error": 0.0,
         "first_differing_pixel": first,
-        "differing_bounds": _bounds_for_points(
-            [first] if first else [], width, height),
+        "differing_bounds": (
+            {"x": min_x, "y": min_y,
+             "width": max_x - min_x + 1,
+             "height": max_y - min_y + 1} if mismatched else None),
         "regions": [],
         "exact_bitwise": mismatched == 0,
     }
