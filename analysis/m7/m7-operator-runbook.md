@@ -182,58 +182,6 @@ does not extend it.
   verification. There is no attempt or round cap.
 - Candidate-authored screenshots or metadata never pass the checker.
 
-## C. Authentic event-3 migration milestone
-
-This campaign targets events 0..3 of the same authentic sealed frame.  It
-reuses `campaigns/eu4-m7-event20/accept.py` with `--target-end 3`; the event-20
-configuration remains the complete-scope target.
-
-Fixed identities:
-
-| Item | Path |
-| --- | --- |
-| Campaign | `campaigns/eu4-m7-event3/campaign.json` |
-| Sidecar | `dsh/campaigns/m7-event3.json` |
-| Candidate workspace | `.local/dsh/m7-event3/workspace` |
-| Run root | `.local/dsh/m7-event3/run` |
-| Trusted reference | `.local/m7/event20/trusted-copy/47590918` |
-
-Preflight (read-only) before launch:
-
-```fish
-set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
-set -l TRUSTED $REPO/.local/m7/event20/trusted-copy/47590918
-cd $REPO
-
-$PY -c "from automation import gfx_prefix_check as g; import json; r = g.preflight_fixture('$TRUSTED/frame', require_end=3, trusted_root='$TRUSTED'); print(json.dumps(r['problems']))"
-```
-
-The second command must print `[]`.  The launcher runs the same check plus the
-candidate policy check and refuses `fixture_ineligible` before starting the
-agent.
-
-Launch (operator action):
-
-```fish
-set -l STATE $REPO/.local/m7/event3/state-operator.json
-set -l SIDECAR $REPO/dsh/campaigns/m7-event3.json
-test -f $STATE; and echo "STATE EXISTS - pick a new suffix"; or echo fresh
-
-env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=$PY EU4_CAMPAIGN_STATE=$STATE \
-    $REPO/dsh/scripts/run.sh --campaign $SIDECAR --campaign-state $STATE \
-      --campaign-mode autonomous_reconstruction
-```
-
-Paste the printed `goal_text` block into a new `/goal`.  The current expected
-result is `FIRST_DIVERGENCE` at event 1 (`tex:433`, 23 pixels, max channel
-error 1).  A pass requires `qualified=true`, authentic authority and the exact
-prefix `{start: 0, end: 3}`; a final image or candidate report never qualifies.
-
-The deadline claim rule is the same for every campaign: only
-`campaign_guard status --state $STATE` is authoritative.  Do not stop as
-"deadline" merely because a correction may not finish in time.
-
 ## B. Live event-20 capture (separately controlled)
 
 Live capture is not part of the offline campaign and is never started by the
@@ -270,6 +218,58 @@ output directory; never overwrite an existing sealed capture. The event-20
 scientific criterion (`EVENT20_EXACT`, complete event 0..20, required R32F and
 format-specific exactness) is unchanged and is only established by the
 independent checker.
+
+## C. Authentic event-3 migration milestone
+
+This campaign targets events 0..3 of the same authentic sealed frame.  It
+reuses `campaigns/eu4-m7-event20/accept.py` with `--target-end 3`; the event-20
+configuration remains the complete-scope target.
+
+Fixed identities:
+
+| Item | Path |
+| --- | --- |
+| Campaign | `campaigns/eu4-m7-event3/campaign.json` |
+| Sidecar | `dsh/campaigns/m7-event3.json` |
+| Candidate workspace | `.local/dsh/m7-event3/workspace` |
+| Run root | `.local/dsh/m7-event3/run` |
+| Trusted reference | `.local/m7/event20/trusted-copy/47590918` |
+
+Preflight (read-only) before launch:
+
+```fish
+set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
+set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
+set -l TRUSTED $REPO/.local/m7/event20/trusted-copy/47590918
+cd $REPO
+
+$PY -c "from automation import gfx_prefix_check as g; import json; r = g.preflight_fixture('$TRUSTED/frame', require_end=3, trusted_root='$TRUSTED'); print(json.dumps(r['problems']))"
+```
+
+The preflight command must print `[]`.  The launcher runs the same check plus the
+candidate policy check and refuses `fixture_ineligible` before starting the
+agent.
+
+Launch (operator action):
+
+```fish
+set -l STATE $REPO/.local/m7/event3/state-operator.json
+set -l SIDECAR $REPO/dsh/campaigns/m7-event3.json
+test -f $STATE; and echo "STATE EXISTS - pick a new suffix"; or echo fresh
+
+env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=$PY EU4_CAMPAIGN_STATE=$STATE \
+    $REPO/dsh/scripts/run.sh --campaign $SIDECAR --campaign-state $STATE \
+      --campaign-mode autonomous_reconstruction
+```
+
+Paste the printed `goal_text` block into a new `/goal`.  The current expected
+result is `FIRST_DIVERGENCE` at event 1 (`tex:433`, 23 pixels, max channel
+error 1).  A pass requires `qualified=true`, authentic authority and the exact
+prefix `{start: 0, end: 3}`; a final image or candidate report never qualifies.
+
+The deadline claim rule is the same for every campaign: only
+`campaign_guard status --state $STATE` is authoritative.  Do not stop as
+"deadline" merely because a correction may not finish in time.
 
 ## Achievement distinctions
 
