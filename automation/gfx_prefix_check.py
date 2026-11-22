@@ -479,8 +479,15 @@ def _execution_environment(execution_dir: Path) -> dict:
     tmp = execution_dir / "tmp"
     home.mkdir(exist_ok=True)
     tmp.mkdir(exist_ok=True)
-    environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith("EU4_")}
+    injected_names = {
+        "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH",
+        "LIBRARY_PATH", "LD_PRELOAD", "LD_LIBRARY_PATH",
+    }
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith(("EU4_", "DYLD_"))
+        and key not in injected_names
+    }
     environment["HOME"] = str(home)
     environment["TMPDIR"] = str(tmp)
     return environment

@@ -227,8 +227,41 @@ def iter_blob_members(value):
             yield from iter_blob_members(item)
 
 
+def event_input_blob_names(events) -> set[str]:
+    """Explicit inventory of blobs the replay reads as renderer inputs.
+
+    Event records also carry expected-output and provenance fields; only the
+    paths the replay actually consumes are copied into a candidate input frame.
+    """
+    names: set[str] = set()
+
+    def add(value) -> None:
+        if isinstance(value, dict) and isinstance(value.get("file"), str)                 and value["file"]:
+            names.add(Path(value["file"]).name)
+
+    for event in events:
+        add(event.get("seed"))
+        add(event.get("pre_image"))
+        add(event.get("source_image"))
+        for attribute in event.get("attributes") or []:
+            if isinstance(attribute, dict) and isinstance(
+                    attribute.get("data"), str) and attribute["data"]:
+                names.add(Path(attribute["data"]).name)
+        add(event.get("indices"))
+        program = event.get("program") or {}
+        for shader in program.get("shaders") or []:
+            add(shader)
+        for uniform in program.get("uniforms") or []:
+            add(uniform)
+        for texture in event.get("textures") or []:
+            for level in texture.get("levels") or []:
+                add(level)
+                add(level.get("compressed") if isinstance(level, dict) else None)
+    return names
+
+
 def event_blob_names(events) -> set[str]:
-    """Every blob an event stream references as renderer input."""
+    """All blobs referenced by a trusted record (inputs or expected outputs)."""
     names: set[str] = set()
     for event in events:
         for member in iter_blob_members(event):
@@ -293,7 +326,7 @@ def replay_input_overlap(trace: dict) -> list[dict]:
     expected = expected_output_blobs(trace)
     return [
         {"file": name, "expected_by": expected[name]}
-        for name in sorted(event_blob_names(events) & set(expected))
+        for name in sorted(event_input_blob_names(events) & set(expected))
     ]
 
 
@@ -316,7 +349,7 @@ def materialize_replay_input(frame_dir: Path | str, trace: dict,
     for event in events:
         sanitized_events.append({key: value for key, value in event.items()
                                  if key != "default_checkpoint"})
-    inputs = event_blob_names(sanitized_events)
+    inputs = event_input_blob_names(sanitized_events)
     expected = expected_output_blobs(trace)
     shared = sorted(inputs & set(expected))
     destination.mkdir(parents=True, exist_ok=True)

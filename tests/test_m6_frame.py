@@ -931,11 +931,13 @@ class ReplayInputSanitizationTests(unittest.TestCase):
             frame = _Path(temporary) / "frame"
             (frame / "blobs").mkdir(parents=True)
             for name in ("input.bin", "expected.bin", "shared.bin",
-                         "frame-reference.bgra"):
+                         "source.bin", "frame-reference.bgra"):
                 (frame / "blobs" / name).write_bytes(name.encode())
             events = [
                 {"kind": "draw", "index": 0,
                  "default_checkpoint": {"file": "expected.bin"},
+                 "unrelated": {"file": "expected.bin"},
+                 "source_image": {"file": "source.bin"},
                  "attributes": [{"data": "input.bin"}],
                  "textures": [{"levels": [{"file": "shared.bin"}]}]},
             ]
@@ -959,6 +961,7 @@ class ReplayInputSanitizationTests(unittest.TestCase):
             copied = {path.name for path in (destination / "blobs").iterdir()}
             self.assertIn("input.bin", copied)
             self.assertIn("shared.bin", copied)
+            self.assertIn("source.bin", copied)
             self.assertNotIn("expected.bin", copied)
             self.assertNotIn("frame-reference.bgra", copied)
             self.assertEqual(record["shared_input_outputs"][0]["file"],

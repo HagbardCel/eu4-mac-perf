@@ -18,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -816,6 +817,24 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertIn("trusted reference root", payload["diagnostics"])
 
 
+class CandidateEnvironmentTests(unittest.TestCase):
+    def test_loader_and_include_injection_are_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.dict(os.environ, {
+                    "EU4_M7_EVENT20_TRUSTED_ROOT": "/trusted",
+                    "DYLD_INSERT_LIBRARIES": "/tmp/injected.dylib",
+                    "LD_PRELOAD": "/tmp/injected.so",
+                    "CPATH": "/tmp/injected",
+                    "PATH": "/usr/bin:/bin"}, clear=False):
+                environment = gfx_prefix_check._execution_environment(
+                    Path(temporary))
+            self.assertEqual(environment["PATH"], "/usr/bin:/bin")
+            for name in ("EU4_M7_EVENT20_TRUSTED_ROOT", "DYLD_INSERT_LIBRARIES",
+                         "LD_PRELOAD", "CPATH"):
+                self.assertNotIn(name, environment)
+            self.assertEqual(environment["HOME"], str(Path(temporary) / "home"))
+
+
 class CandidateTrustBoundaryTests(unittest.TestCase):
     """The compiled candidate executes without expected reference pixels."""
 
@@ -893,23 +912,18 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
     def _patch_replay(self, workspace: Path, body: str) -> None:
         path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
         source = path.read_text()
-        source = source.replace(
+        anchor = (
             "static void run_checkpoint_readbacks(NSArray *items, NSUInteger index,\n"
             "                                     NSString *output_path, BOOL post_event,\n"
             "                                     NSMutableArray *failures, NSUInteger *failed,\n"
             "                                     NSError **error) {\n"
             "    for (NSDictionary *item in items) {\n"
             "        NSString *target_name = item[@\"target\"];\n"
-            "        NSMutableDictionary *info = g_render_targets[target_name];\n",
-            "static void run_checkpoint_readbacks(NSArray *items, NSUInteger index,\n"
-            "                                     NSString *output_path, BOOL post_event,\n"
-            "                                     NSMutableArray *failures, NSUInteger *failed,\n"
-            "                                     NSError **error) {\n"
-            "    for (NSDictionary *item in items) {\n"
-            "        NSString *target_name = item[@\"target\"];\n"
-            "        NSMutableDictionary *info = g_render_targets[target_name];\n"
-            + body, 1)
-        path.write_text(source)
+            "        NSMutableDictionary *info = g_render_targets[target_name];\n")
+        self.assertIn(anchor, source, "attack patch anchor is absent")
+        patched = source.replace(anchor, anchor + body, 1)
+        self.assertNotEqual(patched, source, "attack patch did not apply")
+        path.write_text(patched)
 
     def _attack_body(self) -> str:
         return (
@@ -952,13 +966,14 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
         # absent from the sanitized frame the candidate receives.
         replay_path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
         source = replay_path.read_text()
+        anchor = "#import <Metal/Metal.h>\n"
+        self.assertIn(anchor, source)
         source = source.replace(
-            "#import <Metal/Metal.h>\n",
-            "#import <Metal/Metal.h>\n"
-            "static NSString *g_attack_frame_path;\n", 1)
+            anchor, anchor + "static NSString *g_attack_frame_path;\n", 1)
+        anchor = "    g_state = state;\n"
+        self.assertIn(anchor, source)
         source = source.replace(
-            "    g_state = state;\n",
-            "    g_state = state;\n    g_attack_frame_path = frame_path;\n", 1)
+            anchor, anchor + "    g_attack_frame_path = frame_path;\n", 1)
         replay_path.write_text(source)
         result = gfx_prefix_check.evaluate(
             self.frame, None, require_end=0, trusted_execution=True,
@@ -1094,20 +1109,21 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
             "        if (capture_target_to_file(info, path, &checkpoint_error,\n",
             "        if (capture_target_to_file(info, path, &checkpoint_error,\n",
             1)
-        source = source.replace(
-            "        if (capture_target_to_file(info, path, &checkpoint_error,\n"
-            "                                   &readback_status)) {\n",
-            "        if (capture_target_to_file(info, path, &checkpoint_error,\n"
-            "                                   &readback_status)) {\n"
-            "            NSMutableData *bytes = [[NSMutableData alloc]\n"
+        anchor = ("        if (capture_target_to_file(info, path, &checkpoint_error,\n"
+                  "                                   &readback_status)) {\n")
+        self.assertIn(anchor, source, "byte-flip patch anchor is absent")
+        patched = source.replace(
+            anchor,
+            anchor
+            + "            NSMutableData *bytes = [[NSMutableData alloc]\n"
             "                initWithContentsOfFile:path];\n"
             "            if (bytes.length > 0) {\n"
             "                uint8_t *raw = (uint8_t *)bytes.mutableBytes;\n"
             "                raw[0] ^= 1;\n"
             "                [bytes writeToFile:path atomically:YES];\n"
-            "            }\n",
-            1)
-        replay_path.write_text(source)
+            "            }\n", 1)
+        self.assertNotEqual(patched, source, "byte-flip patch did not apply")
+        replay_path.write_text(patched)
         second = gfx_prefix_check.evaluate(
             frame, None, require_end=0, trusted_execution=True,
             candidate_workspace=workspace, candidate_sidecar=sidecar,

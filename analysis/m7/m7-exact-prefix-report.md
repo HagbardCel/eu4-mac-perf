@@ -98,8 +98,10 @@ Candidate-authored `replay.json`, receipts and pixels are never authority.
 
 The checker materializes a **reference-free replay input** for the candidate.
 The sanitized event representation is built first (removing
-`default_checkpoint`), and the blob allowlist is derived from that
-representation. Final reference images, default-checkpoint images and
+`default_checkpoint`), and the blob allowlist is an explicit inventory of the
+paths the replay consumes (`seed`, `pre_image`, `source_image`, attributes,
+indices, shaders, uniforms and texture levels), not a recursive copy of every
+object containing a `file` key. Final reference images, default-checkpoint images and
 observation payloads are omitted even when their content-addressed name
 collides with an input; the shader translation runs in trusted infrastructure
 and supplies only translated shader artifacts. Overlap is reported as
@@ -245,10 +247,10 @@ under `.local/m7/event20/case-prefix` and is regenerable with
 
 ## Validation
 
-* Focused: `tests.test_m6_frame`, `tests.test_gfx_frame_graph`,
-  `tests.test_gfx_independent_replay`, `tests.test_m7_event20_prefix`,
-  `tests.test_replay_host_dependencies`, `tests.test_m7_shadow_receipt` and
-  `tests.test_m7_continuous_replay`: 0 failures, 101.3 s.
+* Focused final: `tests.test_m6_frame`, `tests.test_m7_event20_prefix` and
+  `tests.test_replay_host_dependencies`: 105 ran / 105 executed / 0 failures,
+  35.7 s.  Earlier focused runs also covered graph, reconciler and continuous
+  replay suites.
 * Compiled candidate boundary: `CandidateTrustBoundaryTests` performs real
   candidate-source builds and Metal replays.  All three bypass attempts are
   prevented or caught; patches are verified against the built source digest;
@@ -262,8 +264,8 @@ under `.local/m7/event20/case-prefix` and is regenerable with
   `EXACT_SELECTION`, never `EXACT_PREFIX`.
 * Legacy seal re-evaluation (offline, existing Metal outputs): unchanged
   `FIRST_DIVERGENCE` at event 1, prefix `[0, 0]`, authentic authority.
-* Final offline gate `20261122T113751Z-6691f830`: 4,469 ran / 4,433 executed /
-  36 skipped / 0 failures / 0 errors, 804.3 s (skips are pre-existing
+* Final offline gate `20261122T121121Z-83ca142e`: 4,470 ran / 4,434 executed /
+  36 skipped / 0 failures / 0 errors, 849.2 s (skips are pre-existing
   environment-gated suites, not the compiled-candidate tests).
 
 ### Candidate bypass results
