@@ -19,7 +19,6 @@
         "campaigns/**",
         "automation/**",
         "dsh/**",
-        "analysis/m7/m7-autonomy-offline*",
         ".local/m7/autonomy-offline/trusted/**"
       ]
     }

@@ -860,6 +860,61 @@ def op_prepare(args) -> int:
         lock.__exit__(None, None, None)
 
 
+def _fixture_preflight(sidecar: Sidecar) -> None:
+    """Refuse a campaign whose trusted fixture cannot qualify its target.
+
+    This is the existing launcher preflight, extended with the checker's own
+    static validator: fixture seal/digests, observation coverage, and any
+    input/output overlap inside the requested prefix.  It runs once at launch,
+    before the agent or an expensive replay starts.
+    """
+    try:
+        campaign = json.loads(
+            Path(sidecar.source_campaign).read_text(encoding="utf-8"))
+        sidecar_raw = json.loads(
+            Path(sidecar.sidecar_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise Refusal("fixture_ineligible",
+                      f"campaign configuration is unreadable: {exc}") from exc
+    scope = campaign.get("fixture_scope") or {}
+    target = campaign.get("target_end", scope.get("end")
+                          if isinstance(scope, dict) else None)
+    if target is None:
+        return
+    trusted = (sidecar_raw.get("trusted_reference_root")
+               or campaign.get("trusted_reference_root"))
+    frame = (campaign.get("fixture_frame")
+             or (Path(str(trusted)).expanduser() / "frame"
+                 if trusted else None))
+    if not trusted or frame is None:
+        raise Refusal(
+            "fixture_ineligible",
+            "campaign declares a target prefix but no trusted reference")
+    if sys.platform != "darwin" or shutil.which("clang") is None:
+        raise Refusal(
+            "fixture_ineligible",
+            "trusted Metal replay requires macOS with the clang toolchain")
+    from automation import gfx_prefix_check
+
+    try:
+        root = gfx_prefix_check.resolve_trusted_reference(
+            trusted, sidecar.workspace, root=infra_root())
+        report = gfx_prefix_check.preflight_fixture(
+            Path(str(frame)), require_end=int(target), trusted_root=root)
+        if sidecar.mode == "worktree":
+            gfx_prefix_check.verify_candidate(sidecar.workspace,
+                                              sidecar.sidecar_path)
+    except (gfx_prefix_check.PrefixCheckError, OSError, ValueError) as exc:
+        raise Refusal("fixture_ineligible", str(exc)) from exc
+    if report.get("problems"):
+        raise Refusal("fixture_ineligible",
+                      "; ".join(str(p) for p in report["problems"]))
+    if report.get("authority") not in ("authentic", "derived", "synthetic"):
+        raise Refusal(
+            "fixture_ineligible",
+            f"trusted fixture authority is {report.get('authority')!r}")
+
+
 def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
     if sidecar.mode == "seed":
         ensure_workspace(sidecar.seed, sidecar.workspace)
@@ -876,6 +931,8 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
         sidecar.workspace, sidecar.run_root)
     if write_problem:
         raise Refusal("workspace_not_writable", write_problem)
+    if getattr(args, "create_anchor", False):
+        _fixture_preflight(sidecar)
 
     identities = _identity(sidecar, infra_commit)
     authority = _authority_snapshot(sidecar, identities)
@@ -1098,6 +1155,10 @@ def _startup_text(block: dict, *, attempts: list[dict],
         f"- autonomy: no validation, replay or goal-round quota"
         + f"; per-checker timeout={closing.get('validation_timeout_seconds')}s"
         + "; the operator deadline is enforced by the campaign guard",
+        "- deadline: only `python3 -m automation.campaign_guard status "
+        "--state $EU4_CAMPAIGN_STATE` is authoritative; never report deadline "
+        "exhaustion unless it reports no remaining time or the guard refuses "
+        "the action with kind=deadline",
         f"- attempts recorded (audit only, not a quota): {used}",
         f"- live capture: "
         f"{'enabled' if (block.get('live_capture') or {}).get('enabled') else 'disabled'}"

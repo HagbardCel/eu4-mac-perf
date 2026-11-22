@@ -36,6 +36,13 @@ combine observations from another seal.  Do not edit the checker,
 `automation/gfx_prefix_check.py`, `automation/gfx_independent_replay.py`,
 `automation/gfx_observation.py` or `automation/m6_frame.py`.
 
+The operator deadline is authoritative only through
+`python3 -m automation.campaign_guard status --state $EU4_CAMPAIGN_STATE`.
+Never report a deadline stop unless that status shows no remaining time or a
+campaign action is refused with `kind=deadline`; an unsupported correction path
+or a missing observation is reported as its actual cause.  Diagnostic reports
+belong under `analysis/m7/reports/`.
+
 ## Sequence
 
 1. Inspect the existing sealed evidence before launching: the historical M7
