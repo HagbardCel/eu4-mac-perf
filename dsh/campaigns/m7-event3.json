@@ -1,0 +1,38 @@
+{
+  "schema": "eu4-dsh-campaign/v1",
+  "campaign_id": "m7-event3-20261122",
+  "source_campaign": "campaigns/eu4-m7-event3/campaign.json",
+  "candidate_baseline_commit": "9d92a0c03415f4fedc233016ab54428039b309e0",
+  "candidate": {
+    "mode": "worktree",
+    "workspace_base": "infra",
+    "workspace": ".local/dsh/m7-event3/workspace",
+    "policy": {
+      "allowed_paths": [
+        "benchmark/**",
+        "analysis/m7/**",
+        "tests/**",
+        "progress.md",
+        ".local/**"
+      ],
+      "forbidden_paths": [
+        "campaigns/**",
+        "automation/**",
+        "dsh/**",
+        "docs/status.md"
+      ]
+    }
+  },
+  "run_root": ".local/dsh/m7-event3/run",
+  "goal": {
+    "require_checker_pass": true,
+    "require_independent_review": false
+  },
+  "limits": {
+    "validation_timeout_seconds": 600,
+    "deadline_seconds": 1800
+  },
+  "replay_inputs": [],
+  "status": "event3-active",
+  "trusted_reference_root": ".local/m7/event20/trusted-copy/47590918"
+}

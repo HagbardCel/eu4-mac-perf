@@ -1,0 +1,20 @@
+{
+  "id": "eu4-m7-event3",
+  "objective": "objective.md",
+  "runtime": "dsh",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/dsh/m7-event3/workspace",
+    "commit": "9d92a0c03415f4fedc233016ab54428039b309e0"
+  },
+  "accept": [
+    "python3",
+    "../eu4-m7-event20/accept.py",
+    "--target-end",
+    "3"
+  ],
+  "accept_timeout_seconds": 600,
+  "target_end": 3,
+  "trusted_reference_root": ".local/m7/event20/trusted-copy/47590918",
+  "fixture_frame": ".local/m7/event20/trusted-copy/47590918/frame"
+}
