@@ -73,6 +73,7 @@ def main(argv: list[str]) -> int:
         and len(events) == EXPECTED_END + 1
         and all(entry.get("status") == "match" for entry in events)
         and authority in ("derived", "synthetic")
+        and result.get("independent_equality") is True
     )
     if exact:
         return _emit(
@@ -80,6 +81,14 @@ def main(argv: list[str]) -> int:
             f"independent trusted candidate execution reproduced the exact "
             f"{authority} offline prefix 0..2 (mechanism qualification only; "
             "not original-frame equivalence)",
+            result)
+    if (result.get("verdict") == "EXACT_PREFIX"
+            and result.get("independent_equality") is not True):
+        return _emit(
+            "inconclusive",
+            "the offline pixel match is not independently attributable: "
+            + "; ".join(result.get("evidence_limitations") or
+                        ["shared renderer input/output payload"]),
             result)
     first = result.get("first_divergence")
     if first is not None:

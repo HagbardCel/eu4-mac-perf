@@ -8,7 +8,9 @@ original reference bytes, never from the replay's own counters.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import struct
@@ -934,6 +936,47 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertIn("trusted reference root", payload["diagnostics"])
 
 
+class OfflineAcceptancePredicateTests(unittest.TestCase):
+    def test_pixel_exact_without_independence_is_refused(self):
+        import importlib.util
+        path = (ROOT / "campaigns" / "eu4-m7-autonomy-offline" /
+                "accept.py")
+        spec = importlib.util.spec_from_file_location(
+            "offline_acceptance_test", path)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            trusted = root / "trusted"
+            (trusted / "frame").mkdir(parents=True)
+            module.TRUSTED_ROOT = trusted
+            module.SIDECAR = root / "sidecar.json"
+            result = {
+                "verdict": "EXACT_PREFIX",
+                "verified_prefix": {"start": 0, "end": 2},
+                "problems_count": 0,
+                "excluded_events": [],
+                "events": [{"status": "match"} for _ in range(3)],
+                "evidence": {"authority": "derived"},
+                "independent_equality": False,
+                "evidence_limitations": [
+                    "expected payload is also a renderer input"],
+                "first_divergence": None,
+                "problems": [],
+            }
+            output = io.StringIO()
+            with mock.patch.object(module.gfx_prefix_check, "evaluate",
+                                   return_value=result), \
+                    contextlib.redirect_stdout(output):
+                code = module.main(["accept.py", str(root / "workspace")])
+            payload = json.loads(output.getvalue())
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["verdict"], "inconclusive")
+            self.assertIn("not independently attributable",
+                          payload["diagnostics"])
+
+
 class CandidateEnvironmentTests(unittest.TestCase):
     def test_loader_and_include_injection_are_removed(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -950,6 +993,16 @@ class CandidateEnvironmentTests(unittest.TestCase):
                          "LD_PRELOAD", "CPATH"):
                 self.assertNotIn(name, environment)
             self.assertEqual(environment["HOME"], str(Path(temporary) / "home"))
+
+
+@unittest.skipUnless(sys.platform == "darwin",
+                     "compiled Metal candidate boundary is macOS-only")
+class CandidateIsolationInvariantTests(unittest.TestCase):
+    def test_empty_protected_paths_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(gfx_prefix_check.PrefixCheckError):
+                gfx_prefix_check._isolated_replay_command(
+                    Path("/bin/true"), [], Path(temporary), [])
 
 
 @unittest.skipUnless(sys.platform == "darwin",

@@ -107,7 +107,10 @@ collides with an input; the shader translation runs in trusted infrastructure
 and supplies only translated shader artifacts. Overlap is reported as
 `shared_input_outputs` with the affected observation/checkpoint, and
 `independent_equality=false` when a compared output is also a renderer input.
-The M7 acceptance adapter requires `independent_equality=true` before a pass.
+The M7 and offline acceptance adapters require `independent_equality=true`
+before a pass.  Default-checkpoint overlap entries carry the checkpoint's
+colour file and digest with role `default_checkpoint:color`, not a bare
+filename string.
 
 Overlap is compared by SHA-256 content, not filename.  A post-event colour
 payload that is accessible under any input name disables
@@ -275,14 +278,14 @@ under `.local/m7/event20/case-prefix` and is regenerable with
 * Legacy seal re-evaluation (offline, existing Metal outputs): unchanged
   `FIRST_DIVERGENCE` at event 1, prefix `[0, 0]`, authentic authority.
 * Portable CI (Linux container, `EU4_TEST_PROFILE=offline`,
-  `EU4_OFFLINE_ONLY=1`, non-root with `--init`): `20261122T134503Z-01fadb9f`,
-  4,339 ran / 3,862 executed / 477 skipped / 0 failures, 395.9 s.  The
+  `EU4_OFFLINE_ONLY=1`, non-root with `--init`): `20261122T144001Z-080a704e`,
+  4,342 ran / 3,864 executed / 478 skipped / 0 failures, 180.3 s.  The
   mandatory `test_case_baseline.BaselineIdentityTests.
   test_record_and_check_reuses_the_same_identity` test passes; portable
   identity reports `dependency_authority=quoted-include` and never claims
   macOS compiler provenance.
-* Final macOS offline gate `20261122T135313Z-d0131207`: 4,479 ran / 4,443 executed /
-  36 skipped / 0 failures / 0 errors, 1,602.7 s (skips are pre-existing
+* Final macOS offline gate `20261122T144309Z-a59ba5ad`: 4,482 ran / 4,446 executed /
+  36 skipped / 0 failures / 0 errors, 820.3 s (skips are pre-existing
   environment-gated suites, not the compiled-candidate tests).
 
 ### Candidate bypass results
@@ -302,6 +305,14 @@ Historical M6 seals remain usable: `tests.test_m6_frame`,
 `tests.test_m7_shadow_receipt`, `tests.test_m7_continuous_replay` and the
 legacy-seal re-evaluation pass.  The new receipt/evidence schemas accept the
 legacy M7 names.
+
+### Performance note
+
+The 1,602.7 s macOS gate was an anomalous host-load run.  The same exact-head
+suite rerun completed in 820.3 s, comparable to the earlier 849 s gate.  The
+compiler dependency scan is cached by source path/mtime and validated against
+header mtimes; no demonstrable code regression remains and no timing database
+was added.
 
 ## Limitations
 

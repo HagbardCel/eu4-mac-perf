@@ -334,9 +334,12 @@ def expected_output_blobs(trace: dict) -> list[dict]:
         }
         add(checkpoint.get("depth"), "depth", identity)
         add(checkpoint.get("stencil"), "stencil", identity)
-        for key in ("file", "reference_file"):
-            add(checkpoint.get(key), "color", identity) if isinstance(
-                checkpoint.get(key), str) else None
+        colour_file = checkpoint.get("file") or checkpoint.get("reference_file")
+        colour_sha = checkpoint.get("sha256") or checkpoint.get(
+            "reference_sha256")
+        if isinstance(colour_file, str) and colour_file:
+            add({"file": colour_file, "sha256": colour_sha}, "color",
+                identity)
     frame = trace.get("frame") or {}
     reference = frame.get("reference")
     if isinstance(reference, str) and reference:

@@ -513,7 +513,9 @@ def _isolated_replay_command(host: Path, argv: list[str],
     refuses to run a candidate rather than claiming isolation it does not have.
     """
     if not protected_paths:
-        return argv
+        raise PrefixCheckError(
+            "candidate reference isolation is unconfigured: no protected "
+            "reference path")
     sandbox = shutil.which("sandbox-exec")
     if sandbox is None:
         raise PrefixCheckError(

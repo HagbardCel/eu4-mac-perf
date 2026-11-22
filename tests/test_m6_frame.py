@@ -1025,6 +1025,21 @@ class ReplayInputOverlapTests(unittest.TestCase):
             self.assertEqual(overlap[0]["expected_by"][0]["kind"],
                              "observation")
 
+    def test_default_checkpoint_payload_overlap_has_checkpoint_role(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frame, trace = self._frame(root, b"checkpoint-shared")
+            import hashlib
+            digest = hashlib.sha256(b"checkpoint-shared").hexdigest()
+            trace["_events"][0]["default_checkpoint"] = {
+                "event": 0, "timing": "pre_event", "resource": "fb:0",
+                "file": "expected-other.bin", "sha256": digest}
+            overlap = m6_frame.replay_input_overlap(trace, frame)
+            roles = {(entry["kind"], entry["role"])
+                     for item in overlap for entry in item["expected_by"]}
+            self.assertIn(("default_checkpoint", "color"), roles)
+
     def test_initial_depth_and_final_reference_are_reported_separately(self):
         import tempfile
         with tempfile.TemporaryDirectory() as temporary:
