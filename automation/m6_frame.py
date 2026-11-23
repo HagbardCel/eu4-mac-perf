@@ -1530,6 +1530,33 @@ def capture(args: argparse.Namespace) -> int:
             int(getattr(args, "prefix_max_bytes", 384 * 1024 * 1024)))
         env_extra["EU4_GFX_FRAME_TRACE_PREFIX_MAX_NS"] = str(
             int(getattr(args, "prefix_max_ns", 10_000_000_000)))
+    if getattr(args, "uv2_probe", False):
+        event = int(args.uv2_probe_event)
+        if event < 0 or event >= int(getattr(args, "max_draws", 0) or 0):
+            print("capture refused: --uv2-probe-event is outside --max-draws",
+                  file=sys.stderr)
+            return 2
+        if prefix_end is None or int(prefix_end) < event:
+            print(
+                "capture refused: the uv2 probe requires --prefix-end >= "
+                "--uv2-probe-event so the original-shader control has an "
+                "authentic post-event observation",
+                file=sys.stderr,
+            )
+            return 2
+        for name in ("uv2_probe_program", "uv2_probe_framebuffer",
+                     "uv2_probe_texture"):
+            if int(getattr(args, name)) < 0:
+                print(f"capture refused: --{name.replace('_', '-')} is negative",
+                      file=sys.stderr)
+                return 2
+        env_extra["EU4_GFX_UV2_PROBE"] = "1"
+        env_extra["EU4_GFX_UV2_PROBE_EVENT"] = str(event)
+        env_extra["EU4_GFX_UV2_PROBE_PROGRAM"] = str(args.uv2_probe_program)
+        env_extra["EU4_GFX_UV2_PROBE_FRAMEBUFFER"] = str(
+            args.uv2_probe_framebuffer)
+        env_extra["EU4_GFX_UV2_PROBE_TEXTURE"] = str(args.uv2_probe_texture)
+        env_extra["EU4_GFX_UV2_PROBE_DIR"] = str(output / "uv2-probe")
     shadow_enabled = bool(getattr(args, "shadow", False))
     continuous = bool(getattr(args, "continuous", False))
     asynchronous = bool(getattr(args, "async", False))
@@ -2556,6 +2583,29 @@ def replay_command(args: argparse.Namespace) -> int:
     return code
 
 
+def uv2_probe_replay_env(out: Path, args: argparse.Namespace) -> dict | None:
+    """Child environment for the opt-in Metal uv2 diagnostic probe.
+
+    The probe is disabled unless ``--uv2-probe`` was requested; the returned
+    mapping is the inherited environment plus exactly the probe variables.
+    ``None`` means the selection is invalid and the replay must not run.
+    """
+    env = dict(os.environ)
+    if not getattr(args, "uv2_probe", False):
+        return env
+    event = int(args.uv2_probe_event)
+    if event < 0:
+        return None
+    env["EU4_FRAME_REPLAY_UV2_PROBE"] = "1"
+    env["EU4_FRAME_REPLAY_UV2_PROBE_EVENT"] = str(event)
+    env["EU4_FRAME_REPLAY_UV2_PROBE_PROGRAM"] = str(args.uv2_probe_program)
+    env["EU4_FRAME_REPLAY_UV2_PROBE_FRAMEBUFFER"] = str(
+        args.uv2_probe_framebuffer)
+    env["EU4_FRAME_REPLAY_UV2_PROBE_TEXTURE"] = str(args.uv2_probe_texture)
+    env["EU4_FRAME_REPLAY_UV2_PROBE_DIR"] = str(Path(out) / "uv2-probe")
+    return env
+
+
 def _replay_command_body(args: argparse.Namespace,
                          evidence: dict | None = None) -> int:
     _replay_mark(evidence, status="running")
@@ -2636,6 +2686,10 @@ def _replay_command_body(args: argparse.Namespace,
         command.append("--capture-post")
     if args.depth_from_prefix:
         command.append("--depth-from-prefix")
+    child_env = uv2_probe_replay_env(out, args)
+    if child_env is None:
+        print("replay refused: --uv2-probe-event is negative", file=sys.stderr)
+        return 2
     from automation import launch_lease
 
     with launch_lease.gpu_execution():
@@ -2649,7 +2703,7 @@ def _replay_command_body(args: argparse.Namespace,
                   file=sys.stderr)
             return 3
         ran = subprocess.run(command, capture_output=True, text=True,
-                             check=False, timeout=1200)
+                             check=False, timeout=1200, env=child_env)
     result_path = out / "replay.json"
     if ran.returncode != 0 or not result_path.is_file():
         _replay_mark(evidence, status="error", returncode=ran.returncode,
@@ -4067,6 +4121,15 @@ def _parser() -> argparse.ArgumentParser:
         help="aggregate readback-time budget for exact-prefix observations")
     cap.add_argument("--seal", action="store_true",
                      help="publish the authoritative frame-seal/v1 handoff")
+    cap.add_argument(
+        "--uv2-probe", action="store_true",
+        help="opt-in diagnostic: execute the selected event-1 draw twice in "
+             "isolated offscreen targets (original-shader control + uv2 float "
+             "probe) before the engine's own draw; requires --prefix-end")
+    cap.add_argument("--uv2-probe-event", type=int, default=1)
+    cap.add_argument("--uv2-probe-program", type=int, default=310)
+    cap.add_argument("--uv2-probe-framebuffer", type=int, default=6)
+    cap.add_argument("--uv2-probe-texture", type=int, default=433)
     cap.add_argument("--shadow", action="store_true",
                      help="execute the sealed frame through the in-process Metal bridge")
     cap.add_argument("--continuous", action="store_true",
@@ -4174,6 +4237,16 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="replay preceding events so the selected draw's depth input is defined",
     )
+    rep.add_argument(
+        "--uv2-probe",
+        action="store_true",
+        help="opt-in diagnostic: encode one isolated uv2 pass at --uv2-probe-event "
+             "and write <out>/uv2-probe; the normal replay pass is unchanged",
+    )
+    rep.add_argument("--uv2-probe-event", type=int, default=1)
+    rep.add_argument("--uv2-probe-program", type=int, default=310)
+    rep.add_argument("--uv2-probe-framebuffer", type=int, default=6)
+    rep.add_argument("--uv2-probe-texture", type=int, default=433)
     rep.set_defaults(handler=replay_command)
 
     iso = sub.add_parser("isolate", help="isolated marked-draw differential")

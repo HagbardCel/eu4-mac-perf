@@ -2238,6 +2238,396 @@ static NSString *state_key(NSDictionary *event, NSDictionary *target,
     return key;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Opt-in uv2 diagnostic probe                                               */
+/* ------------------------------------------------------------------------- */
+/* Disabled by default.  EU4_FRAME_REPLAY_UV2_PROBE=1 selects one draw event and
+ * encodes a second, isolated render pass in the same command buffer: the same
+ * translated vertex function, vertex buffers, vertex uniforms, viewport and
+ * culling as the normal pass, with a substitute fragment function that writes
+ * the interpolated uv2 varying into an RGBA32F texture.  The normal pass and
+ * the translated shaders are unchanged.  The output is diagnostic evidence
+ * only and never replaces the frame readback. */
+
+typedef struct {
+    int enabled;
+    int event;
+    int program;
+    int framebuffer;
+    int texture;
+    char dir[1024];
+    char varying[64];
+} uv2_probe_config;
+
+static uv2_probe_config g_uv2_probe;
+static int g_uv2_probe_done;
+static int g_uv2_probe_status; /* 0 skipped, 1 ok, 2 error */
+static char g_uv2_probe_error[512];
+static NSMutableArray *g_uv2_probe_records;
+static NSMutableDictionary *g_uv2_probe_failure;
+static id<MTLFunction> g_uv2_probe_fragment_function;
+
+static void uv2_probe_reset(void) {
+    memset(&g_uv2_probe, 0, sizeof(g_uv2_probe));
+    g_uv2_probe.event = 1;
+    g_uv2_probe.program = 310;
+    g_uv2_probe.framebuffer = 6;
+    g_uv2_probe.texture = 433;
+    snprintf(g_uv2_probe.varying, sizeof(g_uv2_probe.varying), "%s",
+             "v_TEXCOORD1");
+    g_uv2_probe_done = 0;
+    g_uv2_probe_status = 0;
+    g_uv2_probe_error[0] = 0;
+    g_uv2_probe_records = [NSMutableArray array];
+    g_uv2_probe_failure = nil;
+    g_uv2_probe_fragment_function = nil;
+}
+
+static int uv2_probe_parse_int(const char *text, int fallback) {
+    if (text == NULL || text[0] == 0) {
+        return fallback;
+    }
+    char *end = NULL;
+    long value = strtol(text, &end, 0);
+    if (end == text || *end != 0 || value < 0 || value > INT_MAX) {
+        return -1;
+    }
+    return (int)value;
+}
+
+static void uv2_probe_configure_from_env(void) {
+    uv2_probe_reset();
+    const char *enabled = getenv("EU4_FRAME_REPLAY_UV2_PROBE");
+    if (enabled == NULL || strcmp(enabled, "1") != 0) {
+        return;
+    }
+    int value = uv2_probe_parse_int(
+        getenv("EU4_FRAME_REPLAY_UV2_PROBE_EVENT"), g_uv2_probe.event);
+    if (value < 0) {
+        g_uv2_probe_status = 2;
+        snprintf(g_uv2_probe_error, sizeof(g_uv2_probe_error),
+                 "invalid probe event");
+        return;
+    }
+    g_uv2_probe.event = value;
+    value = uv2_probe_parse_int(getenv("EU4_FRAME_REPLAY_UV2_PROBE_PROGRAM"),
+                                g_uv2_probe.program);
+    if (value < 0) {
+        g_uv2_probe_status = 2;
+        snprintf(g_uv2_probe_error, sizeof(g_uv2_probe_error),
+                 "invalid probe program");
+        return;
+    }
+    g_uv2_probe.program = value;
+    value = uv2_probe_parse_int(
+        getenv("EU4_FRAME_REPLAY_UV2_PROBE_FRAMEBUFFER"),
+        g_uv2_probe.framebuffer);
+    if (value < 0) {
+        g_uv2_probe_status = 2;
+        snprintf(g_uv2_probe_error, sizeof(g_uv2_probe_error),
+                 "invalid probe framebuffer");
+        return;
+    }
+    g_uv2_probe.framebuffer = value;
+    value = uv2_probe_parse_int(getenv("EU4_FRAME_REPLAY_UV2_PROBE_TEXTURE"),
+                                g_uv2_probe.texture);
+    if (value < 0) {
+        g_uv2_probe_status = 2;
+        snprintf(g_uv2_probe_error, sizeof(g_uv2_probe_error),
+                 "invalid probe texture");
+        return;
+    }
+    g_uv2_probe.texture = value;
+    const char *varying = getenv("EU4_FRAME_REPLAY_UV2_PROBE_VARYING");
+    if (varying != NULL && varying[0] != 0) {
+        size_t length = strlen(varying);
+        if (length >= sizeof(g_uv2_probe.varying)) {
+            g_uv2_probe_status = 2;
+            snprintf(g_uv2_probe_error, sizeof(g_uv2_probe_error),
+                     "probe varying name is too long");
+            return;
+        }
+        for (size_t i = 0; i < length; i++) {
+            char character = varying[i];
+            if (!((character >= 'a' && character <= 'z') ||
+                  (character >= 'A' && character <= 'Z') ||
+                  (character >= '0' && character <= '9') ||
+                  character == '_')) {
+                g_uv2_probe_status = 2;
+                snprintf(g_uv2_probe_error, sizeof(g_uv2_probe_error),
+                         "probe varying is not an identifier");
+                return;
+            }
+        }
+        snprintf(g_uv2_probe.varying, sizeof(g_uv2_probe.varying), "%s",
+                 varying);
+    }
+    const char *dir = getenv("EU4_FRAME_REPLAY_UV2_PROBE_DIR");
+    if (dir != NULL && dir[0] != 0) {
+        if (dir[0] != '/') {
+            g_uv2_probe_status = 2;
+            snprintf(g_uv2_probe_error, sizeof(g_uv2_probe_error),
+                     "probe directory is not absolute");
+            return;
+        }
+        snprintf(g_uv2_probe.dir, sizeof(g_uv2_probe.dir), "%s", dir);
+    }
+    g_uv2_probe.enabled = 1;
+}
+
+static NSString *uv2_probe_sha256(NSData *data) {
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *hex =
+        [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (NSUInteger index = 0; index < CC_SHA256_DIGEST_LENGTH; index++) {
+        [hex appendFormat:@"%02x", digest[index]];
+    }
+    return hex;
+}
+
+static void uv2_probe_flip_rows(const uint8_t *source, uint8_t *destination,
+                                NSUInteger width, NSUInteger height,
+                                NSUInteger pixel_bytes) {
+    NSUInteger stride = width * pixel_bytes;
+    for (NSUInteger row = 0; row < height; row++) {
+        memcpy(destination + row * stride,
+               source + (height - 1 - row) * stride, stride);
+    }
+}
+
+/* Builds the substitute fragment stage from the translated vertex stage's
+ * declared varying location.  The location is part of the translation report,
+ * so the probe reads exactly the varying the original vertex stage writes. */
+static NSString *uv2_probe_fragment_source(NSDictionary *program_entry,
+                                           NSDictionary *vertex_stage,
+                                           NSInteger *location_out,
+                                           NSError **error) {
+    NSString *varying = [NSString stringWithUTF8String:g_uv2_probe.varying];
+    NSDictionary *locations = program_entry[@"varying_locations"] ?: @{};
+    NSNumber *location = locations[varying];
+    if (location == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:130
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:
+                                                         @"translated program has no varying %@",
+                                                         varying]}];
+        }
+        return nil;
+    }
+    NSString *type = nil;
+    for (NSDictionary *item in vertex_stage[@"varyings"] ?: @[]) {
+        if ([string_value(item[@"name"]) isEqualToString:varying]) {
+            type = string_value(item[@"type"]);
+            break;
+        }
+    }
+    if (![type isEqualToString:@"float2"]) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:131
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:
+                                                         @"varying %@ is not float2",
+                                                         varying]}];
+        }
+        return nil;
+    }
+    *location_out = location.integerValue;
+    return [NSString stringWithFormat:
+                @"#include <metal_stdlib>\n"
+                 "using namespace metal;\n"
+                 "struct UV2ProbeIn { float2 value [[user(locn%ld)]]; };\n"
+                 "struct UV2ProbeOut { float4 color [[color(0)]]; };\n"
+                 "fragment UV2ProbeOut uv2_probe(UV2ProbeIn in [[stage_in]]) {\n"
+                 "    UV2ProbeOut out; out.color = float4(in.value, 0.0, 1.0);\n"
+                 "    return out;\n"
+                 "}\n",
+                (long)location.integerValue];
+}
+
+static id<MTLFunction> uv2_probe_compile_fragment(NSDictionary *program_entry,
+                                                   NSDictionary *vertex_stage,
+                                                   NSInteger *location_out,
+                                                   NSString **source_out,
+                                                   NSError **error) {
+    if (g_uv2_probe_fragment_function != nil) {
+        return g_uv2_probe_fragment_function;
+    }
+    NSString *source = uv2_probe_fragment_source(program_entry, vertex_stage,
+                                                 location_out, error);
+    if (source == nil) {
+        return nil;
+    }
+    NSError *compile_error = nil;
+    id<MTLLibrary> library = [g_device newLibraryWithSource:source
+                                                    options:nil
+                                                      error:&compile_error];
+    id<MTLFunction> function =
+        library != nil ? [library newFunctionWithName:@"uv2_probe"] : nil;
+    if (function == nil) {
+        if (error != NULL) {
+            *error = compile_error ?: [NSError errorWithDomain:kErrorDomain
+                                                          code:132
+                                                      userInfo:@{NSLocalizedDescriptionKey:
+                                                                     @"uv2 probe fragment compile failed"}];
+        }
+        return nil;
+    }
+    g_uv2_probe_fragment_function = function;
+    if (source_out != NULL) {
+        *source_out = source;
+    }
+    return function;
+}
+
+static void uv2_probe_write_descriptor(NSString *directory,
+                                       NSDictionary *document) {
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:NULL];
+    NSData *json = [NSJSONSerialization dataWithJSONObject:document
+                                                   options:NSJSONWritingPrettyPrinted
+                                                     error:NULL];
+    if (json != nil) {
+        [json writeToFile:[directory
+                              stringByAppendingPathComponent:@"uv2-probe.json"]
+               atomically:YES];
+    }
+}
+
+static void uv2_probe_record_failure(NSString *reason, NSDictionary *event,
+                                     NSDictionary *observed) {
+    if (g_uv2_probe_failure != nil) {
+        return;
+    }
+    NSMutableDictionary *document = [@{
+        @"schema": @"gfx-uv2-probe/v1",
+        @"side": @"metal",
+        @"status": @"error",
+        @"reason": reason ?: @"unknown",
+        @"event": @(g_current_event),
+        @"expected": @{
+            @"event": @(g_uv2_probe.event),
+            @"program": @(g_uv2_probe.program),
+            @"framebuffer": @(g_uv2_probe.framebuffer),
+            @"texture": @(g_uv2_probe.texture),
+        },
+        @"observed": observed ?: @{},
+        @"target": event[@"target"] ?: @{},
+        @"notes": @[@"diagnostic evidence only; the normal replay is unchanged"],
+    } mutableCopy];
+    g_uv2_probe_failure = document;
+    g_uv2_probe_status = 2;
+    snprintf(g_uv2_probe_error, sizeof(g_uv2_probe_error), "%s",
+             safe_utf8(reason ?: @"unknown", ""));
+}
+
+/* Reads every recorded probe target back after the frame command buffer has
+ * completed and writes the raw float payload plus its descriptor. */
+static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
+    if (!g_uv2_probe.enabled) {
+        return nil;
+    }
+    NSString *directory = g_uv2_probe.dir[0] != 0
+        ? [NSString stringWithUTF8String:g_uv2_probe.dir]
+        : [output_path stringByAppendingPathComponent:@"uv2-probe"];
+    if (g_uv2_probe_failure != nil) {
+        uv2_probe_write_descriptor(directory, g_uv2_probe_failure);
+        return @{
+            @"status": @"error",
+            @"reason": g_uv2_probe_failure[@"reason"] ?: @"",
+            @"descriptor": [directory stringByAppendingPathComponent:
+                                         @"uv2-probe.json"],
+        };
+    }
+    if (g_uv2_probe_records.count == 0) {
+        return @{@"status": @"skipped", @"reason": @"event_not_replayed"};
+    }
+    NSDictionary *record = g_uv2_probe_records.firstObject;
+    id<MTLTexture> texture = record[@"texture"];
+    if (texture == nil) {
+        return @{@"status": @"error", @"reason": @"probe_target_missing"};
+    }
+    NSUInteger width = texture.width;
+    NSUInteger height = texture.height;
+    NSUInteger stride = width * 16;
+    id<MTLBuffer> buffer = [g_device newBufferWithLength:stride * height
+                                                 options:MTLResourceStorageModeShared];
+    if (buffer == nil) {
+        return @{@"status": @"error", @"reason": @"probe_buffer_alloc"};
+    }
+    NSError *error = nil;
+    id<MTLCommandBuffer> blit = [g_queue commandBuffer];
+    id<MTLBlitCommandEncoder> encoder = [blit blitCommandEncoder];
+    [encoder copyFromTexture:texture
+                 sourceSlice:0
+                 sourceLevel:0
+                sourceOrigin:MTLOriginMake(0, 0, 0)
+                  sourceSize:MTLSizeMake(width, height, 1)
+                    toBuffer:buffer
+           destinationOffset:0
+      destinationBytesPerRow:stride
+    destinationBytesPerImage:stride * height];
+    [encoder endEncoding];
+    [blit commit];
+    if (!wait_for_transfer(blit, @"uv2 probe readback", &error)) {
+        NSString *reason = failure_text(error, @"uv2 probe readback failed");
+        uv2_probe_record_failure(reason, record[@"event"] ?: @{},
+                                 record[@"observed"] ?: @{});
+        uv2_probe_write_descriptor(directory, g_uv2_probe_failure);
+        return @{@"status": @"error", @"reason": reason};
+    }
+    uint8_t *flipped = (uint8_t *)malloc(stride * height);
+    if (flipped == NULL) {
+        return @{@"status": @"error", @"reason": @"probe_flip_alloc"};
+    }
+    uv2_probe_flip_rows((const uint8_t *)buffer.contents, flipped, width,
+                        height, 16);
+    NSData *data = [NSData dataWithBytes:flipped length:stride * height];
+    free(flipped);
+    NSString *raw_name = @"uv2-probe.rgba32f";
+    NSString *raw_path = [directory stringByAppendingPathComponent:raw_name];
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:NULL];
+    if (![data writeToFile:raw_path atomically:YES]) {
+        return @{@"status": @"error", @"reason": @"probe_raw_write"};
+    }
+    NSMutableDictionary *document = [record mutableCopy];
+    [document removeObjectForKey:@"texture"];
+    document[@"status"] = @"ok";
+    document[@"origin"] = @"lower_left";
+    document[@"pixel_format"] = @"RGBA32F";
+    document[@"width"] = @(width);
+    document[@"height"] = @(height);
+    document[@"row_stride"] = @(stride);
+    document[@"component_order"] = @[@"uv2.x", @"uv2.y", @0, @1];
+    document[@"raw_file"] = raw_name;
+    document[@"raw_bytes"] = @(data.length);
+    document[@"raw_sha256"] = uv2_probe_sha256(data);
+    document[@"readback_command_status"] = @(blit.status);
+    document[@"notes"] = @[
+        @"diagnostic evidence only; the normal Metal pass is unchanged",
+        @"the probe reuses the normal pass's compiled vertex function"
+    ];
+    uv2_probe_write_descriptor(directory, document);
+    g_uv2_probe_status = 1;
+    return @{
+        @"status": @"ok",
+        @"event": document[@"event"] ?: @0,
+        @"width": @(width),
+        @"height": @(height),
+        @"pixel_format": @"RGBA32F",
+        @"raw_file": raw_name,
+        @"raw_sha256": document[@"raw_sha256"],
+        @"descriptor": [directory stringByAppendingPathComponent:
+                                     @"uv2-probe.json"],
+    };
+}
+
 static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                         NSString *frameDir, NSString *shaderDir,
                         id<MTLCommandBuffer> command, NSError **error) {
@@ -3184,6 +3574,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
         }
         NSUInteger indexed = number(draw[@"indexed"], 0);
+        id<MTLBuffer> uv2_index_buffer = nil;
         NSError *primitive_error = nil;
         MTLPrimitiveType primitive = primitive_type(mode, &primitive_error);
         if (primitive_error != nil) {
@@ -3241,13 +3632,13 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 }
                 destination[i] = (uint16_t)effective;
             }
-            id<MTLBuffer> index_buffer = [g_device newBufferWithBytes:rebased.bytes
-                                                               length:rebased.length
-                                                              options:MTLResourceStorageModeManaged];
+            uv2_index_buffer = [g_device newBufferWithBytes:rebased.bytes
+                                                      length:rebased.length
+                                                     options:MTLResourceStorageModeManaged];
             [encoder drawIndexedPrimitives:primitive
                                indexCount:count
                                 indexType:MTLIndexTypeUInt16
-                              indexBuffer:index_buffer
+                              indexBuffer:uv2_index_buffer
                         indexBufferOffset:0
                             instanceCount:instances];
         } else {
@@ -3257,6 +3648,278 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                       instanceCount:instances];
         }
         [encoder endEncoding];
+        /* Opt-in uv2 diagnostic: a second, isolated pass in the same command
+           buffer, using the normal pass's compiled vertex function and
+           inputs.  It never writes the normal render target. */
+        if (g_uv2_probe.enabled && !g_uv2_probe_done &&
+            (NSInteger)number(event[@"index"], -1) == g_uv2_probe.event) {
+            NSDictionary *probe_target = event[@"target"] ?: @{};
+            NSInteger observed_program =
+                (NSInteger)number(program[@"name"], -1);
+            NSInteger observed_framebuffer =
+                (NSInteger)number(probe_target[@"framebuffer"], -1);
+            NSInteger observed_texture = (NSInteger)number(
+                probe_target[@"color_attachment"][@"name"], -1);
+            NSDictionary *observed = @{
+                @"event": event[@"index"] ?: @(-1),
+                @"program": @(observed_program),
+                @"framebuffer": @(observed_framebuffer),
+                @"texture": @(observed_texture),
+            };
+            if (observed_program != g_uv2_probe.program ||
+                observed_framebuffer != g_uv2_probe.framebuffer ||
+                observed_texture != g_uv2_probe.texture) {
+                uv2_probe_record_failure(@"identity_mismatch", event,
+                                         observed);
+            } else if (!indexed) {
+                uv2_probe_record_failure(
+                    @"selection_unsupported", event,
+                    @{@"reason": @"only indexed draws are supported"});
+            } else {
+                NSInteger varying_location = -1;
+                NSString *probe_source = nil;
+                NSError *probe_error = nil;
+                id<MTLFunction> probe_fragment =
+                    uv2_probe_compile_fragment(program_entry, vs,
+                                               &varying_location,
+                                               &probe_source, &probe_error);
+                if (probe_fragment == nil) {
+                    uv2_probe_record_failure(
+                        failure_text(probe_error,
+                                     @"uv2 probe fragment unavailable"),
+                        event, observed);
+                } else {
+                    MTLTextureDescriptor *probe_descriptor =
+                        [MTLTextureDescriptor new];
+                    probe_descriptor.textureType = MTLTextureType2D;
+                    probe_descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
+                    probe_descriptor.width = target_width;
+                    probe_descriptor.height = target_height;
+                    probe_descriptor.usage = MTLTextureUsageRenderTarget |
+                                             MTLTextureUsageShaderRead;
+                    probe_descriptor.storageMode = MTLStorageModePrivate;
+                    id<MTLTexture> probe_texture =
+                        [g_device newTextureWithDescriptor:probe_descriptor];
+                    if (probe_texture == nil) {
+                        uv2_probe_record_failure(@"probe_texture_alloc",
+                                                 event, observed);
+                    } else {
+                        NSString *probe_key = [NSString stringWithFormat:
+                            @"uv2probe|%@|%ld|%lu-%lu",
+                            vertex_identity ?: @"",
+                            (long)varying_location,
+                            (unsigned long)target_width,
+                            (unsigned long)target_height];
+                        id<MTLRenderPipelineState> probe_pipeline =
+                            g_pipelines[probe_key];
+                        if (probe_pipeline == nil) {
+                            MTLRenderPipelineDescriptor *pipeline_descriptor =
+                                [MTLRenderPipelineDescriptor new];
+                            pipeline_descriptor.vertexFunction =
+                                vertex_function;
+                            pipeline_descriptor.fragmentFunction =
+                                probe_fragment;
+                            pipeline_descriptor.vertexDescriptor =
+                                vertex_descriptor;
+                            pipeline_descriptor.colorAttachments[0]
+                                .pixelFormat = MTLPixelFormatRGBA32Float;
+                            NSError *pipeline_error = nil;
+                            probe_pipeline = [g_device
+                                newRenderPipelineStateWithDescriptor:
+                                    pipeline_descriptor
+                                                          error:&pipeline_error];
+                            if (probe_pipeline == nil) {
+                                uv2_probe_record_failure(
+                                    failure_text(pipeline_error,
+                                                 @"uv2 probe pipeline failed"),
+                                    event, observed);
+                            } else {
+                                g_pipelines[probe_key] = probe_pipeline;
+                            }
+                        }
+                        if (probe_pipeline != nil) {
+                            MTLRenderPassDescriptor *pass =
+                                [MTLRenderPassDescriptor renderPassDescriptor];
+                            pass.colorAttachments[0].texture = probe_texture;
+                            pass.colorAttachments[0].loadAction =
+                                MTLLoadActionClear;
+                            pass.colorAttachments[0].clearColor =
+                                MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
+                            pass.colorAttachments[0].storeAction =
+                                MTLStoreActionStore;
+                            id<MTLRenderCommandEncoder> probe_encoder =
+                                [command renderCommandEncoderWithDescriptor:
+                                             pass];
+                            if (probe_encoder == nil) {
+                                uv2_probe_record_failure(
+                                    @"probe_encoder", event, observed);
+                            } else {
+                                [probe_encoder setRenderPipelineState:
+                                                    probe_pipeline];
+                                [probe_encoder setViewport:metal_viewport];
+                                if (scissor_empty || cull_empty) {
+                                    MTLScissorRect empty = {0, 0, 0, 0};
+                                    [probe_encoder setScissorRect:empty];
+                                } else if (number(scissor[@"enabled"], 0) !=
+                                           0) {
+                                    MTLScissorRect rect;
+                                    if (scissor_rect_for(
+                                            scissor[@"box"], target_width,
+                                            target_height, &rect)) {
+                                        [probe_encoder setScissorRect:rect];
+                                    }
+                                } else {
+                                    MTLScissorRect rect = {
+                                        0, 0, target_width, target_height};
+                                    [probe_encoder setScissorRect:rect];
+                                }
+                                if (cull_known && !cull_empty && !no_cull &&
+                                    number(cull[@"enabled"], 0) != 0 &&
+                                    topology_supports_culling(
+                                        primitive_mode)) {
+                                    [probe_encoder setCullMode:cull_mode];
+                                    NSUInteger gl_front =
+                                        (NSUInteger)strtoul(
+                                            [string_value(cull[@"front"])
+                                                ?: @"0x901" UTF8String],
+                                            NULL, 0);
+                                    const char *flip =
+                                        getenv("EU4_FRAME_REPLAY_FLIP_WINDING");
+                                    if (flip != NULL && flip[0] == '1') {
+                                        gl_front = gl_front == 0x901
+                                                       ? 0x900
+                                                       : 0x901;
+                                    }
+                                    [probe_encoder
+                                        setFrontFacingWinding:
+                                            gl_front == 0x901
+                                                ? MTLWindingCounterClockwise
+                                                : MTLWindingClockwise];
+                                } else {
+                                    [probe_encoder
+                                        setCullMode:MTLCullModeNone];
+                                }
+                                if (number(vs[@"msl_uniform_buffer"],
+                                           NSUIntegerMax) != NSUIntegerMax &&
+                                    vertex_uniforms.length > 0) {
+                                    [probe_encoder
+                                        setVertexBytes:vertex_uniforms.bytes
+                                                length:vertex_uniforms.length
+                                               atIndex:number(
+                                                           vs[@"msl_uniform_buffer"],
+                                                           0)];
+                                }
+                                for (NSNumber *location in buffers) {
+                                    [probe_encoder
+                                        setVertexBuffer:buffers[location]
+                                                 offset:0
+                                                atIndex:kVertexBufferBase +
+                                                        [location
+                                                            unsignedIntegerValue]];
+                                }
+                                [probe_encoder
+                                    drawIndexedPrimitives:primitive
+                                               indexCount:count
+                                                indexType:MTLIndexTypeUInt16
+                                              indexBuffer:uv2_index_buffer
+                                        indexBufferOffset:0
+                                            instanceCount:instances];
+                                [probe_encoder endEncoding];
+                                NSMutableArray *attribute_records =
+                                    [NSMutableArray array];
+                                for (NSDictionary *attribute in
+                                         event[@"attributes"] ?: @[]) {
+                                    [attribute_records addObject:@{
+                                        @"name": attribute[@"name"] ?: @"",
+                                        @"location":
+                                            attribute[@"location"] ?: @(-1),
+                                        @"sha256":
+                                            attribute[@"sha256"] ?: @"",
+                                    }];
+                                }
+                                NSMutableArray *uniform_records =
+                                    [NSMutableArray array];
+                                for (NSDictionary *uniform in
+                                         program[@"uniforms"] ?: @[]) {
+                                    NSMutableDictionary *entry =
+                                        [@{@"name": uniform[@"name"] ?: @""}
+                                            mutableCopy];
+                                    if ([string_value(uniform[@"type"])
+                                            isEqualToString:@"sampler"]) {
+                                        entry[@"kind"] = @"sampler";
+                                        entry[@"unit"] = uniform[@"unit"] ?: @(-1);
+                                    } else {
+                                        entry[@"sha256"] =
+                                            uniform[@"sha256"] ?: @"";
+                                    }
+                                    [uniform_records addObject:entry];
+                                }
+                                NSDictionary *indices =
+                                    event[@"indices"] ?: @{};
+                                NSDictionary *record = @{
+                                    @"schema": @"gfx-uv2-probe/v1",
+                                    @"side": @"metal",
+                                    @"status": @"ok",
+                                    @"event": event[@"index"] ?: @(-1),
+                                    @"program": program[@"name"] ?: @(-1),
+                                    @"target": probe_target,
+                                    @"varying": [NSString stringWithUTF8String:
+                                                     g_uv2_probe.varying],
+                                    @"varying_location": @(varying_location),
+                                    @"sources": @{
+                                        @"vertex_sha256":
+                                            vs[@"source_sha256"] ?: @"",
+                                        @"fragment_sha256":
+                                            fs[@"source_sha256"] ?: @"",
+                                        @"probe_fragment_sha256":
+                                            uv2_probe_sha256(
+                                                [probe_source
+                                                    dataUsingEncoding:
+                                                        NSUTF8StringEncoding]),
+                                        @"probe_fragment_source":
+                                            probe_source ?: @"",
+                                    },
+                                    @"vertex_msl": @{
+                                        @"file": vs[@"msl_file"] ?: @"",
+                                        @"sha256": uv2_probe_sha256(
+                                            [NSData dataWithContentsOfFile:
+                                                [shaderDir
+                                                    stringByAppendingPathComponent:
+                                                        vs[@"msl_file"] ?: @""]]
+                                                ?: [NSData data]),
+                                        @"entry": vs[@"msl_entry"] ?: @"",
+                                        @"function_identity_order":
+                                            vertex_identity ?: @"",
+                                    },
+                                    @"draw": @{
+                                        @"mode": @(primitive_mode),
+                                        @"count": @(count),
+                                        @"instances": @(instances),
+                                        @"indexed": @YES,
+                                    },
+                                    @"attributes": attribute_records,
+                                    @"uniforms": uniform_records,
+                                    @"indices": @{
+                                        @"count": indices[@"count"] ?: @(count),
+                                        @"sha256":
+                                            indices[@"sha256"] ?: @"",
+                                    },
+                                    @"viewport": @[
+                                        @(metal_viewport.originX),
+                                        @(metal_viewport.originY),
+                                        @(metal_viewport.width),
+                                        @(metal_viewport.height),
+                                    ],
+                                    @"texture": probe_texture,
+                                };
+                                [g_uv2_probe_records addObject:record];
+                                g_uv2_probe_done = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         return YES;
     }
 }
@@ -4555,6 +5218,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
     g_events_count = 0;
     g_encoded_count = 0;
     g_failed_count = 0;
+    uv2_probe_configure_from_env();
     uint64_t started_ns = replay_now_ns();
     g_started_ns = started_ns;
     state.current_result_json = NO;
@@ -5327,6 +5991,13 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                             g_deadline_expired != 0, blit.status, @"")];
                     }
                 }
+            }
+        }
+        if (g_uv2_probe.enabled) {
+            NSDictionary *probe_summary =
+                uv2_probe_write_outputs(output_path);
+            if (probe_summary != nil) {
+                result[@"uv2_probe"] = probe_summary;
             }
         }
         NSUInteger external_bindings = 0, target_bindings = 0;

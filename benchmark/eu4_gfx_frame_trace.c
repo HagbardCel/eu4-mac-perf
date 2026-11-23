@@ -366,6 +366,61 @@ static struct {
     unsigned long long lifecycle_sequence;
 } g;
 
+/* Opt-in event-1 uv2 diagnostic probe.  Disabled unless EU4_GFX_UV2_PROBE=1;
+ * the expected draw identity is the authenticated event-1 draw from the
+ * sealed reference (program 310, framebuffer 6, colour texture 433).  The
+ * probe never feeds the sealed reference and never fails the capture. */
+typedef struct {
+    int enabled;
+    int event;
+    int program;
+    int framebuffer;
+    int texture;
+    int require_identity;
+    char dir[FTRACE_PATH];
+    char varying[64];
+} uv2_probe_config;
+
+static uv2_probe_config g_uv2_probe = {
+    0, 1, 310, 6, 433, 1, "", "v_TEXCOORD1"};
+static int g_uv2_probe_done;
+
+/* The probe executes at the draw's exit hook, where the deferred uniform and
+ * attribute uploads inside _GfxDrawIndexed have been applied; the engine's
+ * pre-draw colour and depth must be captured at entry, before the draw writes
+ * them.  This one-shot record carries that state across the call. */
+typedef struct {
+    int attempted;
+    int ready;
+    int event;
+    int indexed;
+    unsigned mode;
+    int count;
+    int first;
+    int instances;
+    int base_vertex;
+    uintptr_t master;
+    int program;
+    int framebuffer;
+    int texture;
+    int width;
+    int height;
+    int depth_bits;
+    uint8_t *color;
+    uint8_t *depth;
+    char color_sha[65];
+    char depth_sha[65];
+} uv2_probe_pending;
+
+static uv2_probe_pending g_uv2_probe_pending;
+static int g_uv2_probe_require_pre;
+
+static void uv2_probe_clear_pending(void) {
+    free(g_uv2_probe_pending.color);
+    free(g_uv2_probe_pending.depth);
+    memset(&g_uv2_probe_pending, 0, sizeof(g_uv2_probe_pending));
+}
+
 typedef struct blob_entry {
     char sha[65];
     char name[FTRACE_NAME];
@@ -1358,6 +1413,81 @@ static int parse_u64(const char *text, uint64_t *out) {
     return 0;
 }
 
+/* Reads the opt-in uv2 diagnostic configuration.  Returns 1 enabled, 0
+ * disabled, -1 malformed (the frame capture then refuses to arm). */
+static int uv2_probe_configure_from_env(const char *trace_dir) {
+    g_uv2_probe.enabled = 0;
+    g_uv2_probe_done = 0;
+    const char *enabled = getenv("EU4_GFX_UV2_PROBE");
+    if (enabled == NULL || enabled[0] == 0 || strcmp(enabled, "0") == 0) {
+        return 0;
+    }
+    if (strcmp(enabled, "1") != 0) {
+        return -1;
+    }
+    uint64_t value = 0;
+    const char *event = getenv("EU4_GFX_UV2_PROBE_EVENT");
+    if (event != NULL && event[0] != 0) {
+        if (parse_u64(event, &value) != 0 || value > (uint64_t)INT_MAX) {
+            return -1;
+        }
+        g_uv2_probe.event = (int)value;
+    }
+    const char *program = getenv("EU4_GFX_UV2_PROBE_PROGRAM");
+    if (program != NULL && program[0] != 0) {
+        if (parse_u64(program, &value) != 0 || value > (uint64_t)INT_MAX) {
+            return -1;
+        }
+        g_uv2_probe.program = (int)value;
+    }
+    const char *framebuffer = getenv("EU4_GFX_UV2_PROBE_FRAMEBUFFER");
+    if (framebuffer != NULL && framebuffer[0] != 0) {
+        if (parse_u64(framebuffer, &value) != 0 ||
+            value > (uint64_t)INT_MAX) {
+            return -1;
+        }
+        g_uv2_probe.framebuffer = (int)value;
+    }
+    const char *texture = getenv("EU4_GFX_UV2_PROBE_TEXTURE");
+    if (texture != NULL && texture[0] != 0) {
+        if (parse_u64(texture, &value) != 0 || value > (uint64_t)INT_MAX) {
+            return -1;
+        }
+        g_uv2_probe.texture = (int)value;
+    }
+    const char *varying = getenv("EU4_GFX_UV2_PROBE_VARYING");
+    if (varying != NULL && varying[0] != 0) {
+        if (strlen(varying) >= sizeof(g_uv2_probe.varying)) {
+            return -1;
+        }
+        for (const char *cursor = varying; *cursor != 0; cursor++) {
+            char character = *cursor;
+            if (!((character >= 'a' && character <= 'z') ||
+                  (character >= 'A' && character <= 'Z') ||
+                  (character >= '0' && character <= '9') ||
+                  character == '_')) {
+                return -1;
+            }
+        }
+        snprintf(g_uv2_probe.varying, sizeof(g_uv2_probe.varying), "%s",
+                 varying);
+    }
+    const char *dir = getenv("EU4_GFX_UV2_PROBE_DIR");
+    if (dir != NULL && dir[0] != 0) {
+        if (dir[0] != '/') {
+            return -1;
+        }
+        snprintf(g_uv2_probe.dir, sizeof(g_uv2_probe.dir), "%s", dir);
+    } else if (trace_dir != NULL && trace_dir[0] == '/') {
+        snprintf(g_uv2_probe.dir, sizeof(g_uv2_probe.dir), "%s/uv2-probe",
+                 trace_dir);
+    } else {
+        return -1;
+    }
+    g_uv2_probe.enabled = 1;
+    return 1;
+}
+
 int eu4_gfx_frame_trace_configure_from_env(void) {
     /* Process identity and the one-shot gate survive a reconfigure: the
        descriptor promises a process-monotonic id and at most one seal. */
@@ -1696,6 +1826,14 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
             getenv("EU4_GFX_FRAME_TRACE_OBSERVE_DEPTH_STENCIL");
         g.prefix_depth_stencil =
             depth_stencil != NULL && strcmp(depth_stencil, "1") == 0;
+    }
+    if (uv2_probe_configure_from_env(g.dir) < 0) {
+        return -1;
+    }
+    if (g_uv2_probe.enabled &&
+        (g_uv2_probe.event < 0 ||
+         g_uv2_probe.event >= (int)g.max_draws)) {
+        return -1;
     }
     if (timeout_ms != NULL) {
         uint64_t value = 0;
@@ -7072,6 +7210,1669 @@ void eu4_gfx_frame_trace_clear_exit(eu4_gfx_capture_frame *frame,
     eu4_gfx_frame_sealed_dispatch();
 }
 
+/* ------------------------------------------------------------------------- */
+/* Opt-in event-1 uv2 diagnostic probe                                       */
+/* ------------------------------------------------------------------------- */
+/* Output contract (one directory, written once):
+ *
+ *   uv2-probe.json   gfx-uv2-probe/v1 descriptor.  Declares side, event,
+ *                    draw/target identity, source and uniform digests, the
+ *                    vertex range digests actually consumed, the probe output
+ *                    layout (width, height, lower-left origin, RGBA32F,
+ *                    row-major little-endian float32 rows of width*16 bytes,
+ *                    components uv2.x, uv2.y, 0, 1), the original-shader
+ *                    control layout (BGRA8, RGB scope) and every failure.
+ *   uv2-probe.rgba32f  interpolated uv2.xy written by the probe fragment
+ *                    shader, plus constant z=0.0 and w=1.0.
+ *   uv2-control.bgra   the same draw with the original fragment shader, used
+ *                    to test that this diagnostic execution reproduces the
+ *                    authentic event output.
+ *
+ * The probe runs before the engine's own draw, never writes the engine's
+ * render target and restores every GL binding it changes.  It is diagnostic
+ * evidence only and never feeds the sealed reference. */
+
+#define UV2_PROBE_MAX_ATTRS 16
+#define UV2_PROBE_SOURCE_MAX (4u * 1024u * 1024u)
+#define UV2_PROBE_FRAGMENT_MAX 1024
+
+typedef struct {
+    int active;
+    int location;
+    int enabled;
+    GLint buffer;
+    GLint size;
+    GLint type;
+    GLint normalized;
+    GLint stride;
+    GLint divisor;
+    GLint offset;
+    GLfloat current[4];
+    char name[256];
+} uv2_attribute;
+
+typedef struct {
+    GLint draw_framebuffer;
+    GLint read_framebuffer;
+    GLint read_buffer;
+    GLint program;
+    GLint active_texture;
+    GLint texture_2d;
+    GLint array_buffer;
+    GLint element_buffer;
+    GLint viewport[4];
+    GLint scissor_test;
+    GLint scissor_box[4];
+    GLint cull_face;
+    GLint cull_mode;
+    GLint front_face;
+    GLint blend;
+    GLint blend_src_rgb;
+    GLint blend_dst_rgb;
+    GLint blend_src_alpha;
+    GLint blend_dst_alpha;
+    GLint blend_equation_rgb;
+    GLint blend_equation_alpha;
+    GLint depth_test;
+    GLint depth_func;
+    GLboolean depth_mask;
+    GLfloat depth_range[2];
+    GLint stencil_test;
+    GLboolean color_mask[4];
+    GLint polygon_mode[2];
+    GLint polygon_offset_fill;
+    GLfloat polygon_offset_factor;
+    GLfloat polygon_offset_units;
+    GLint alpha_test;
+    GLint alpha_func;
+    GLfloat alpha_ref;
+    GLint logic_op;
+    GLint color_logic_op;
+    GLfloat clear_color[4];
+    int attribute_count;
+    uv2_attribute attributes[UV2_PROBE_MAX_ATTRS];
+} uv2_state_guard;
+
+static int uv2_probe_identifier_ok(const char *text) {
+    if (text == NULL || text[0] == 0) {
+        return 0;
+    }
+    for (const char *cursor = text; *cursor != 0; cursor++) {
+        char character = *cursor;
+        if (!((character >= 'a' && character <= 'z') ||
+              (character >= 'A' && character <= 'Z') ||
+              (character >= '0' && character <= '9') || character == '_')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Reads the original vertex and fragment sources from the live program.  The
+ * engine compiled these bytes from GLSL; glGetShaderSource returns them
+ * unchanged, so the diagnostic recompiles the very same vertex-stage logic. */
+static int uv2_probe_program_sources(GLuint program, char **vertex_source,
+                                     char **fragment_source, char *vertex_sha,
+                                     char *fragment_sha, char *reason,
+                                     size_t reason_size) {
+    *vertex_source = NULL;
+    *fragment_source = NULL;
+    vertex_sha[0] = 0;
+    fragment_sha[0] = 0;
+    GLint shader_count = 0;
+    glGetProgramiv(program, GL_ATTACHED_SHADERS, &shader_count);
+    if (shader_count <= 0 || shader_count > 16) {
+        snprintf(reason, reason_size, "attached_shader_count");
+        return -1;
+    }
+    GLuint shaders[16];
+    GLsizei written = 0;
+    glGetAttachedShaders(program, shader_count, &written, shaders);
+    for (GLsizei i = 0; i < written; i++) {
+        GLint shader_type = 0;
+        glGetShaderiv(shaders[i], GL_SHADER_TYPE, &shader_type);
+        GLint source_length = 0;
+        glGetShaderiv(shaders[i], GL_SHADER_SOURCE_LENGTH, &source_length);
+        if (source_length <= 0 ||
+            (uint32_t)source_length > UV2_PROBE_SOURCE_MAX) {
+            snprintf(reason, reason_size, "shader_source_length");
+            return -1;
+        }
+        char *source = calloc((size_t)source_length + 1u, 1);
+        if (source == NULL) {
+            snprintf(reason, reason_size, "shader_source_alloc");
+            return -1;
+        }
+        GLsizei source_written = 0;
+        glGetShaderSource(shaders[i], source_length, &source_written, source);
+        source[source_length] = 0;
+        if (source_written <= 0 || strlen(source) == 0) {
+            free(source);
+            snprintf(reason, reason_size, "shader_source_empty");
+            return -1;
+        }
+        char digest[65];
+        sha256_hex(source, strlen(source), digest);
+        if (shader_type == GL_VERTEX_SHADER && *vertex_source == NULL) {
+            *vertex_source = source;
+            memcpy(vertex_sha, digest, sizeof(digest));
+        } else if (shader_type == GL_FRAGMENT_SHADER &&
+                   *fragment_source == NULL) {
+            *fragment_source = source;
+            memcpy(fragment_sha, digest, sizeof(digest));
+        } else {
+            free(source);
+        }
+    }
+    if (*vertex_source == NULL || *fragment_source == NULL) {
+        snprintf(reason, reason_size, "shader_stages_missing");
+        return -1;
+    }
+    return 0;
+}
+
+static GLuint uv2_probe_compile_shader(GLenum type, const char *source,
+                                       char *log, size_t log_size) {
+    GLuint shader = glCreateShader(type);
+    if (shader == 0) {
+        snprintf(log, log_size, "glCreateShader failed");
+        return 0;
+    }
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+    GLint compiled = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+        GLint length = 0;
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+        if (length > 0) {
+            size_t take = (size_t)length;
+            if (take >= log_size) {
+                take = log_size - 1;
+            }
+            glGetShaderInfoLog(shader, (GLsizei)take, NULL, log);
+            log[take] = 0;
+        } else {
+            snprintf(log, log_size, "shader compile failed");
+        }
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
+/* Links the diagnostic program with the original attribute locations bound
+ * explicitly, so the live vertex arrays feed the same shader inputs. */
+static GLuint uv2_probe_link_program(GLuint vertex_shader,
+                                     GLuint fragment_shader,
+                                     GLuint original_program, char *log,
+                                     size_t log_size) {
+    GLuint program = glCreateProgram();
+    if (program == 0) {
+        snprintf(log, log_size, "glCreateProgram failed");
+        return 0;
+    }
+    glAttachShader(program, vertex_shader);
+    glAttachShader(program, fragment_shader);
+    GLint attribute_count = 0;
+    glGetProgramiv(original_program, GL_ACTIVE_ATTRIBUTES, &attribute_count);
+    for (GLint i = 0; i < attribute_count; i++) {
+        char name[256];
+        GLsizei length = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        glGetActiveAttrib(original_program, (GLuint)i, sizeof(name), &length,
+                          &size, &type, name);
+        GLint location = glGetAttribLocation(original_program, name);
+        if (location >= 0) {
+            glBindAttribLocation(program, (GLuint)location, name);
+        }
+    }
+    glLinkProgram(program);
+    GLint linked = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        GLint length = 0;
+        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
+        if (length > 0) {
+            size_t take = (size_t)length;
+            if (take >= log_size) {
+                take = log_size - 1;
+            }
+            glGetProgramInfoLog(program, (GLsizei)take, NULL, log);
+            log[take] = 0;
+        } else {
+            snprintf(log, log_size, "program link failed");
+        }
+        glDeleteProgram(program);
+        return 0;
+    }
+    return program;
+}
+
+typedef struct {
+    int components;
+    int is_int;
+    int is_matrix;
+    int is_sampler;
+    int matrix_dimension;
+} uv2_uniform_shape;
+
+static int uv2_probe_uniform_shape(GLenum type, uv2_uniform_shape *shape) {
+    memset(shape, 0, sizeof(*shape));
+    switch (type) {
+        case GL_FLOAT: shape->components = 1; return 0;
+        case GL_FLOAT_VEC2: shape->components = 2; return 0;
+        case GL_FLOAT_VEC3: shape->components = 3; return 0;
+        case GL_FLOAT_VEC4: shape->components = 4; return 0;
+        case GL_FLOAT_MAT2:
+            shape->components = 4;
+            shape->is_matrix = 1;
+            shape->matrix_dimension = 2;
+            return 0;
+        case GL_FLOAT_MAT3:
+            shape->components = 9;
+            shape->is_matrix = 1;
+            shape->matrix_dimension = 3;
+            return 0;
+        case GL_FLOAT_MAT4:
+            shape->components = 16;
+            shape->is_matrix = 1;
+            shape->matrix_dimension = 4;
+            return 0;
+        case GL_INT:
+        case GL_BOOL: shape->components = 1; shape->is_int = 1; return 0;
+        case GL_INT_VEC2:
+        case GL_BOOL_VEC2: shape->components = 2; shape->is_int = 1; return 0;
+        case GL_INT_VEC3:
+        case GL_BOOL_VEC3: shape->components = 3; shape->is_int = 1; return 0;
+        case GL_INT_VEC4:
+        case GL_BOOL_VEC4: shape->components = 4; shape->is_int = 1; return 0;
+        case GL_SAMPLER_1D:
+        case GL_SAMPLER_2D:
+        case GL_SAMPLER_3D:
+        case GL_SAMPLER_CUBE:
+        case GL_SAMPLER_2D_SHADOW:
+        case GL_SAMPLER_2D_RECT_VALUE:
+            shape->components = 1;
+            shape->is_int = 1;
+            shape->is_sampler = 1;
+            return 0;
+        default: return -1;
+    }
+}
+
+/* Applies one uniform element and appends its exact source bytes to ``bytes``
+ * so the descriptor can prove the diagnostic used the same uniform values the
+ * capture recorded. */
+static int uv2_probe_copy_uniform_element(GLuint source, GLuint destination,
+                                          GLint source_location,
+                                          GLint destination_location,
+                                          const uv2_uniform_shape *shape,
+                                          void *value, size_t value_bytes) {
+    (void)destination;
+    memset(value, 0, value_bytes);
+    if (shape->is_int) {
+        glGetUniformiv(source, source_location, (GLint *)value);
+    } else {
+        glGetUniformfv(source, source_location, (GLfloat *)value);
+    }
+    if (destination_location < 0) {
+        return 0;
+    }
+    if (shape->is_matrix) {
+        if (shape->matrix_dimension == 2) {
+            glUniformMatrix2fv(destination_location, 1, GL_FALSE,
+                               (const GLfloat *)value);
+        } else if (shape->matrix_dimension == 3) {
+            glUniformMatrix3fv(destination_location, 1, GL_FALSE,
+                               (const GLfloat *)value);
+        } else {
+            glUniformMatrix4fv(destination_location, 1, GL_FALSE,
+                               (const GLfloat *)value);
+        }
+        return 1;
+    }
+    if (shape->is_int) {
+        if (shape->components == 1) {
+            glUniform1iv(destination_location, 1, (const GLint *)value);
+        } else if (shape->components == 2) {
+            glUniform2iv(destination_location, 1, (const GLint *)value);
+        } else if (shape->components == 3) {
+            glUniform3iv(destination_location, 1, (const GLint *)value);
+        } else {
+            glUniform4iv(destination_location, 1, (const GLint *)value);
+        }
+        return 1;
+    }
+    if (shape->components == 1) {
+        glUniform1fv(destination_location, 1, (const GLfloat *)value);
+    } else if (shape->components == 2) {
+        glUniform2fv(destination_location, 1, (const GLfloat *)value);
+    } else if (shape->components == 3) {
+        glUniform3fv(destination_location, 1, (const GLfloat *)value);
+    } else {
+        glUniform4fv(destination_location, 1, (const GLfloat *)value);
+    }
+    return 1;
+}
+
+static void uv2_probe_save_state(uv2_state_guard *guard, GLuint program,
+                                 uintptr_t master) {
+    memset(guard, 0, sizeof(*guard));
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &guard->draw_framebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &guard->read_framebuffer);
+    glGetIntegerv(GL_READ_BUFFER, &guard->read_buffer);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &guard->program);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &guard->active_texture);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &guard->texture_2d);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &guard->array_buffer);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &guard->element_buffer);
+    glGetIntegerv(GL_VIEWPORT, guard->viewport);
+    glGetIntegerv(GL_SCISSOR_TEST, &guard->scissor_test);
+    glGetIntegerv(GL_SCISSOR_BOX, guard->scissor_box);
+    glGetIntegerv(GL_CULL_FACE, &guard->cull_face);
+    glGetIntegerv(GL_CULL_FACE_MODE, &guard->cull_mode);
+    glGetIntegerv(GL_FRONT_FACE, &guard->front_face);
+    glGetIntegerv(GL_BLEND, &guard->blend);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &guard->blend_src_rgb);
+    glGetIntegerv(GL_BLEND_DST_RGB, &guard->blend_dst_rgb);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &guard->blend_src_alpha);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &guard->blend_dst_alpha);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB, &guard->blend_equation_rgb);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &guard->blend_equation_alpha);
+    glGetIntegerv(GL_DEPTH_TEST, &guard->depth_test);
+    glGetIntegerv(GL_DEPTH_FUNC, &guard->depth_func);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &guard->depth_mask);
+    glGetFloatv(GL_DEPTH_RANGE, guard->depth_range);
+    glGetIntegerv(GL_STENCIL_TEST, &guard->stencil_test);
+    glGetBooleanv(GL_COLOR_WRITEMASK, guard->color_mask);
+    glGetIntegerv(GL_POLYGON_MODE, guard->polygon_mode);
+    glGetIntegerv(GL_POLYGON_OFFSET_FILL, &guard->polygon_offset_fill);
+    glGetFloatv(GL_POLYGON_OFFSET_FACTOR, &guard->polygon_offset_factor);
+    glGetFloatv(GL_POLYGON_OFFSET_UNITS, &guard->polygon_offset_units);
+    glGetIntegerv(GL_ALPHA_TEST, &guard->alpha_test);
+    glGetIntegerv(GL_ALPHA_TEST_FUNC, &guard->alpha_func);
+    glGetFloatv(GL_ALPHA_TEST_REF, &guard->alpha_ref);
+    glGetIntegerv(GL_COLOR_LOGIC_OP, &guard->color_logic_op);
+    glGetIntegerv(GL_LOGIC_OP_MODE, &guard->logic_op);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, guard->clear_color);
+    GLint attribute_count = 0;
+    glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &attribute_count);
+    if (attribute_count < 0) {
+        attribute_count = 0;
+    }
+    if (attribute_count > UV2_PROBE_MAX_ATTRS) {
+        attribute_count = UV2_PROBE_MAX_ATTRS;
+    }
+    for (GLint i = 0; i < attribute_count; i++) {
+        char name[256];
+        GLsizei length = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        glGetActiveAttrib(program, (GLuint)i, sizeof(name), &length, &size,
+                          &type, name);
+        GLint location = glGetAttribLocation(program, name);
+        if (location < 0) {
+            continue;
+        }
+        uv2_attribute *attribute = &guard->attributes[guard->attribute_count];
+        attribute->active = 1;
+        attribute->location = location;
+        snprintf(attribute->name, sizeof(attribute->name), "%s", name);
+        glGetVertexAttribiv((GLuint)location, GL_VERTEX_ATTRIB_ARRAY_ENABLED,
+                            &attribute->enabled);
+        if (!attribute->enabled) {
+            glGetVertexAttribfv((GLuint)location, GL_CURRENT_VERTEX_ATTRIB,
+                                attribute->current);
+            guard->attribute_count++;
+            continue;
+        }
+        glGetVertexAttribiv((GLuint)location,
+                            GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING,
+                            &attribute->buffer);
+        glGetVertexAttribiv((GLuint)location, GL_VERTEX_ATTRIB_ARRAY_SIZE,
+                            &attribute->size);
+        glGetVertexAttribiv((GLuint)location, GL_VERTEX_ATTRIB_ARRAY_TYPE,
+                            &attribute->type);
+        glGetVertexAttribiv((GLuint)location,
+                            GL_VERTEX_ATTRIB_ARRAY_NORMALIZED,
+                            &attribute->normalized);
+        glGetVertexAttribiv((GLuint)location, GL_VERTEX_ATTRIB_ARRAY_STRIDE,
+                            &attribute->stride);
+        GLvoid *pointer = NULL;
+        glGetVertexAttribPointerv((GLuint)location,
+                                  GL_VERTEX_ATTRIB_ARRAY_POINTER, &pointer);
+        attribute->offset = (GLint)(intptr_t)pointer;
+        uint32_t engine_offset = 0;
+        int engine_divisor = 0;
+        int engine_normalized = 0;
+        if (engine_attribute_layout(master, location, &engine_offset,
+                                    &engine_divisor,
+                                    &engine_normalized) == 0) {
+            attribute->offset = (GLint)engine_offset;
+            attribute->divisor = engine_divisor;
+            attribute->normalized = engine_normalized;
+        }
+        guard->attribute_count++;
+    }
+}
+
+static void uv2_probe_restore_state(const uv2_state_guard *guard) {
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)guard->draw_framebuffer);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)guard->read_framebuffer);
+    glReadBuffer((GLenum)guard->read_buffer);
+    glActiveTexture((GLenum)guard->active_texture);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)guard->texture_2d);
+    glUseProgram((GLuint)guard->program);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)guard->element_buffer);
+    glViewport(guard->viewport[0], guard->viewport[1], guard->viewport[2],
+               guard->viewport[3]);
+    if (guard->scissor_test) {
+        glEnable(GL_SCISSOR_TEST);
+    } else {
+        glDisable(GL_SCISSOR_TEST);
+    }
+    glScissor(guard->scissor_box[0], guard->scissor_box[1],
+              guard->scissor_box[2], guard->scissor_box[3]);
+    if (guard->cull_face) {
+        glEnable(GL_CULL_FACE);
+    } else {
+        glDisable(GL_CULL_FACE);
+    }
+    glCullFace((GLenum)guard->cull_mode);
+    glFrontFace((GLenum)guard->front_face);
+    if (guard->blend) {
+        glEnable(GL_BLEND);
+    } else {
+        glDisable(GL_BLEND);
+    }
+    glBlendFuncSeparate((GLenum)guard->blend_src_rgb,
+                        (GLenum)guard->blend_dst_rgb,
+                        (GLenum)guard->blend_src_alpha,
+                        (GLenum)guard->blend_dst_alpha);
+    glBlendEquationSeparate((GLenum)guard->blend_equation_rgb,
+                            (GLenum)guard->blend_equation_alpha);
+    if (guard->depth_test) {
+        glEnable(GL_DEPTH_TEST);
+    } else {
+        glDisable(GL_DEPTH_TEST);
+    }
+    glDepthFunc((GLenum)guard->depth_func);
+    glDepthMask(guard->depth_mask);
+    glDepthRange((GLdouble)guard->depth_range[0],
+                 (GLdouble)guard->depth_range[1]);
+    if (guard->stencil_test) {
+        glEnable(GL_STENCIL_TEST);
+    } else {
+        glDisable(GL_STENCIL_TEST);
+    }
+    glColorMask(guard->color_mask[0], guard->color_mask[1],
+                guard->color_mask[2], guard->color_mask[3]);
+    glPolygonMode(GL_FRONT, (GLenum)guard->polygon_mode[0]);
+    glPolygonMode(GL_BACK, (GLenum)guard->polygon_mode[1]);
+    if (guard->polygon_offset_fill) {
+        glEnable(GL_POLYGON_OFFSET_FILL);
+    } else {
+        glDisable(GL_POLYGON_OFFSET_FILL);
+    }
+    glPolygonOffset(guard->polygon_offset_factor,
+                    guard->polygon_offset_units);
+    if (guard->alpha_test) {
+        glEnable(GL_ALPHA_TEST);
+    } else {
+        glDisable(GL_ALPHA_TEST);
+    }
+    glAlphaFunc((GLenum)guard->alpha_func, guard->alpha_ref);
+    if (guard->color_logic_op) {
+        glEnable(GL_COLOR_LOGIC_OP);
+    } else {
+        glDisable(GL_COLOR_LOGIC_OP);
+    }
+    glLogicOp((GLenum)guard->logic_op);
+    glClearColor(guard->clear_color[0], guard->clear_color[1],
+                 guard->clear_color[2], guard->clear_color[3]);
+    for (int i = 0; i < guard->attribute_count; i++) {
+        const uv2_attribute *attribute = &guard->attributes[i];
+        if (!attribute->enabled) {
+            glDisableVertexAttribArray((GLuint)attribute->location);
+            glVertexAttrib4fv((GLuint)attribute->location, attribute->current);
+            continue;
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, (GLuint)attribute->buffer);
+        glVertexAttribPointer((GLuint)attribute->location,
+                              attribute->size, (GLenum)attribute->type,
+                              attribute->normalized, attribute->stride,
+                              (const GLvoid *)(intptr_t)attribute->offset);
+        glEnableVertexAttribArray((GLuint)attribute->location);
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)guard->array_buffer);
+}
+
+typedef struct {
+    GLuint framebuffer;
+    GLuint color;
+    GLuint depth;
+} uv2_target;
+
+static void uv2_probe_delete_target(uv2_target *target) {
+    if (target->framebuffer != 0) {
+        glDeleteFramebuffers(1, &target->framebuffer);
+    }
+    if (target->color != 0) {
+        glDeleteTextures(1, &target->color);
+    }
+    if (target->depth != 0) {
+        glDeleteTextures(1, &target->depth);
+    }
+    memset(target, 0, sizeof(*target));
+}
+
+/* Creates one isolated diagnostic target and seeds it with the exact pre-draw
+ * colour (control only) and depth (both passes) read from the engine target. */
+static int uv2_probe_make_target(uv2_target *target, GLint color_internal,
+                                 GLenum color_format, GLenum color_type,
+                                 uint32_t width, uint32_t height,
+                                 GLint depth_bits,
+                                 const uint8_t *color_seed,
+                                 const float *depth_seed, char *reason,
+                                 size_t reason_size) {
+    memset(target, 0, sizeof(*target));
+    GLint previous_texture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+    glGenTextures(1, &target->color);
+    if (target->color == 0) {
+        snprintf(reason, reason_size, "color_texture");
+        return -1;
+    }
+    glBindTexture(GL_TEXTURE_2D, target->color);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, color_internal, (GLsizei)width,
+                 (GLsizei)height, 0, color_format, color_type, NULL);
+    if (color_seed != NULL) {
+        /* RGB8 seeds are the capture's BGRA8 pre-image; GL converts the source
+           layout exactly because every channel is 8-bit. */
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, (GLsizei)width,
+                        (GLsizei)height, GL_BGRA, GL_UNSIGNED_BYTE, color_seed);
+    }
+    if (depth_bits > 0) {
+        GLint depth_internal = GL_DEPTH_COMPONENT24;
+        if (depth_bits == 32) {
+            depth_internal = GL_DEPTH_COMPONENT32F;
+        } else if (depth_bits == 16) {
+            depth_internal = GL_DEPTH_COMPONENT16;
+        }
+        glGenTextures(1, &target->depth);
+        if (target->depth == 0) {
+            glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
+            snprintf(reason, reason_size, "depth_texture");
+            return -1;
+        }
+        glBindTexture(GL_TEXTURE_2D, target->depth);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, depth_internal, (GLsizei)width,
+                     (GLsizei)height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+        if (depth_seed != NULL) {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, (GLsizei)width,
+                            (GLsizei)height, GL_DEPTH_COMPONENT, GL_FLOAT,
+                            depth_seed);
+        }
+    }
+    glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
+    glGenFramebuffers(1, &target->framebuffer);
+    if (target->framebuffer == 0) {
+        snprintf(reason, reason_size, "framebuffer");
+        return -1;
+    }
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target->framebuffer);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, target->color, 0);
+    if (target->depth != 0) {
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                               GL_TEXTURE_2D, target->depth, 0);
+    }
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    GLenum status = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        snprintf(reason, reason_size, "framebuffer_incomplete_0x%x",
+                 (unsigned)status);
+        return -1;
+    }
+    return 0;
+}
+
+/* Reads and hashes one live vertex attribute range exactly as the capture
+ * defines it, proving the diagnostic draw consumed the same bytes. */
+static int uv2_probe_attribute_digest(const uv2_attribute *attribute,
+                                      int indexed, int count,
+                                      int instance_count, int first,
+                                      int32_t index_first, int32_t index_last,
+                                      char *sha, uint64_t *range_begin,
+                                      uint64_t *range_bytes) {
+    sha[0] = 0;
+    *range_begin = 0;
+    *range_bytes = 0;
+    if (!attribute->active || !attribute->enabled) {
+        return 0;
+    }
+    int element_size = eu4_gfx_gl_type_size((uint32_t)attribute->type);
+    if (element_size == 0) {
+        return -1;
+    }
+    int stride = attribute->stride;
+    if (stride <= 0) {
+        stride = attribute->size * element_size;
+    }
+    int32_t vertex_first = 0;
+    int32_t vertex_last = 0;
+    if (eu4_gfx_capture_vertex_range(attribute->divisor, indexed,
+                                     instance_count, first, count, index_first,
+                                     index_last, &vertex_first,
+                                     &vertex_last) != 0) {
+        return -1;
+    }
+    GLint buffer_size = 0;
+    if (attribute->buffer != 0) {
+        glBindBuffer(GL_ARRAY_BUFFER, (GLuint)attribute->buffer);
+        glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &buffer_size);
+    }
+    uint64_t attribute_width =
+        (uint64_t)(attribute->size > 0 ? attribute->size : 0) *
+        (uint64_t)element_size;
+    uint64_t begin = 0;
+    uint64_t end = 0;
+    uint64_t offset = (uint64_t)(int64_t)attribute->offset;
+    uint64_t stride64 = (uint64_t)stride;
+    if (vertex_first < 0 ||
+        (uint64_t)vertex_first > (UINT64_MAX - offset) / stride64) {
+        return -1;
+    }
+    begin = offset + (uint64_t)vertex_first * stride64;
+    if (eu4_gfx_attribute_end(buffer_size > 0 ? (uint64_t)buffer_size : 0,
+                              offset, stride64, (uint64_t)vertex_last,
+                              attribute_width, &end) == 0 ||
+        begin > end || end > (uint64_t)buffer_size) {
+        return -1;
+    }
+    uint64_t bytes = end - begin;
+    if (bytes == 0 || attribute->buffer == 0) {
+        return -1;
+    }
+    uint8_t *data = malloc((size_t)bytes);
+    if (data == NULL) {
+        return -1;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)attribute->buffer);
+    glGetBufferSubData(GL_ARRAY_BUFFER, (GLintptr)begin, (GLsizeiptr)bytes,
+                       data);
+    sha256_hex(data, (size_t)bytes, sha);
+    free(data);
+    *range_begin = begin;
+    *range_bytes = bytes;
+    return 0;
+}
+
+/* Writes one descriptor-only failure so the operator and the offline
+ * comparator see exactly why the probe did not produce numbers. */
+static void uv2_probe_write_failure(const char *status, const char *reason,
+                                    int observed_program,
+                                    int observed_framebuffer,
+                                    int observed_texture) {
+    char *buffer = NULL;
+    size_t size = 0;
+    FILE *memory = open_memstream(&buffer, &size);
+    if (memory != NULL) {
+        json_out out = {memory, 0};
+        jprintf(&out,
+                "{\"schema\":\"gfx-uv2-probe/v1\",\"side\":\"opengl\","
+                "\"status\":\"%s\",\"reason\":\"%s\","
+                "\"session_id\":\"%s\",\"capture_frame_id\":%llu,\"pid\":%d,"
+                "\"event\":%d,\"program\":%d,\"observed\":{\"program\":%d,"
+                "\"framebuffer\":%d,\"texture\":%d},"
+                "\"expected\":{\"program\":%d,\"framebuffer\":%d,"
+                "\"texture\":%d},"
+                "\"notes\":[\"diagnostic evidence only; the sealed reference is "
+                "unchanged\"]}",
+                status, reason, g.session_id,
+                (unsigned long long)g.capture_id, (int)getpid(),
+                g_uv2_probe.event, g_uv2_probe.program, observed_program,
+                observed_framebuffer, observed_texture, g_uv2_probe.program,
+                g_uv2_probe.framebuffer, g_uv2_probe.texture);
+        fclose(memory);
+        if (!out.failed && buffer != NULL) {
+            char path[FTRACE_PATH];
+            snprintf(path, sizeof(path), "%s/uv2-probe.json",
+                     g_uv2_probe.dir);
+            (void)write_atomic(path, buffer, size);
+        }
+    }
+    free(buffer);
+}
+
+/* Runs the diagnostic once for the configured event.  The engine's draw has
+ * not executed yet, so the live state is exactly the pre-draw state the engine
+ * is about to use.  Returns 1 when numbers were produced, 0 when skipped. */
+static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
+                             int first, int instances, int base_vertex,
+                             uintptr_t master) {
+    if (!g_uv2_probe.enabled || g_uv2_probe_done) {
+        return 0;
+    }
+    if (event != g_uv2_probe.event) {
+        return 0;
+    }
+    if (!indexed || count <= 0 || mode == 0 || instances != 1 ||
+        base_vertex != 0) {
+        g_uv2_probe_done = 1;
+        uv2_probe_write_failure("selection_unsupported",
+                                "the probe supports single-instance indexed "
+                                "draws with base_vertex zero only", -1, -1, -1);
+        return 0;
+    }
+    if (mkdir_p(g_uv2_probe.dir) != 0) {
+        uv2_probe_write_failure("error", "probe_directory", -1, -1, -1);
+        g_uv2_probe_done = 1;
+        return -1;
+    }
+    uint64_t started = now_ns();
+    GLint program = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+    GLint draw_framebuffer = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+    GLint object_type = 0;
+    GLint texture_name = 0;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &object_type);
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &texture_name);
+    GLint draw_buffer = 0;
+    glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
+    if (draw_buffer != GL_COLOR_ATTACHMENT0) {
+        uv2_probe_write_failure("unsupported_draw_buffer",
+                                "the colour draw buffer is not attachment 0",
+                                (int)program, (int)draw_framebuffer,
+                                (int)texture_name);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    if (program <= 0 || object_type != GL_TEXTURE) {
+        uv2_probe_write_failure("identity_mismatch",
+                                "no colour texture draw target",
+                                (int)program, (int)draw_framebuffer,
+                                (int)texture_name);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    if (g_uv2_probe.require_identity &&
+        ((int)program != g_uv2_probe.program ||
+         (int)draw_framebuffer != g_uv2_probe.framebuffer ||
+         (int)texture_name != g_uv2_probe.texture)) {
+        uv2_probe_write_failure("identity_mismatch", "event_draw_identity",
+                                (int)program, (int)draw_framebuffer,
+                                (int)texture_name);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    GLint level = 0;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &level);
+    GLint previous_texture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)texture_name);
+    GLint width = 0, height = 0, internal_format = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH, &width);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT, &height);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level,
+                             GL_TEXTURE_INTERNAL_FORMAT, &internal_format);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
+    if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
+        uv2_probe_write_failure("error", "target_extent", (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        g_uv2_probe_done = 1;
+        return -1;
+    }
+    if (internal_format != GL_RGB8) {
+        /* The control must be compared with the authentic RGB8 output.  An
+           unknown target format is refused rather than normalized. */
+        uv2_probe_write_failure("unsupported_target_format",
+                                "control target is not RGB8", (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    GLint samples = 0;
+    glGetIntegerv(GL_SAMPLES, &samples);
+    if (samples > 0) {
+        uv2_probe_write_failure("unsupported_multisample",
+                                "multisampled targets are not reproducible",
+                                (int)program, (int)draw_framebuffer,
+                                (int)texture_name);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    GLint depth_bits = 0;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depth_bits);
+    GLint stencil_test = 0;
+    glGetIntegerv(GL_STENCIL_TEST, &stencil_test);
+    if (stencil_test) {
+        uv2_probe_write_failure("unsupported_stencil",
+                                "an enabled stencil test needs its exact "
+                                "contents", (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    GLint alpha_test = 0;
+    glGetIntegerv(GL_ALPHA_TEST, &alpha_test);
+    if (alpha_test) {
+        uv2_probe_write_failure("unsupported_alpha_test",
+                                "the probe fragment has no authentic alpha",
+                                (int)program, (int)draw_framebuffer,
+                                (int)texture_name);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    uv2_state_guard guard;
+    uv2_probe_save_state(&guard, (GLuint)program, master);
+    if (guard.attribute_count == 0) {
+        uv2_probe_write_failure("error", "attribute_state_unavailable",
+                                (int)program, (int)draw_framebuffer,
+                                (int)texture_name);
+        uv2_probe_restore_state(&guard);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    for (int i = 0; i < guard.attribute_count; i++) {
+        if (guard.attributes[i].active && guard.attributes[i].enabled &&
+            guard.attributes[i].divisor != 0) {
+            uv2_probe_write_failure("unsupported_instancing",
+                                    "instanced attributes are not supported",
+                                    (int)program, (int)draw_framebuffer,
+                                    (int)texture_name);
+            g_uv2_probe_done = 1;
+            return 0;
+        }
+    }
+    char reason[256] = "";
+    char log[2048] = "";
+    char vertex_sha[65];
+    char fragment_sha[65];
+    char *vertex_source = NULL;
+    char *fragment_source = NULL;
+    int result = -1;
+    uv2_target control = {0, 0, 0};
+    uv2_target probe = {0, 0, 0};
+    GLuint control_program = 0;
+    GLuint probe_program = 0;
+    uint8_t *pre_color = NULL;
+    uint8_t *pre_depth_raw = NULL;
+    const float *pre_depth = NULL;
+    uint8_t *control_pixels = NULL;
+    uint8_t *probe_pixels = NULL;
+    char probe_fragment[UV2_PROBE_FRAGMENT_MAX];
+    snprintf(probe_fragment, sizeof(probe_fragment),
+             "#version 120\n"
+             "varying vec2 %s;\n"
+             "void main() {\n"
+             "    gl_FragColor = vec4(%s, 0.0, 1.0);\n"
+             "}\n",
+             g_uv2_probe.varying, g_uv2_probe.varying);
+    char probe_fragment_sha[65];
+    sha256_hex(probe_fragment, strlen(probe_fragment), probe_fragment_sha);
+    if (uv2_probe_program_sources((GLuint)program, &vertex_source,
+                                  &fragment_source, vertex_sha, fragment_sha,
+                                  reason, sizeof(reason)) != 0) {
+        uv2_probe_write_failure("error", reason, (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        goto done;
+    }
+    if (!uv2_probe_identifier_ok(g_uv2_probe.varying) ||
+        strstr(vertex_source, g_uv2_probe.varying) == NULL) {
+        uv2_probe_write_failure("varying_missing",
+                                "the original vertex stage does not declare "
+                                "the uv2 varying", (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        goto done;
+    }
+    GLuint control_vertex_shader = uv2_probe_compile_shader(
+        GL_VERTEX_SHADER, vertex_source, log, sizeof(log));
+    if (control_vertex_shader == 0) {
+        uv2_probe_write_failure("shader_compile", log, (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        goto done;
+    }
+    GLuint control_fragment_shader = uv2_probe_compile_shader(
+        GL_FRAGMENT_SHADER, fragment_source, log, sizeof(log));
+    if (control_fragment_shader == 0) {
+        glDeleteShader(control_vertex_shader);
+        uv2_probe_write_failure("shader_compile", log, (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        goto done;
+    }
+    control_program = uv2_probe_link_program(
+        control_vertex_shader, control_fragment_shader, (GLuint)program, log,
+        sizeof(log));
+    GLuint probe_vertex_shader = uv2_probe_compile_shader(
+        GL_VERTEX_SHADER, vertex_source, log, sizeof(log));
+    GLuint probe_fragment_shader =
+        probe_vertex_shader == 0
+            ? 0
+            : uv2_probe_compile_shader(GL_FRAGMENT_SHADER, probe_fragment, log,
+                                       sizeof(log));
+    if (probe_fragment_shader != 0) {
+        probe_program = uv2_probe_link_program(
+            probe_vertex_shader, probe_fragment_shader, (GLuint)program, log,
+            sizeof(log));
+    }
+    glDeleteShader(control_vertex_shader);
+    glDeleteShader(control_fragment_shader);
+    if (probe_vertex_shader != 0) {
+        glDeleteShader(probe_vertex_shader);
+    }
+    if (probe_fragment_shader != 0) {
+        glDeleteShader(probe_fragment_shader);
+    }
+    if (control_program == 0 || probe_program == 0) {
+        uv2_probe_write_failure("shader_link", log, (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        goto done;
+    }
+    /* The exact pre-draw colour and depth are captured at the draw's entry
+       hook; the control is seeded with both and the float probe target with
+       the depth only.  A direct test invocation may fall back to reading the
+       current state when no pending entry capture exists. */
+    char pre_color_sha[65] = "";
+    char pre_depth_sha[65] = "";
+    const char *depth_status = "not_used";
+    int owns_pre = 0;
+    if (!g_uv2_probe_pending.ready && g_uv2_probe_require_pre) {
+        snprintf(reason, sizeof(reason), "pre_state_unavailable");
+        uv2_probe_write_failure("error", reason, (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        goto done;
+    }
+    if (g_uv2_probe_pending.ready) {
+        if (g_uv2_probe_pending.width != width ||
+            g_uv2_probe_pending.height != height ||
+            g_uv2_probe_pending.event != event ||
+            g_uv2_probe_pending.program != (int)program ||
+            g_uv2_probe_pending.framebuffer != (int)draw_framebuffer ||
+            g_uv2_probe_pending.texture != (int)texture_name ||
+            g_uv2_probe_pending.color == NULL) {
+            snprintf(reason, sizeof(reason), "pending_state_mismatch");
+            uv2_probe_write_failure("error", reason, (int)program,
+                                    (int)draw_framebuffer, (int)texture_name);
+            goto done;
+        }
+        pre_color = g_uv2_probe_pending.color;
+        pre_depth_raw = g_uv2_probe_pending.depth;
+        depth_bits = g_uv2_probe_pending.depth_bits;
+        memcpy(pre_color_sha, g_uv2_probe_pending.color_sha,
+               sizeof(pre_color_sha));
+        if (pre_depth_raw != NULL) {
+            pre_depth = (const float *)pre_depth_raw;
+            memcpy(pre_depth_sha, g_uv2_probe_pending.depth_sha,
+                   sizeof(pre_depth_sha));
+            depth_status = "captured";
+        }
+    } else {
+        owns_pre = 1;
+        if (read_observation_pixels((uint32_t)draw_framebuffer,
+                                    GL_COLOR_ATTACHMENT0, 0, (uint32_t)width,
+                                    (uint32_t)height, GL_BGRA,
+                                    GL_UNSIGNED_BYTE, 4, &pre_color) != 0 ||
+            pre_color == NULL) {
+            snprintf(reason, sizeof(reason), "pre_color_readback");
+            uv2_probe_write_failure("error", reason, (int)program,
+                                    (int)draw_framebuffer, (int)texture_name);
+            goto done;
+        }
+        sha256_hex(pre_color, (size_t)width * (size_t)height * 4u,
+                   pre_color_sha);
+        if (depth_bits > 0) {
+            if (read_observation_pixels((uint32_t)draw_framebuffer,
+                                        GL_COLOR_ATTACHMENT0, 0,
+                                        (uint32_t)width, (uint32_t)height,
+                                        GL_DEPTH_COMPONENT, GL_FLOAT, 4,
+                                        &pre_depth_raw) != 0 ||
+                pre_depth_raw == NULL) {
+                snprintf(reason, sizeof(reason), "pre_depth_readback");
+                uv2_probe_write_failure("error", reason, (int)program,
+                                        (int)draw_framebuffer,
+                                        (int)texture_name);
+                goto done;
+            }
+            pre_depth = (const float *)pre_depth_raw;
+            sha256_hex(pre_depth, (size_t)width * (size_t)height * 4u,
+                       pre_depth_sha);
+            depth_status = "captured";
+        }
+    }
+    if (uv2_probe_make_target(&control, GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE,
+                              (uint32_t)width, (uint32_t)height, depth_bits,
+                              pre_color, pre_depth, reason,
+                              sizeof(reason)) != 0 ||
+        uv2_probe_make_target(&probe, GL_RGBA32F_VALUE, GL_RGBA, GL_FLOAT,
+                              (uint32_t)width, (uint32_t)height, depth_bits,
+                              NULL, pre_depth, reason, sizeof(reason)) != 0) {
+        uv2_probe_write_failure("error", reason, (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        goto done;
+    }
+    /* Index range identity and the per-attribute digests the engine draw will
+       consume. */
+    GLint element_buffer = guard.element_buffer;
+    GLint index_buffer_size = 0;
+    uint16_t *index_data = NULL;
+    int32_t index_first = 0;
+    int32_t index_last = 0;
+    char index_sha[65] = "";
+    if (element_buffer != 0) {
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)element_buffer);
+        glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE,
+                               &index_buffer_size);
+        size_t index_bytes = (size_t)count * 2u;
+        if (index_buffer_size > 0 && index_bytes <= (size_t)index_buffer_size) {
+            index_data = malloc(index_bytes);
+            if (index_data != NULL) {
+                glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
+                                   (GLsizeiptr)index_bytes, index_data);
+                sha256_hex(index_data, index_bytes, index_sha);
+                if (eu4_gfx_indexed_range(index_data, count, base_vertex,
+                                          &index_first, &index_last) != 0) {
+                    index_first = 0;
+                    index_last = -1;
+                }
+            }
+        }
+    }
+    /* ---- control pass with the original shader pair ---- */
+    glUseProgram(control_program);
+    {
+        GLint uniform_count = 0;
+        glGetProgramiv((GLuint)program, GL_ACTIVE_UNIFORMS, &uniform_count);
+        for (GLint i = 0; i < uniform_count; i++) {
+            char name[256];
+            GLsizei length = 0;
+            GLint size = 0;
+            GLenum type = 0;
+            glGetActiveUniform((GLuint)program, (GLuint)i, sizeof(name),
+                               &length, &size, &type, name);
+            char base[256];
+            snprintf(base, sizeof(base), "%s", name);
+            char *bracket = strstr(base, "[0]");
+            if (bracket != NULL) {
+                *bracket = 0;
+            }
+            uv2_uniform_shape shape;
+            if (uv2_probe_uniform_shape(type, &shape) != 0) {
+                continue;
+            }
+            int elements = size > 0 ? size : 1;
+            for (int element = 0; element < elements; element++) {
+                char element_name[300];
+                if (elements == 1) {
+                    snprintf(element_name, sizeof(element_name), "%s", base);
+                } else {
+                    snprintf(element_name, sizeof(element_name), "%s[%d]",
+                             base, element);
+                }
+                GLint source_location =
+                    glGetUniformLocation((GLuint)program, element_name);
+                if (source_location < 0) {
+                    continue;
+                }
+                GLint destination_location =
+                    glGetUniformLocation(control_program, element_name);
+                float value[16] = {0};
+                (void)uv2_probe_copy_uniform_element(
+                    (GLuint)program, control_program, source_location,
+                    destination_location, &shape, value, sizeof(value));
+            }
+        }
+    }
+    {
+        uv2_attribute *attributes = guard.attributes;
+        for (int i = 0; i < guard.attribute_count; i++) {
+            uv2_attribute *attribute = &attributes[i];
+            if (!attribute->active) {
+                continue;
+            }
+            if (!attribute->enabled) {
+                glDisableVertexAttribArray((GLuint)attribute->location);
+                glVertexAttrib4fv((GLuint)attribute->location,
+                                  attribute->current);
+                continue;
+            }
+            glBindBuffer(GL_ARRAY_BUFFER, (GLuint)attribute->buffer);
+            glVertexAttribPointer((GLuint)attribute->location,
+                                  attribute->size, (GLenum)attribute->type,
+                                  attribute->normalized, attribute->stride,
+                                  (const GLvoid *)(intptr_t)attribute->offset);
+            glEnableVertexAttribArray((GLuint)attribute->location);
+        }
+    }
+    {
+        GLint viewport[4];
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, control.framebuffer);
+        glDrawBuffer(GL_COLOR_ATTACHMENT0);
+        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)element_buffer);
+        glDrawElements((GLenum)mode, count, GL_UNSIGNED_SHORT,
+                       (const GLvoid *)0);
+    }
+    if (read_observation_pixels(control.framebuffer, GL_COLOR_ATTACHMENT0, 0,
+                                (uint32_t)width, (uint32_t)height, GL_BGRA,
+                                GL_UNSIGNED_BYTE, 4,
+                                &control_pixels) != 0 ||
+        control_pixels == NULL) {
+        uv2_probe_write_failure("error", "control_readback", (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        goto done;
+    }
+    /* ---- uv2 probe pass with the original vertex stage ---- */
+    glUseProgram(probe_program);
+    {
+        GLint uniform_count = 0;
+        glGetProgramiv((GLuint)program, GL_ACTIVE_UNIFORMS, &uniform_count);
+        for (GLint i = 0; i < uniform_count; i++) {
+            char name[256];
+            GLsizei length = 0;
+            GLint size = 0;
+            GLenum type = 0;
+            glGetActiveUniform((GLuint)program, (GLuint)i, sizeof(name),
+                               &length, &size, &type, name);
+            char base[256];
+            snprintf(base, sizeof(base), "%s", name);
+            char *bracket = strstr(base, "[0]");
+            if (bracket != NULL) {
+                *bracket = 0;
+            }
+            uv2_uniform_shape shape;
+            if (uv2_probe_uniform_shape(type, &shape) != 0) {
+                continue;
+            }
+            int elements = size > 0 ? size : 1;
+            for (int element = 0; element < elements; element++) {
+                char element_name[300];
+                if (elements == 1) {
+                    snprintf(element_name, sizeof(element_name), "%s", base);
+                } else {
+                    snprintf(element_name, sizeof(element_name), "%s[%d]",
+                             base, element);
+                }
+                GLint source_location =
+                    glGetUniformLocation((GLuint)program, element_name);
+                if (source_location < 0) {
+                    continue;
+                }
+                GLint destination_location =
+                    glGetUniformLocation(probe_program, element_name);
+                float value[16] = {0};
+                (void)uv2_probe_copy_uniform_element(
+                    (GLuint)program, probe_program, source_location,
+                    destination_location, &shape, value, sizeof(value));
+            }
+        }
+    }
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_COLOR_LOGIC_OP);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    {
+        GLint viewport[4];
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, probe.framebuffer);
+        glDrawBuffer(GL_COLOR_ATTACHMENT0);
+        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)element_buffer);
+        glDrawElements((GLenum)mode, count, GL_UNSIGNED_SHORT,
+                       (const GLvoid *)0);
+    }
+    if (read_observation_pixels(0, 0, probe.color, (uint32_t)width,
+                                (uint32_t)height, GL_RGBA, GL_FLOAT, 16,
+                                &probe_pixels) != 0 ||
+        probe_pixels == NULL) {
+        uv2_probe_write_failure("error", "probe_readback", (int)program,
+                                (int)draw_framebuffer, (int)texture_name);
+        goto done;
+    }
+    result = 1;
+done:
+    /* Every path restores the exact live state; the engine's draw follows. */
+    if (g_uv2_probe_done == 0) {
+        uv2_probe_restore_state(&guard);
+    }
+    /* Publish the descriptor and the two raw outputs after restoration, so a
+       write failure cannot leave the engine in diagnostic state. */
+    {
+        size_t control_bytes = (size_t)width * (size_t)height * 4u;
+        size_t probe_bytes = (size_t)width * (size_t)height * 16u;
+        char control_file[FTRACE_NAME] = "uv2-control.bgra";
+        char probe_file[FTRACE_NAME] = "uv2-probe.rgba32f";
+        char control_sha[65] = "";
+        char probe_sha[65] = "";
+        int writes_ok = 0;
+        if (result == 1 && control_pixels != NULL && probe_pixels != NULL) {
+            char path[FTRACE_PATH];
+            snprintf(path, sizeof(path), "%s/%s", g_uv2_probe.dir,
+                     control_file);
+            if (write_atomic(path, control_pixels, control_bytes) == 0) {
+                sha256_hex(control_pixels, control_bytes, control_sha);
+                snprintf(path, sizeof(path), "%s/%s", g_uv2_probe.dir,
+                         probe_file);
+                if (write_atomic(path, probe_pixels, probe_bytes) == 0) {
+                    sha256_hex(probe_pixels, probe_bytes, probe_sha);
+                    writes_ok = 1;
+                }
+            }
+            if (!writes_ok) {
+                uv2_probe_write_failure("error", "diagnostic_write",
+                                        (int)program, (int)draw_framebuffer,
+                                        (int)texture_name);
+            }
+        }
+        if (writes_ok) {
+            /* Per-attribute and per-uniform records are computed here so the
+               descriptor proves the input bytes.  The exact digests are also
+               what the offline comparator checks against the captured event. */
+            char *buffer = NULL;
+            size_t size = 0;
+            FILE *memory = open_memstream(&buffer, &size);
+            if (memory != NULL) {
+                json_out out = {memory, 0};
+                jprintf(&out,
+                        "{\"schema\":\"gfx-uv2-probe/v1\","
+                        "\"side\":\"opengl\",\"status\":\"ok\","
+                        "\"session_id\":\"%s\",\"capture_frame_id\":%llu,"
+                        "\"pid\":%d,\"event\":%d,\"program\":%d,"
+                        "\"target\":{\"framebuffer\":%d,\"texture\":%d,"
+                        "\"internal_format\":%d,\"width\":%d,\"height\":%d,"
+                        "\"viewport\":[%d,%d,%d,%d]},"
+                        "\"varying\":\"%s\","
+                        "\"draw\":{\"mode\":%u,\"count\":%d,"
+                        "\"first\":%d,\"instances\":%d,\"base_vertex\":%d,"
+                        "\"indexed\":true},"
+                        "\"origin\":\"lower_left\","
+                        "\"pixel_format\":\"RGBA32F\","
+                        "\"width\":%d,\"height\":%d,\"row_stride\":%d,"
+                        "\"component_order\":[\"uv2.x\",\"uv2.y\",0,1],"
+                        "\"raw_file\":\"%s\",\"raw_bytes\":%zu,"
+                        "\"raw_sha256\":\"%s\","
+                        "\"control\":{\"file\":\"%s\","
+                        "\"pixel_format\":\"BGRA8\",\"scope\":\"RGB\","
+                        "\"width\":%d,\"height\":%d,\"row_stride\":%d,"
+                        "\"origin\":\"lower_left\",\"bytes\":%zu,"
+                        "\"sha256\":\"%s\"},"
+                        "\"pre_state\":{\"color_sha256\":\"%s\","
+                        "\"depth_status\":\"%s\",\"depth_sha256\":\"%s\","
+                        "\"depth_bits\":%d},"
+                        "\"sources\":{\"vertex_sha256\":\"%s\","
+                        "\"fragment_sha256\":\"%s\","
+                        "\"probe_fragment_sha256\":\"%s\","
+                        "\"probe_fragment_source\":\"#version 120\\nvarying "
+                        "vec2 %s;\\nvoid main() { gl_FragColor = vec4(%s, 0.0, "
+                        "1.0); }\\n\"},"
+                        "\"indices\":{\"buffer\":%d,\"count\":%d,"
+                        "\"sha256\":\"%s\"},"
+                        "\"state_restored\":true,"
+                        "\"notes\":[\"diagnostic evidence only; the sealed "
+                        "reference is unchanged\","
+                        "\"the diagnostic shaders are recompiled and may not "
+                        "match the original program's instructions\"]}",
+                        g.session_id, (unsigned long long)g.capture_id,
+                        (int)getpid(), event, (int)program,
+                        (int)draw_framebuffer, (int)texture_name,
+                        (int)internal_format, width, height,
+                        guard.viewport[0], guard.viewport[1], guard.viewport[2],
+                        guard.viewport[3], g_uv2_probe.varying, mode, count,
+                        first, instances, base_vertex, width, height,
+                        width * 16, probe_file, probe_bytes, probe_sha,
+                        control_file, width, height, width * 4, control_bytes,
+                        control_sha, pre_color_sha, depth_status,
+                        pre_depth_sha, (int)depth_bits, vertex_sha,
+                        fragment_sha, probe_fragment_sha,
+                        g_uv2_probe.varying, g_uv2_probe.varying,
+                        (int)element_buffer, count, index_sha);
+                /* Attribute and uniform input digests, computed from the live
+                   driver state and compared offline with the sealed capture. */
+                jprintf(&out, ",\"attributes\":[");
+                int emitted = 0;
+                for (int i = 0; i < guard.attribute_count; i++) {
+                    uv2_attribute *attribute = &guard.attributes[i];
+                    if (!attribute->active) {
+                        continue;
+                    }
+                    char digest[65] = "";
+                    uint64_t range_begin = 0;
+                    uint64_t range_bytes = 0;
+                    int digest_ok = attribute->enabled
+                        ? uv2_probe_attribute_digest(
+                              attribute, indexed, count, instances, first,
+                              index_first, index_last, digest, &range_begin,
+                              &range_bytes)
+                        : 0;
+                    jprintf(&out,
+                            "%s{\"name\":\"%s\",\"location\":%d,"
+                            "\"enabled\":%s,\"components\":%d,"
+                            "\"gl_type\":\"0x%x\",\"normalized\":%s,"
+                            "\"stride\":%d,\"offset\":%d,\"divisor\":%d,"
+                            "\"range_begin\":%llu,\"range_bytes\":%llu,"
+                            "\"sha256\":\"%s\",\"digest_ok\":%s}",
+                            emitted > 0 ? "," : "", attribute->name,
+                            attribute->location,
+                            bool_text(attribute->enabled),
+                            (int)attribute->size, (unsigned)attribute->type,
+                            bool_text(attribute->normalized),
+                            (int)attribute->stride, (int)attribute->offset,
+                            (int)attribute->divisor,
+                            (unsigned long long)range_begin,
+                            (unsigned long long)range_bytes, digest,
+                            bool_text(digest_ok == 0 && attribute->enabled));
+                    emitted++;
+                }
+                jprintf(&out, "],\"uniforms\":[");
+                emitted = 0;
+                GLint uniform_count = 0;
+                glGetProgramiv((GLuint)program, GL_ACTIVE_UNIFORMS,
+                               &uniform_count);
+                for (GLint i = 0; i < uniform_count; i++) {
+                    char name[256];
+                    GLsizei length = 0;
+                    GLint uniform_size = 0;
+                    GLenum type = 0;
+                    glGetActiveUniform((GLuint)program, (GLuint)i, sizeof(name),
+                                       &length, &uniform_size, &type, name);
+                    char base[256];
+                    snprintf(base, sizeof(base), "%s", name);
+                    char *bracket = strstr(base, "[0]");
+                    if (bracket != NULL) {
+                        *bracket = 0;
+                    }
+                    uv2_uniform_shape shape;
+                    if (uv2_probe_uniform_shape(type, &shape) != 0) {
+                        continue;
+                    }
+                    if (shape.is_sampler) {
+                        GLint location =
+                            glGetUniformLocation((GLuint)program, base);
+                        GLint unit = -1;
+                        if (location >= 0) {
+                            glGetUniformiv((GLuint)program, location, &unit);
+                        }
+                        jprintf(&out,
+                                "%s{\"name\":\"%s\",\"kind\":\"sampler\","
+                                "\"unit\":%d}",
+                                emitted > 0 ? "," : "", base, (int)unit);
+                        emitted++;
+                        continue;
+                    }
+                    int elements = uniform_size > 0 ? uniform_size : 1;
+                    uint8_t *raw = malloc((size_t)elements *
+                                          (size_t)shape.components *
+                                          sizeof(GLfloat));
+                    if (raw == NULL) {
+                        continue;
+                    }
+                    size_t used = 0;
+                    for (int element = 0; element < elements; element++) {
+                        char element_name[300];
+                        if (elements == 1) {
+                            snprintf(element_name, sizeof(element_name), "%s",
+                                     base);
+                        } else {
+                            snprintf(element_name, sizeof(element_name),
+                                     "%s[%d]", base, element);
+                        }
+                        GLint location =
+                            glGetUniformLocation((GLuint)program, element_name);
+                        if (location < 0) {
+                            continue;
+                        }
+                        if (shape.is_int) {
+                            glGetUniformiv((GLuint)program, location,
+                                           (GLint *)(raw + used));
+                        } else {
+                            glGetUniformfv((GLuint)program, location,
+                                           (GLfloat *)(raw + used));
+                        }
+                        used += (size_t)shape.components * sizeof(GLfloat);
+                    }
+                    char digest[65] = "";
+                    if (used > 0) {
+                        sha256_hex(raw, used, digest);
+                    }
+                    jprintf(&out,
+                            "%s{\"name\":\"%s\",\"type\":\"0x%x\","
+                            "\"components\":%d,\"elements\":%d,"
+                            "\"bytes\":%zu,\"sha256\":\"%s\"}",
+                            emitted > 0 ? "," : "", name, (unsigned)type,
+                            shape.components, elements, used, digest);
+                    emitted++;
+                    free(raw);
+                }
+                jprintf(&out, "],\"probe_ns\":%llu}",
+                        (unsigned long long)(now_ns() - started));
+                fclose(memory);
+                if (!out.failed && buffer != NULL) {
+                    char path[FTRACE_PATH];
+                    snprintf(path, sizeof(path), "%s/uv2-probe.json",
+                             g_uv2_probe.dir);
+                    (void)write_atomic(path, buffer, size);
+                }
+            }
+            free(buffer);
+        }
+    }
+    /* Descriptor digests read live buffers; restore the engine state again so
+       the draw that follows sees exactly the pre-probe state. */
+    uv2_probe_restore_state(&guard);
+    if (owns_pre) {
+        free(pre_color);
+        free(pre_depth_raw);
+    }
+    free(control_pixels);
+    free(probe_pixels);
+    free(vertex_source);
+    free(fragment_source);
+    free(index_data);
+    if (control_program != 0) {
+        glDeleteProgram(control_program);
+    }
+    if (probe_program != 0) {
+        glDeleteProgram(probe_program);
+    }
+    uv2_probe_delete_target(&control);
+    uv2_probe_delete_target(&probe);
+    g_uv2_probe_done = 1;
+    return result;
+}
+
+/* Entry half: captures the engine target's pre-draw colour and depth for the
+ * selected event.  Nothing engine-visible changes. */
+static void uv2_probe_prepare(int event, int indexed, unsigned mode, int count,
+                              int first, int instances, int base_vertex,
+                              uintptr_t master) {
+    uv2_probe_clear_pending();
+    if (!g_uv2_probe.enabled || g_uv2_probe_done) {
+        return;
+    }
+    if (event != g_uv2_probe.event) {
+        return;
+    }
+    g_uv2_probe_pending.attempted = 1;
+    g_uv2_probe_pending.event = event;
+    g_uv2_probe_pending.indexed = indexed;
+    g_uv2_probe_pending.mode = mode;
+    g_uv2_probe_pending.count = count;
+    g_uv2_probe_pending.first = first;
+    g_uv2_probe_pending.instances = instances;
+    g_uv2_probe_pending.base_vertex = base_vertex;
+    g_uv2_probe_pending.master = master;
+    if (!indexed || count <= 0 || mode == 0 || instances != 1 ||
+        base_vertex != 0) {
+        return;
+    }
+    GLint program = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+    GLint draw_framebuffer = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+    GLint object_type = 0;
+    GLint texture_name = 0;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &object_type);
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &texture_name);
+    if (program <= 0 || object_type != GL_TEXTURE) {
+        return;
+    }
+    GLint draw_buffer = 0;
+    glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
+    if (draw_buffer != GL_COLOR_ATTACHMENT0) {
+        return;
+    }
+    GLint level = 0;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &level);
+    GLint previous_texture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)texture_name);
+    GLint width = 0, height = 0, internal_format = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH, &width);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT, &height);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level,
+                             GL_TEXTURE_INTERNAL_FORMAT, &internal_format);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
+    if (width <= 0 || height <= 0 || width > 8192 || height > 8192 ||
+        internal_format != GL_RGB8) {
+        return;
+    }
+    GLint samples = 0;
+    glGetIntegerv(GL_SAMPLES, &samples);
+    GLint stencil_test = 0;
+    glGetIntegerv(GL_STENCIL_TEST, &stencil_test);
+    GLint alpha_test = 0;
+    glGetIntegerv(GL_ALPHA_TEST, &alpha_test);
+    if (samples > 0 || stencil_test || alpha_test) {
+        return;
+    }
+    GLint depth_bits = 0;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depth_bits);
+    uint8_t *color = NULL;
+    if (read_observation_pixels((uint32_t)draw_framebuffer,
+                                GL_COLOR_ATTACHMENT0, 0, (uint32_t)width,
+                                (uint32_t)height, GL_BGRA, GL_UNSIGNED_BYTE, 4,
+                                &color) != 0 ||
+        color == NULL) {
+        free(color);
+        return;
+    }
+    uint8_t *depth = NULL;
+    if (depth_bits > 0) {
+        if (read_observation_pixels((uint32_t)draw_framebuffer,
+                                    GL_COLOR_ATTACHMENT0, 0, (uint32_t)width,
+                                    (uint32_t)height, GL_DEPTH_COMPONENT,
+                                    GL_FLOAT, 4, &depth) != 0 ||
+            depth == NULL) {
+            free(color);
+            free(depth);
+            return;
+        }
+    }
+    g_uv2_probe_pending.program = (int)program;
+    g_uv2_probe_pending.framebuffer = (int)draw_framebuffer;
+    g_uv2_probe_pending.texture = (int)texture_name;
+    g_uv2_probe_pending.width = width;
+    g_uv2_probe_pending.height = height;
+    g_uv2_probe_pending.depth_bits = depth_bits;
+    g_uv2_probe_pending.color = color;
+    g_uv2_probe_pending.depth = depth;
+    sha256_hex(color, (size_t)width * (size_t)height * 4u,
+               g_uv2_probe_pending.color_sha);
+    if (depth != NULL) {
+        sha256_hex(depth, (size_t)width * (size_t)height * 4u,
+                   g_uv2_probe_pending.depth_sha);
+    }
+    g_uv2_probe_pending.ready = 1;
+}
+
+/* Exit half: runs the diagnostic against the applied draw state. */
+static void uv2_probe_finish(void) {
+    if (!g_uv2_probe_pending.attempted || g_uv2_probe_done) {
+        uv2_probe_clear_pending();
+        return;
+    }
+    /* The core classifies identity/format/state failures first; a missing
+       entry capture is then refused instead of falling back to the post-draw
+       target contents. */
+    g_uv2_probe_require_pre = 1;
+    (void)uv2_probe_execute(
+        g_uv2_probe_pending.event, g_uv2_probe_pending.indexed,
+        g_uv2_probe_pending.mode, g_uv2_probe_pending.count,
+        g_uv2_probe_pending.first, g_uv2_probe_pending.instances,
+        g_uv2_probe_pending.base_vertex, g_uv2_probe_pending.master);
+    g_uv2_probe_require_pre = 0;
+    uv2_probe_clear_pending();
+}
+
+int eu4_gfx_uv2_probe_test_configure(const char *directory, int event,
+                                     int program, int framebuffer, int texture) {
+    if (directory == NULL || directory[0] != '/') {
+        return -1;
+    }
+    memset(&g_uv2_probe, 0, sizeof(g_uv2_probe));
+    g_uv2_probe.enabled = 1;
+    g_uv2_probe.event = event;
+    g_uv2_probe.program = program;
+    g_uv2_probe.framebuffer = framebuffer;
+    g_uv2_probe.texture = texture;
+    g_uv2_probe.require_identity =
+        program >= 0 && framebuffer >= 0 && texture >= 0;
+    snprintf(g_uv2_probe.dir, sizeof(g_uv2_probe.dir), "%s", directory);
+    snprintf(g_uv2_probe.varying, sizeof(g_uv2_probe.varying), "%s",
+             "v_TEXCOORD1");
+    g_uv2_probe_done = 0;
+    g_uv2_probe_require_pre = 0;
+    uv2_probe_clear_pending();
+    return 0;
+}
+
+int eu4_gfx_uv2_probe_test_run(int event, int indexed, unsigned mode, int count,
+                               int first, int instances, int base_vertex,
+                               uintptr_t master) {
+    uv2_probe_prepare(event, indexed, mode, count, first, instances,
+                      base_vertex, master);
+    if (!g_uv2_probe_pending.attempted) {
+        return 0;
+    }
+    g_uv2_probe_require_pre = 1;
+    int result = uv2_probe_execute(
+        event, indexed, mode, count, first, instances, base_vertex, master);
+    g_uv2_probe_require_pre = 0;
+    uv2_probe_clear_pending();
+    return result;
+}
+
 static void draw_entry_common(eu4_gfx_capture_frame *frame,
                               eu4_gfx_observe_call *call, int indexed,
                               int instanced) {
@@ -7225,6 +9026,15 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
             free(buffer);
         }
     }
+    /* The diagnostic probe runs before the engine's own draw, against the
+       exact pre-draw state that draw is about to consume.  It restores every
+       binding it changes and never touches the engine's render target. */
+    if (g.armed && g.events != NULL && !g.test_only && g_uv2_probe.enabled) {
+        uv2_probe_prepare(g.event_count, g_pending.indexed,
+                          (unsigned)g_pending.mode, g_pending.count,
+                          g_pending.first, g_pending.instances,
+                          g_pending.base_vertex, g_pending.master);
+    }
     pthread_mutex_unlock(&g_lock);
     eu4_gfx_frame_sealed_dispatch();
 }
@@ -7357,6 +9167,9 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
             }
             free(buffer);
         }
+    }
+    if (g_uv2_probe.enabled && !g.test_only) {
+        uv2_probe_finish();
     }
     pthread_mutex_unlock(&g_lock);
     eu4_gfx_frame_sealed_dispatch();

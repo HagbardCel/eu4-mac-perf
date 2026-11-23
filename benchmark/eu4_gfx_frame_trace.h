@@ -220,6 +220,27 @@ void eu4_gfx_frame_trace_present_exit(eu4_gfx_capture_frame *frame,
                                       eu4_gfx_observe_call *call,
                                       eu4_gfx_observe_record *record);
 
+/* Opt-in event-1 uv2 diagnostic probe (disabled by default).
+ *
+ * When EU4_GFX_UV2_PROBE=1, the draw observer for exactly one frame event
+ * captures the engine target's pre-draw colour and depth at the entry hook and
+ * then, after the engine's own draw has run, executes two separate draws into
+ * isolated offscreen targets: the captured vertex stage with the original
+ * fragment shader (the control) and the captured vertex stage with a fragment
+ * shader that writes the interpolated uv2 varying.  The engine's draw and
+ * render target are left untouched and every changed binding is restored.  The
+ * probe is diagnostic evidence only; it never feeds the sealed reference.  The
+ * output contract is documented beside the implementation in
+ * eu4_gfx_frame_trace.c. */
+/* Host-test only: configure and execute the probe against the current GL state
+ * without an armed frame capture.  Returns 1 when it ran, 0 when it skipped,
+ * -1 when it failed. */
+int eu4_gfx_uv2_probe_test_configure(const char *directory, int event,
+                                     int program, int framebuffer, int texture);
+int eu4_gfx_uv2_probe_test_run(int event, int indexed, unsigned mode, int count,
+                               int first, int instances, int base_vertex,
+                               uintptr_t master);
+
 /* The indexed entries have no other observer; their callbacks are registered
  * directly and reuse the draw body. */
 void eu4_gfx_frame_trace_draw_indexed_entry(eu4_gfx_capture_frame *frame,
