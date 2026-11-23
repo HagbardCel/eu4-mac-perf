@@ -23,10 +23,15 @@ narrow experiment that separates one mechanism over one that changes several
 renderer behaviors at once.  Reuse a completed deterministic experiment when its
 relevant inputs and execution conditions are unchanged, and use existing
 renderer-source/build identities and execution receipts to decide whether the
-validated renderer materially changed.  Do not rerun the independent checker
-because a diagnosis report, progress note or unrelated file changed; run it
-after a substantive renderer correction and before claiming an exact-prefix
-milestone.  A direct diagnostic acceptance call must use the campaign's
+validated renderer materially changed.  The candidate digest covers every
+modified permitted file, including progress notes and analysis reports, so a
+different candidate digest does not by itself mean that renderer behavior
+changed.  Do not invoke `eu4_validate_candidate` merely to refresh a receipt at
+the end of a goal round, after documentation changes, or after a byte-identical
+rollback whose effective shader and build inputs are unchanged; reuse the
+previous diagnostic result in those cases.  A retained renderer correction or
+an exact-prefix success claim still requires the appropriate trusted
+verification, and a direct diagnostic acceptance call must use the campaign's
 configured `--target-end`.  A previous validation never establishes equivalence
 for new renderer code or altered reference inputs.
 
