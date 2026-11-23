@@ -232,20 +232,20 @@ Fixed identities:
 | Campaign | `campaigns/eu4-m7-event3/campaign.json` |
 | Sidecar | `dsh/campaigns/m7-event3.json` |
 | Candidate workspace | `.local/dsh/m7-event3/workspace` (preserve as-is) |
-| Run root | `.local/dsh/m7-event3/run-60m-04` (fresh anchor) |
-| Campaign state | `.local/m7/event3/state-operator-60m-04.json` (fresh file) |
+| Run root | `.local/dsh/m7-event3/run-60m-05` (fresh anchor) |
+| Campaign state | `.local/m7/event3/state-operator-60m-05.json` (fresh file) |
 | Trusted reference | `.local/m7/event20/trusted-copy/47590918` |
 
 The sidecar points at a fresh run root. The previous
-`.local/dsh/m7-event3/run-60m-01`, `.local/dsh/m7-event3/run-60m-02` and
-`.local/dsh/m7-event3/run-60m-03` campaigns are historical: preserve their
-identity anchors, validation receipts, candidate modifications and research
-reports, and never reuse or delete them. Only after the previous `run-60m-03`
-session has ended, the operator must stop and deactivate
-`state-operator-60m-03.json` before launching the replacement; the host-wide
-marker otherwise refuses a new campaign. Do not stop or deactivate it while the
-session is still running. The earlier `state-operator-60m-01.json` and
-`state-operator-60m-02.json` are already stopped and deactivated. Keep the
+`.local/dsh/m7-event3/run-60m-01`, `run-60m-02`, `run-60m-03` and `run-60m-04`
+campaigns are historical: preserve their identity anchors, validation receipts,
+candidate modifications and research reports, and never reuse or delete them.
+Their states are all stopped and deactivated now (`run-60m-04` ended blocked
+with an expired deadline and was released during `run-60m-05` preparation, so
+the host-wide marker is free). Do not stop or deactivate a campaign whose
+session is still running. If a later replacement is needed, release the
+finished campaign the same way before launching it, and pick the next unused
+suffix — never delete an earlier anchor or reuse an earlier state. Keep the
 candidate workspace untouched and do not reset or recreate it — the launcher
 creates the new anchor in the fresh run root.
 
@@ -255,8 +255,8 @@ Preflight (read-only) before launch:
 set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
 set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
 set -l TRUSTED $REPO/.local/m7/event20/trusted-copy/47590918
-set -l STATE $REPO/.local/m7/event3/state-operator-60m-04.json
-set -l RUN $REPO/.local/dsh/m7-event3/run-60m-04
+set -l STATE $REPO/.local/m7/event3/state-operator-60m-05.json
+set -l RUN $REPO/.local/dsh/m7-event3/run-60m-05
 cd $REPO
 
 # Both the campaign state and the sidecar's run root must be unused.
@@ -270,15 +270,14 @@ The preflight command must print `[]`.  The launcher runs the same check plus th
 candidate policy check and refuses `fixture_ineligible` before starting the
 agent.
 
-Launch (operator action).  Only after the previous `run-60m-03` session has
-ended, stop and deactivate its host-wide marker with its own state, then start
-the fresh campaign state:
+Launch (operator action).  The previous `run-60m-04` campaign is finished and
+its host-wide marker is already released (stop reason `blocked`, state
+preserved); confirm the marker is free, then start the fresh campaign state:
 
 ```fish
-$PY -m automation.campaign_guard stop --state $REPO/.local/m7/event3/state-operator-60m-03.json --reason operator_stop
-$PY -m automation.campaign_guard deactivate --state $REPO/.local/m7/event3/state-operator-60m-03.json
+$PY -c 'from automation import campaign_guard; g = campaign_guard.from_env(); print("active:", None if g is None else g.path)'
 
-set -l STATE $REPO/.local/m7/event3/state-operator-60m-04.json
+set -l STATE $REPO/.local/m7/event3/state-operator-60m-05.json
 set -l SIDECAR $REPO/dsh/campaigns/m7-event3.json
 test -f $STATE; and echo "STATE EXISTS - pick a new suffix"; or echo fresh
 
@@ -305,12 +304,20 @@ Operator-specific reminders:
   their supported timeouts over custom shell wrappers, and keep diagnostic
   outputs in stable, authorized locations inside the candidate's writable paths.
 
-The established baseline is `FIRST_DIVERGENCE` at event 1 (`tex:433`, 23 pixels,
-max channel error 1).  The current candidate retains a correction and must be
-assessed from its own trusted checker result; the prior receipt (candidate
-`b67d4f57…`, verdict `fail`) records only the event-1 divergence, not a corrected
-pixel count.  A pass requires `qualified=true`, authentic authority and the exact
-prefix `{start: 0, end: 3}`; a final image or candidate report never qualifies.
+The established baseline is `FIRST_DIVERGENCE` at event 1 (`tex:433`).  The
+current candidate's renderer source is `benchmark/eu4_gfx_frame_replay.mm`
+blob `9a1c53e4` (the 16-line precise-math default), unchanged since
+2026-11-23 00:14.  The latest trusted checker result that actually covers that
+source is `run-60m-03` validation candidate `dd09494a…` (CT 00:33:47 → 00:34:27,
+`fail`, earliest verified divergence event 1).  The two later `run-60m-03`
+receipts (`9d4a9376…`, `c9b101b0…`) ran while the temporary depth-readback
+diagnostic was still in the renderer source, so they are not results for this
+candidate, and `run-60m-04` produced no validation receipt at all.  The current
+candidate digest differs from `dd09494a…` only by documentation, so no new
+validation is needed for launch; historical diagnostic pixel counts are not
+proof of equivalence and no trusted equivalence exists for events 0–3.  A pass
+requires `qualified=true`, authentic authority and the exact prefix
+`{start: 0, end: 3}`; a final image or candidate report never qualifies.
 
 The deadline claim rule is the same for every campaign: only
 `campaign_guard status --state $STATE` is authoritative.  Do not stop as
