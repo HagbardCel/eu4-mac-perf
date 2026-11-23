@@ -145,18 +145,15 @@ class LayoutTests(unittest.TestCase):
 
 
 class BindingTests(unittest.TestCase):
-    def testBothProbesMustNameTheSealedFrame(self) -> None:
+    def testProbesBindTheSealedFrameAndRejectForeignPid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             gl_dir, metal_dir = Path(tmp) / "gl", Path(tmp) / "metal"
             _write_probe(gl_dir, "opengl")
             _write_probe(metal_dir, "metal")
-            seal = _seal()
             binding = gfx_uv2_probe.capture_binding(
                 gfx_uv2_probe.load_probe(gl_dir),
-                gfx_uv2_probe.load_probe(metal_dir), seal)
+                gfx_uv2_probe.load_probe(metal_dir), _seal())
             self.assertTrue(binding["match"])
-
-    def testSidecarPidMismatchIsRejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             gl_dir, metal_dir = Path(tmp) / "gl", Path(tmp) / "metal"
             _write_probe(gl_dir, "opengl", pid=999)
@@ -333,24 +330,29 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(report["summary"]["observed_mismatch"])
         self.assertFalse(report["summary"]["all_selected_pixels_equal"])
 
-    def testFragmentAttributionRequiresNoDepthOrBlend(self):
-        ambiguous = {"blend": {"enabled": False}, "depth": {"test": True},
-                     "alpha_test": {"enabled": False},
-                     "stencil": {"test": False}}
-        safe = {"blend": {"enabled": False}, "depth": {"test": False},
-                "alpha_test": {"enabled": False}, "stencil": {"test": False}}
+    def testFragmentAttributionIsConservative(self):
+        cases = (
+            (None, "no captured draw state"),
+            ({"blend": {"enabled": False}}, "depth state missing"),
+            ({"blend": {"enabled": False}, "depth": {"test": False},
+              "alpha_test": {"enabled": False}, "stencil": {"test": False}},
+             "fragment-shader discard"),
+            ({"blend": {"enabled": False}, "depth": {"test": True},
+              "alpha_test": {"enabled": False}, "stencil": {"test": False}},
+             "depth test"),
+        )
         with tempfile.TemporaryDirectory() as tmp:
-            bad = self._compare(tmp, _values(), _values(), [(0, 0)],
-                                state=ambiguous)
-            good = self._compare(tmp, _values(), _values(), [(0, 0)],
-                                 state=safe)
-        self.assertTrue(bad["summary"]["numerical_comparison_conclusive"])
-        self.assertFalse(bad["fragment_attribution"]["verified"])
-        self.assertEqual(bad["fragment_attribution"]["status"], "unverified")
-        self.assertIn("depth test", " ".join(bad["fragment_attribution"]["problems"]))
-        self.assertFalse(bad["conclusion"]["fragment_attribution_verified"])
-        self.assertTrue(good["fragment_attribution"]["verified"])
-        self.assertTrue(good["conclusion"]["fragment_attribution_verified"])
+            for state, problem in cases:
+                report = self._compare(tmp, _values(), _values(), [(0, 0)],
+                                       state=state)
+                self.assertTrue(
+                    report["summary"]["numerical_comparison_conclusive"])
+                self.assertFalse(report["fragment_attribution"]["verified"])
+                self.assertIn(
+                    problem,
+                    " ".join(report["fragment_attribution"]["problems"]))
+        self.assertFalse(
+            report["conclusion"]["fragment_attribution_verified"])
 
     def testEvidenceFailureCannotBeConclusive(self):
         for overrides in ({"authority": "synthetic"}, {"capture": False},

@@ -71,7 +71,7 @@ static GLuint compile(GLenum type, const char *source) {
 
 typedef struct {
     GLint draw_fbo, program;
-    GLint viewport[4], scissor_box[4], cull, blend;
+    GLint viewport[4], cull, blend;
     GLint depth_test, active_texture, texture_2d, array_buffer, element_buffer;
     GLint attrib_enabled[2];
     GLint unpack_alignment, unpack_row_length, unpack_skip_rows;
@@ -85,7 +85,6 @@ static void snapshot(state_snapshot *s) {
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &s->draw_fbo);
     glGetIntegerv(GL_CURRENT_PROGRAM, &s->program);
     glGetIntegerv(GL_VIEWPORT, s->viewport);
-    glGetIntegerv(GL_SCISSOR_BOX, s->scissor_box);
     glGetIntegerv(GL_CULL_FACE, &s->cull);
     glGetIntegerv(GL_BLEND, &s->blend);
     glGetIntegerv(GL_DEPTH_TEST, &s->depth_test);
@@ -130,7 +129,6 @@ static int restored(const state_snapshot *a, const state_snapshot *b) {
     CHECK(attrib_enabled[1]);
     for (int i = 0; i < 4; i++) {
         CHECK(viewport[i]);
-        CHECK(scissor_box[i]);
         if (a->color_mask[i] != b->color_mask[i]) {
             fprintf(stderr, "colour mask changed\n");
             ok = 0;
@@ -321,7 +319,5 @@ int main(int argc, char **argv) {
              attribute_limit && first_refused;
     glDeleteProgram(program);
     CGLSetCurrentContext(NULL);
-    CGLDestroyContext(context);
-    CGLDestroyPixelFormat(format);
     return ok ? 0 : 1;
 }

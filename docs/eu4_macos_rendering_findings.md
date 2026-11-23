@@ -398,7 +398,14 @@ change; the `+0x10` argument is used only at `0x1010cc3b8`. Cost ~0.6 vs
 ~2.2 µs/call; mode-0 batching is empty on paused Venice (`MODE0_DOMAIN_EMPTY`,
 20261007 census). API lesson: `glMultiDrawElements` availability needs a runtime
 lookup in the active gameplay GL context; an inventory or GL version string is
-not proof.
+not proof. The retired `classify_batchable_prefix` contract kept these
+invariants: visibility test before record dereference; a zero-triangle record is
+an `OTHER_SIDE_EFFECT` boundary; pending deferred/secondary attribute uploads
+fall through at the hook; the special pre-colour outer batch is a barrier when
+mask `0xB0` (bits 4/5/7) is set (`0x1010cbe6c`, `0x1010cbe79`); a null IBO
+argument is `OTHER_SIDE_EFFECT`; barrier counters count set bits per event and
+are not mutually exclusive; batching needs run length ≥2, entry match, a
+homogeneous included prefix and non-`INVALID` termination.
 
 **Mesh.** `CGraphics::RenderBuckets` @ `0x10149cedc` → `CPdxMeshObject::RenderBuckets`
 @ `0x1014c7da4`; `SFlushData` is 0x50 bytes and 0xe8 draw subrecords load

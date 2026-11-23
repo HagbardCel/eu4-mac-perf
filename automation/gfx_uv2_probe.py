@@ -353,25 +353,29 @@ def _json_number(value: float):
 
 
 def fragment_attribution(state: dict | None) -> dict:
-    """The isolated probes disable depth/blend, so depth/blend/alpha/stencil
-    can select a different fragment; control RGB and coverage alpha are not
-    proof of fragment identity."""
-    state = state or {}
-    problems = [reason for key, field, reason in (
-        ("blend", "enabled", "blending can select a different visible fragment"),
-        ("depth", "test", "depth test can reject or supersede a fragment"),
-        ("alpha_test", "enabled", "alpha test can discard a fragment"),
-        ("stencil", "test", "stencil test can reject a fragment"))
-        if (state.get(key) or {}).get(field)]
+    """The isolated probes disable depth/blend and do not prove which fragment
+    produced RGB8; attribution stays unverified without direct evidence."""
+    if not isinstance(state, dict):
+        state = {}
+    problems = ["the isolated pass does not prove contributing-fragment identity",
+                "fragment-shader discard is not captured",
+                "colour mask and logic operation are not captured"]
+    for key, field, reason in (
+            ("blend", "enabled", "blending can select a different fragment"),
+            ("depth", "test", "depth test can reject or supersede a fragment"),
+            ("alpha_test", "enabled", "alpha test can discard a fragment"),
+            ("stencil", "test", "stencil test can reject a fragment")):
+        setting = state.get(key)
+        if not isinstance(setting, dict):
+            problems.append(f"{key} state missing")
+        elif not isinstance(setting.get(field), bool):
+            problems.append(f"{key}.{field} missing")
+        elif setting[field]:
+            problems.append(reason)
     if not state:
-        problems.append("no captured draw state")
-    return {
-        "verified": not problems,
-        "status": "verified" if not problems else "unverified",
-        "problems": problems,
-        "probe_fragment_selection": "isolated pass disables depth and blending",
-        "not_sufficient": ["original-shader RGB equality", "uv2 coverage alpha"],
-    }
+        problems.insert(0, "no captured draw state")
+    return {"verified": False, "status": "unverified", "problems": problems,
+            "not_sufficient": "original-shader RGB equality, coverage alpha"}
 
 
 def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
@@ -471,7 +475,6 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
         },
         "identity": identity, "control": control,
         "fragment_attribution": attribution,
-        "mask": {},
         "summary": summary, "pixels": entries,
         "conclusion": {
             "authority": authority,
@@ -558,12 +561,6 @@ def run(args: argparse.Namespace) -> dict:
     report["conclusion"]["sidecar_identity_checks"] = sidecar_checks
     report["provenance"]["frame"].update(
         {"path": str(frame_dir), "event": event_index})
-    report["mask"]["observation"] = {
-        "path": str(reference["path"]), "sha256": reference["sha256"],
-        "event": reference["event"], "timing": reference["timing"],
-        "resource": reference["resource"]}
-    report["mask"]["metal_event_target"] = {
-        "path": str(color_path), "sha256": metal_mask["sha256"]}
     out = Path(args.out) if args.out else gl["directory"]
     out.mkdir(parents=True, exist_ok=True)
     (out / "comparison.json").write_text(

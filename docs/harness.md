@@ -112,10 +112,9 @@ one reservation. GPU service time is not inferred from wall clock.
 
 ## Event-1 UV2 diagnostic probe
 
-Opt-in diagnostic for event 1, program 310, framebuffer 6, output texture 433;
-disabled by default. The capture is an operator action with a one-use
-authorization; agents must not launch EU4. Full campaign procedure:
-[operator runbook](../analysis/m7/m7-operator-runbook.md).
+Opt-in diagnostic for event 1, program 310, framebuffer 6, texture 433; disabled
+by default. The capture is an operator action with a one-use authorization;
+agents must not launch EU4. See the [operator runbook](../analysis/m7/m7-operator-runbook.md).
 
 ```fish
 set -l OUT "$HOME/eu4-uv2-capture"
@@ -125,9 +124,9 @@ env EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard en
   --state "$STATE" --mode controlled_capture --deadline-seconds 3600
 env EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard authorize-launch \
   --state "$STATE"
-# export the printed id as EU4_CAMPAIGN_AUTHORIZATION
 set -lx EU4_CAMPAIGN_STATE "$STATE"
-set -lx EU4_CAMPAIGN_AUTHORIZATION (read -l)
+read --prompt-str 'Paste authorization ID: ' AUTH_ID
+set -lx EU4_CAMPAIGN_AUTHORIZATION "$AUTH_ID"
 python3.14 -m automation.m6_frame capture --output "$OUT" --prefix-end 1 \
   --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310 \
   --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --seal
@@ -145,12 +144,11 @@ Outputs: `$OUT/uv2-probe/{uv2-probe.json,uv2-probe.rgba32f,uv2-control.bgra}`,
 
 `comparison.json` separates the isolated numerical result
 (`numerical_comparison_conclusive`, classified `conditional_numerical_comparison`)
-from the always-false authenticated original-GL claim and from
-`fragment_attribution_verified`. That field is true only when the captured draw
-has no blend/depth/alpha/stencil test, so the unrestricted probes select the
-same fragment; event 1 uses depth test, so it is **unverified** — control RGB
-equality and coverage alpha are not sufficient. Any failed check falls back to
-`unverified_diagnostic_observation`.
+from the always-false authenticated original-GL claim.
+`fragment_attribution_verified` is always false for this probe: it does not
+capture fragment-shader discard, colour masking or logic operations, and event 1
+is depth-tested. Missing or partial draw state is unverified; control RGB
+equality and coverage alpha are not evidence.
 
 Refused: non-RGB8, multisample, stencil/alpha, non-zero indexed `first` or
 `base_vertex`, instancing, integer attributes, >16 active attributes, unknown
