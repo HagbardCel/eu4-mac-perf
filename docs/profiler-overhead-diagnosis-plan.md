@@ -27,12 +27,12 @@ Index: [`analysis/stage2-validation-manifest.json`](../analysis/stage2-validatio
 
 ## Work packages (execution order)
 
-Technical detail: [`analysis/frame-model-next-iteration-plan.md`](../analysis/frame-model-next-iteration-plan.md).
+Technical detail: the frame-model next-iteration plan is superseded; current capabilities and limits are in [docs/status.md](status.md). The removed plan text remains in git history.
 
 | WP | Focus | Deliverable |
 |----|--------|-------------|
 | **0** | Branch + docs + CI | This plan; portable green |
-| **1** | A–F decomposition (P0) | Mac archives via `diagnostic-matrix` subcommand (policy `diag_matrix_diag_counters_baseline_v3`); [diagnosis memo](profiler-overhead-diagnosis-memo-20261002.md) |
+| **1** | A–F decomposition (P0) | Mac archives via `diagnostic-matrix` subcommand (policy `diag_matrix_diag_counters_baseline_v3`); the 2026-10-02 diagnosis memo (retained in git history; current limits in [status](status.md)) |
 | **2** | Draw path / pointers (P1) | Schema-2 manifest; parallel to WP1 |
 | **3** | Causal vs forensic split | Gate tests; capture-free calibration |
 | **5** | Reference fast path | After WP1 identifies reference cost |

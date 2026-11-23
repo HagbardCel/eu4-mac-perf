@@ -1,7 +1,7 @@
 # Border multidraw go/no-go (PR B)
 
 **Date:** 2026-10-04 (revised)  
-**Gate 0:** RUNTIME-ASSERT — [border-gl-multidraw-api-availability.md](border-gl-multidraw-api-availability.md)
+**Gate 0:** RUNTIME-ASSERT — [consolidated rendering findings](../docs/eu4_macos_rendering_findings.md)
 
 ## Three ceilings
 

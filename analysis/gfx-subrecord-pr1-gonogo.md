@@ -9,7 +9,7 @@
 - Split predicates with **strict barrier semantics** (unknown regions never enable generic `setup_elision_eligible`)
 - Operation-specific elision: `buffer_bind_elision_eligible` on proven VBO/IBO/gate fields only
 - [`mesh-subrecord-hook-site.json`](mesh-subrecord-hook-site.json) — 13-byte patch boundary, displaced insns, frame pointer map, resume offsets
-- [`mesh-draw-dependency-map.md`](mesh-draw-dependency-map.md)
+- [`canonical rendering findings`](../docs/eu4_macos_rendering_findings.md)
 
 ## Conclusion: **GO A (buffer-bind predicate only); not full setup elision; not B**
 

@@ -383,3 +383,38 @@ GPU
 The higher in this graph we can safely eliminate or aggregate work, the greater the expected payoff.
 
 At present, the most promising engineering path is to continue bottom-up enough to understand the Gfx backend boundary, while using selected high-value loops (especially borders) as concrete optimization laboratories.
+
+## Retired investigation summaries (kept for reconstruction/Metal work)
+
+**Border.** `_GfxDrawIndexed` @ `0x1015eaa77`: mode from `+0x08`, type `0x1403`,
+index pointer `0`; `%ecx` zero selects `glDrawElements`, nonzero
+`glDrawElementsBaseVertex`. `GfxSetIndexBuffer` @ `0x1015ec28e` caches the IBO at
+`+0x68`; binds are idempotent, a null handle does not bind. Deferred
+attribute/uniform uploads and `EnableVertexAttribArrays` run inside the helper
+(`+0x128`/`+0x170`), so pre-draw capture must follow it. Mode-0 records keep
+`indices[i]=0`; `+0x04` is not the GL base vertex. Barriers: colour fast path
+`je` @ `0x1010cc1d5`, precolor mask `0xB0` @ `0x1010cbe79`, any `+0x18` VBO-index
+change; the `+0x10` argument is used only at `0x1010cc3b8`. Cost ~0.6 vs
+~2.2 µs/call; mode-0 batching is empty on paused Venice (`MODE0_DOMAIN_EMPTY`,
+20261007 census). API lesson: `glMultiDrawElements` availability needs a runtime
+lookup in the active gameplay GL context; an inventory or GL version string is
+not proof. The retired `classify_batchable_prefix` contract kept these
+invariants: visibility test before record dereference; a zero-triangle record is
+an `OTHER_SIDE_EFFECT` boundary; pending deferred/secondary attribute uploads
+fall through at the hook; the special pre-colour outer batch is a barrier when
+mask `0xB0` (bits 4/5/7) is set (`0x1010cbe6c`, `0x1010cbe79`); a null IBO
+argument is `OTHER_SIDE_EFFECT`; barrier counters count set bits per event and
+are not mutually exclusive; batching needs run length ≥2, entry match, a
+homogeneous included prefix and non-`INVALID` termination.
+
+**Mesh.** `CGraphics::RenderBuckets` @ `0x10149cedc` → `CPdxMeshObject::RenderBuckets`
+@ `0x1014c7da4`; `SFlushData` is 0x50 bytes and 0xe8 draw subrecords load
+separately (`GfxDrawIndexed` landmark `0x14c8404`). `CArray<SFlushData>::Append`
+@ `0x1014c72b0` builds only 0x50 parents. Repeated effect pointers skip
+effect/raster setup, but `_ObjectConstants` @ `0x102251ae8` is updated/bound per
+subrecord. v3.1 recurrence: **0** hits for same-parent (54,945), cross-parent
+(1,290,465) and pointer-cross-parent (1,290,465); fixture-scoped.
+
+**Map text.** ~379 same-state country-name draws/frame; the `GfxDrawIndexed`
+callsite is image `0xe11647` (return `0x100e1164c`,
+`CCountryNameCollection::RenderNames`), below the border batching floor.

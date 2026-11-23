@@ -1346,7 +1346,7 @@ The sections below record earlier evidence and remain as history; they do not ov
 
 - **R-mode** segments and structural evidence from the Phase C capsule support baseline and contract interpretation.
 - **C-mode** absolute timings are **not** quantitatively qualified for production claims (same tier as post-WP11 / Tier-1 admission failure).
-- **Tier-1 / WP11** (`33339073`, failed v4 admission): profiler absolute timings are not production-qualified. See [live diagnostic measurement contract](live-diagnostic-measurement-contract.md) and [post-WP11 diagnostic roadmap](eu4-live-diagnostic-roadmap.md).
+- **Tier-1 / WP11** (`33339073`, failed v4 admission): profiler absolute timings are not production-qualified. The superseded post-WP11 live-diagnostic contract and roadmap remain in git history.
 
 Future **targeted** measurements (including further R0-M work) remain possible when separately justified; this does not reopen the Phase C investigation.
 
@@ -1356,7 +1356,7 @@ Future **targeted** measurements (including further R0-M work) remain possible w
 
 - CPU reconciliation obtained in epoch A.
 - Drawable census **not evaluated** (`unsupported_drawable` readback policy).
-- Automated stack attribution failed on an unsupported `sample` formatting variant.
+- Automated stack attribution failed on an unsupported Rosetta `sample` formatting variant. A separate **offline requalification** with the PR #43 parser produced `partial_complete` (1,744 rows, root 791), with **≈22.9% of sample weight unattributed**. This is a limited offline analysis, not a successful original acquisition: the session remains **`incomplete_gates`**, and the unattributed share limits optimization guidance.
 - Acquisition status **`incomplete_gates`**; frame staticity and lossless-skip candidates were **not** evaluated.
 
 ## Current technical direction

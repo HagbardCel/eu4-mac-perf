@@ -11,14 +11,14 @@ runs (`943×31` frames). Record `+0x04` varies but is **not** GL basevertex on m
 ([addendum](border-mode0-basevertex-evidence-addendum.md)). Loop-head target:
 **`glMultiDrawElements`** with shared mode/type/IBO.
 
-Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — see [gfx-subrecord-post-v31-decision.md](gfx-subrecord-post-v31-decision.md).
+Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — see [gfx-subrecord-hypothesis-matrix.md](gfx-subrecord-hypothesis-matrix.md). This is fixture-scoped; it is not a general impossibility claim.
 
 ## Gate chain (PR B → PR C)
 
 | Gate | Deliverable |
 |------|-------------|
-| 0 API viability | [border-gl-multidraw-api-availability.md](border-gl-multidraw-api-availability.md) |
-| 1 Semantic mergeability | [border-multidraw-barriers.md](border-multidraw-barriers.md) |
+| 0 API viability | [consolidated rendering findings](../docs/eu4_macos_rendering_findings.md) |
+| 1 Semantic mergeability | [consolidated rendering findings](../docs/eu4_macos_rendering_findings.md) |
 | 2 Realizability | [border-multidraw-mutation-topology.md](border-multidraw-mutation-topology.md) |
 | 3a Temporal / 3b Post-loop | topology + barriers |
 | 4 Argument reconstruction | [border-draw-record-layout.json](border-draw-record-layout.json) |

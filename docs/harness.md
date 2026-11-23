@@ -109,3 +109,47 @@ EU4 launches are serialized by the host-wide process lease plus a one-use
 campaign claim. A campaign refusal happens before build/spawn. Replays and
 shadow executions are charged through the same guard; nested entry points share
 one reservation. GPU service time is not inferred from wall clock.
+
+## Event-1 UV2 diagnostic probe
+
+Opt-in diagnostic for event 1, program 310, framebuffer 6, texture 433; disabled
+by default. The capture is an operator action with a one-use authorization;
+agents must not launch EU4. See the [operator runbook](../analysis/m7/m7-operator-runbook.md).
+
+```fish
+set -l OUT "$HOME/eu4-uv2-capture"
+set -l STATE "$HOME/eu4-uv2-state.json"
+set -l TOKEN (cat "$HOME/.local/share/eu4-dsh/operator-token")
+env EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard ensure \
+  --state "$STATE" --mode controlled_capture --deadline-seconds 3600
+env EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard authorize-launch \
+  --state "$STATE"
+set -lx EU4_CAMPAIGN_STATE "$STATE"
+read --prompt-str 'Paste authorization ID: ' AUTH_ID
+set -lx EU4_CAMPAIGN_AUTHORIZATION "$AUTH_ID"
+python3.14 -m automation.m6_frame capture --output "$OUT" --prefix-end 1 \
+  --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310 \
+  --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --seal
+python3.14 -m automation.m6_frame translate --frame "$OUT/frame" --out "$OUT/translated"
+python3.14 -m automation.m6_frame replay --frame "$OUT/frame" --shaders "$OUT/translated" \
+  --out "$OUT/metal" --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310 \
+  --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --rationale 'event-1 uv2'
+python3.14 -m automation.gfx_uv2_probe compare --gl "$OUT/uv2-probe" \
+  --metal "$OUT/metal/uv2-probe" --frame "$OUT/frame" --out "$OUT/uv2-probe"
+```
+
+Outputs: `$OUT/uv2-probe/{uv2-probe.json,uv2-probe.rgba32f,uv2-control.bgra}`,
+`$OUT/metal/uv2-probe/uv2-probe.rgba32f`, `$OUT/metal/uv2-color.bgra` and
+`$OUT/uv2-probe/comparison.json`.
+
+`comparison.json` separates the isolated numerical result
+(`numerical_comparison_conclusive`, classified `conditional_numerical_comparison`)
+from the always-false authenticated original-GL claim.
+`fragment_attribution_verified` is always false for this probe: shader discard,
+colour-mask and logic-op effects on fragment correspondence are not evaluated,
+and event 1 is depth-tested. Missing or partial draw state is unverified; control RGB
+equality and coverage alpha are not evidence.
+
+Refused: non-RGB8, multisample, stencil/alpha, non-zero indexed `first` or
+`base_vertex`, instancing, integer attributes, >16 active attributes, unknown
+VBO offsets, non-indexed draws.

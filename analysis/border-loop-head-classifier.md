@@ -1,7 +1,6 @@
 # Border loop-head prefix classifier
 
-Spec: [border-loop-head-classifier.json](border-loop-head-classifier.json)  
-Implementation: [tools/border_loop_classifier.py](../tools/border_loop_classifier.py)
+Implementation: [analysis/tools/border_loop_classifier.py](tools/border_loop_classifier.py); invariants: [canonical rendering findings](../docs/eu4_macos_rendering_findings.md).
 
 ## API
 
