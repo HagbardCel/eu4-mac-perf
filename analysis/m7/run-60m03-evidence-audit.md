@@ -19,23 +19,28 @@ established causes.
 | Earliest divergence | event 1, `tex:433` |
 | Canonical Metal candidate | still fails exact equality at event 1 |
 
-The reciprocal-lowering experiment changed one vertex expression,
-`(pos.x + 0.5) / 5632.0`, and reduced the diagnostic mismatch counts from
-20 / 120 / 236 to 18 / 99 / 193 at events 1 / 2 / 3. At event 1 it fixed three
-pixels and introduced one new mismatch. The experiment is **diagnostic**: it is
-not a qualified equivalence, and it does not prove that the original compiler
-used reciprocal multiplication.
+The reciprocal-lowering experiment replaced two occurrences of
+`(pos.x + 0.5) / 5632.0` in program 310's translated vertex MSL. These affected
+the `VertexOut.uv.x` and `VertexOut.uv2.x` assignments, both receiving the same
+reciprocal-multiplication substitution; the experiment did not independently
+isolate the contributions of those two outputs. It reduced the diagnostic
+mismatch counts from 20 / 120 / 236 to 18 / 99 / 193 at events 1 / 2 / 3. At
+event 1 it fixed three pixels and introduced one new mismatch. The experiment is
+**diagnostic**: it is not a qualified equivalence, and it does not prove that
+the original compiler used reciprocal multiplication.
 
 ## Depth diagnostic and its correction
 
 The first depth readback reported a half-width attachment. This was a
-readback-layout interpretation error: the blit of
-`MTLPixelFormatDepth32Float_Stencil8` writes the depth plane packed at 4 bytes
+readback-layout interpretation error. In this experiment the readback of
+`MTLPixelFormatDepth32Float_Stencil8` placed the depth plane packed at 4 bytes
 per pixel at the start of each destination row, and the first decode read it at
-an 8-byte stride. Decoding the already captured raw data at its real layout
-produced a complete depth observation. The corrected values bounded the
-interpolated-depth difference at about one 2^-24 quantum, which is the same size
-as the colour effect; they did not establish identical UV interpolation.
+an 8-byte stride. Decoding the already captured raw data at that observed layout
+produced a complete depth observation. 57.0% of drawn pixels had exact
+normalized-depth agreement; differences were predominantly zero or ±1 quantum of
+2^-24, and the maximum absolute difference was two quanta. These measurements do
+not establish equality of other interpolated varyings or explain the residual
+RGB errors.
 
 The temporary native readback (`capture_depth_to_file`, opt-in
 `EU4_FRAME_REPLAY_DUMP_DEPTH`) was removed rather than promoted to permanent
