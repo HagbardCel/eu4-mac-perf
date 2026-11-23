@@ -2506,12 +2506,6 @@ static void uv2_probe_record_failure(NSString *reason, NSDictionary *event,
         @"status": @"error",
         @"reason": reason ?: @"unknown",
         @"event": @(g_current_event),
-        @"expected": @{
-            @"event": @(g_uv2_probe.event),
-            @"program": @(g_uv2_probe.program),
-            @"framebuffer": @(g_uv2_probe.framebuffer),
-            @"texture": @(g_uv2_probe.texture),
-        },
         @"observed": observed ?: @{},
         @"target": event[@"target"] ?: @{},
     } mutableCopy];
@@ -2676,7 +2670,6 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
         @"width": checkpoint[@"width"] ?: @0,
         @"height": checkpoint[@"height"] ?: @0,
         @"sha256": uv2_probe_sha256(color_data),
-        @"reference_sha256": checkpoint[@"reference_sha256"] ?: @"",
     };
     document[@"origin"] = @"lower_left";
     document[@"pixel_format"] = @"RGBA32F";
@@ -2686,7 +2679,6 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
     document[@"raw_file"] = raw_name;
     document[@"raw_bytes"] = @(data.length);
     document[@"raw_sha256"] = uv2_probe_sha256(data);
-    document[@"readback_command_status"] = @(blit.status);
     uv2_probe_write_descriptor(directory, document);
     g_uv2_probe_status = 1;
     return @{
@@ -3880,37 +3872,6 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                                         indexBufferOffset:0
                                             instanceCount:instances];
                                 [probe_encoder endEncoding];
-                                NSMutableArray *attribute_records =
-                                    [NSMutableArray array];
-                                for (NSDictionary *attribute in
-                                         event[@"attributes"] ?: @[]) {
-                                    [attribute_records addObject:@{
-                                        @"name": attribute[@"name"] ?: @"",
-                                        @"location":
-                                            attribute[@"location"] ?: @(-1),
-                                        @"sha256":
-                                            attribute[@"sha256"] ?: @"",
-                                    }];
-                                }
-                                NSMutableArray *uniform_records =
-                                    [NSMutableArray array];
-                                for (NSDictionary *uniform in
-                                         program[@"uniforms"] ?: @[]) {
-                                    NSMutableDictionary *entry =
-                                        [@{@"name": uniform[@"name"] ?: @""}
-                                            mutableCopy];
-                                    if ([string_value(uniform[@"type"])
-                                            isEqualToString:@"sampler"]) {
-                                        entry[@"kind"] = @"sampler";
-                                        entry[@"unit"] = uniform[@"unit"] ?: @(-1);
-                                    } else {
-                                        entry[@"sha256"] =
-                                            uniform[@"sha256"] ?: @"";
-                                    }
-                                    [uniform_records addObject:entry];
-                                }
-                                NSDictionary *indices =
-                                    event[@"indices"] ?: @{};
                                 NSDictionary *record = @{
                                     @"schema": @"gfx-uv2-probe/v1",
                                     @"side": @"metal",
@@ -3928,13 +3889,9 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                                     @"capture":
                                         g_uv2_probe_capture_identity
                                             ?: @{@"sealed": @NO},
-                                    @"attributes": attribute_records,
-                                    @"uniforms": uniform_records,
-                                    @"indices": @{
-                                        @"count": indices[@"count"] ?: @(count),
-                                        @"sha256":
-                                            indices[@"sha256"] ?: @"",
-                                    },
+                                    @"attributes": event[@"attributes"] ?: @[],
+                                    @"uniforms": program[@"uniforms"] ?: @[],
+                                    @"indices": event[@"indices"] ?: @{},
                                     @"texture": probe_texture,
                                 };
                                 [g_uv2_probe_records addObject:record];

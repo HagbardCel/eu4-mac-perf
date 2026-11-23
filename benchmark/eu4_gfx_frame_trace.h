@@ -235,6 +235,7 @@ void eu4_gfx_frame_trace_present_exit(eu4_gfx_capture_frame *frame,
 /* Host-test only: configure and execute the probe against the current GL state
  * without an armed frame capture.  Returns 1 when it ran, 0 when it skipped,
  * -1 when it failed. */
+int eu4_gfx_uv2_probe_test_attribute_count_ok(int count);
 int eu4_gfx_uv2_probe_test_configure(const char *directory, int event,
                                      int program, int framebuffer, int texture);
 int eu4_gfx_uv2_probe_test_run(int event, int indexed, unsigned mode, int count,

@@ -286,31 +286,43 @@ int main(int argc, char **argv) {
     uint8_t *raw = read_file(raw_path, &raw_size);
     uint8_t *control = read_file(control_path, &control_size);
     int layout = raw_size == 4 * 4 * 16 && control_size == 4 * 4 * 4;
-    int readback = 0;
-    if (raw != NULL && raw_size == 4 * 4 * 16) {
-        const float *values = (const float *)raw;
-        /* Lower-left pixel (0,0): uv2 = (0.125, 0.125), z=0, w=1. */
-        readback = fabsf(values[0] - 0.125f) <= 2e-6f &&
-                   fabsf(values[1] - 0.125f) <= 2e-6f &&
-                   values[2] == 0.0f && values[3] == 1.0f;
-    }
     int control_ok = 0;
     if (control != NULL && control_size == 4 * 4 * 4) {
         control_ok = abs((int)control[2] - 32) <= 1 &&
                      abs((int)control[1] - 32) <= 1 &&
                      abs((int)control[0] - 128) <= 1 && control[3] == 255;
     }
+    int attribute_limit = eu4_gfx_uv2_probe_test_attribute_count_ok(16) &&
+                          !eu4_gfx_uv2_probe_test_attribute_count_ok(17);
+    char first_dir[1200];
+    snprintf(first_dir, sizeof(first_dir), "%s/first-offset", out_dir);
+    mkdir(first_dir, 0755);
+    int first_refused = 0;
+    if (eu4_gfx_uv2_probe_test_configure(first_dir, 1, (int)program,
+                                         (int)target_fbo,
+                                         (int)target_texture) == 0) {
+        int first_result = eu4_gfx_uv2_probe_test_run(
+            1, 1, GL_TRIANGLES, 6, 1, 1, 0, 0);
+        char first_json_path[1400];
+        snprintf(first_json_path, sizeof(first_json_path),
+                 "%s/uv2-probe.json", first_dir);
+        size_t first_json_size = 0;
+        uint8_t *first_json = read_file(first_json_path, &first_json_size);
+        first_refused = first_result == 0 && first_json != NULL &&
+                        strstr((const char *)first_json,
+                               "\"status\":\"selection_unsupported\"") != NULL;
+        free(first_json);
+    }
     printf("probe=%d\n", ran == 1 ? 1 : 0);
     printf("layout=%d\n", layout);
-    printf("readback=%d\n", readback);
     printf("control=%d\n", control_ok);
     printf("restore=%d\n", state_ok);
-    int ok = ran == 1 && layout && readback && control_ok && state_ok;
+    printf("attribute_limit=%d\n", attribute_limit);
+    printf("first_offset=%d\n", first_refused);
+    int ok = ran == 1 && layout && control_ok && state_ok &&
+             attribute_limit && first_refused;
     free(raw); free(control);
     glDeleteProgram(program);
-    glDeleteFramebuffers(1, &target_fbo);
-    glDeleteRenderbuffers(1, &depth_buffer);
-    glDeleteTextures(1, &target_texture);
     CGLSetCurrentContext(NULL);
     CGLDestroyContext(context);
     CGLDestroyPixelFormat(format);

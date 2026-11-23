@@ -109,3 +109,35 @@ EU4 launches are serialized by the host-wide process lease plus a one-use
 campaign claim. A campaign refusal happens before build/spawn. Replays and
 shadow executions are charged through the same guard; nested entry points share
 one reservation. GPU service time is not inferred from wall clock.
+
+## Event-1 UV2 diagnostic probe
+
+Opt-in diagnostic for event 1, program 310, framebuffer 6, output texture 433;
+disabled by default. The capture requires a separate one-use launch
+authorization; agents must not launch EU4.
+
+```fish
+set -l OUT <capture-root>
+env EU4_CAMPAIGN_STATE=<state> EU4_CAMPAIGN_AUTHORIZATION=<id>   python3.14 -m automation.m6_frame capture --output $OUT --prefix-end 1     --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310     --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --seal
+python3.14 -m automation.m6_frame translate --frame $OUT/frame --out $OUT/translated
+python3.14 -m automation.m6_frame replay --frame $OUT/frame --shaders $OUT/translated   --out $OUT/metal --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310   --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --rationale 'event-1 uv2'
+python3.14 -m automation.gfx_uv2_probe compare --gl $OUT/uv2-probe   --metal $OUT/metal/uv2-probe --frame $OUT/frame --out $OUT/uv2-probe
+```
+
+Outputs: `$OUT/uv2-probe/{uv2-probe.json,uv2-probe.rgba32f,uv2-control.bgra}`,
+`$OUT/metal/uv2-probe/uv2-probe.rgba32f`, `$OUT/metal/uv2-color.bgra` and
+`$OUT/uv2-probe/comparison.json`.
+
+`comparison.json` separates **numerical comparison** (`conditional_numerical_comparison`
+only when the frame is authentic, both sidecars bind the same sealed capture,
+draw inputs match, the control reproduces the target and every selected pixel
+is covered; otherwise `unverified_diagnostic_observation`, retaining partial
+measurements without an equality claim) from **sidecar provenance**. The
+OpenGL sidecar is not independently authenticated: the seal attests the frame,
+not the sidecar bytes, so `authenticated_original_gl_observation` is false until
+a capture mechanism binds those bytes to the original process. A conditional
+comparison is not an authentic original-GL observation.
+
+Refused: non-RGB8, multisample, stencil/alpha, non-zero indexed `first` or
+`base_vertex`, instancing, integer attributes, >16 active attributes, unknown
+VBO offsets, non-indexed draws.

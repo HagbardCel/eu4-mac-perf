@@ -386,32 +386,28 @@ At present, the most promising engineering path is to continue bottom-up enough 
 
 ## Retired investigation summaries (kept for reconstruction/Metal work)
 
-**Border draw semantics.** `_GfxDrawIndexed` @ `0x1015eaa77` passes mode from
-`+0x08`, index type `0x1403` and index pointer `0`; `%ecx` selects
-`glDrawElements` (zero) or `glDrawElementsBaseVertex` (nonzero). `GfxSetIndexBuffer`
-@ `0x1015ec28e` writes the cached IBO at `+0x68` and its bind is idempotent; a
-null handle performs no bind. Deferred attribute/uniform uploads and
-`EnableVertexAttribArrays` run inside `GfxDrawIndexed` (`+0x128`, `+0x170`), so
-pre-draw observation must happen after that call. Mode-0 border records keep
-`indices[i]=0`; record `+0x04` is not the GL base vertex. Homogeneous mode-0
-runs are separated by the colour fast path (`je` @ `0x1010cc1d5`), the special
-precolor mask `0xB0` @ `0x1010cbe79`, and any `+0x18` VBO-index change. The
-`+0x10` helper argument is used only at site `0x1010cc3b8`. Border draws cost
-~0.6 µs/call vs ~2.2 µs for mesh; mode-0 batching is empty on paused Venice
-(`MODE0_DOMAIN_EMPTY`, 20261007 census).
+**Border.** `_GfxDrawIndexed` @ `0x1015eaa77`: mode from `+0x08`, type `0x1403`,
+index pointer `0`; `%ecx` zero selects `glDrawElements`, nonzero
+`glDrawElementsBaseVertex`. `GfxSetIndexBuffer` @ `0x1015ec28e` caches the IBO at
+`+0x68`; binds are idempotent, a null handle does not bind. Deferred
+attribute/uniform uploads and `EnableVertexAttribArrays` run inside the helper
+(`+0x128`/`+0x170`), so pre-draw capture must follow it. Mode-0 records keep
+`indices[i]=0`; `+0x04` is not the GL base vertex. Barriers: colour fast path
+`je` @ `0x1010cc1d5`, precolor mask `0xB0` @ `0x1010cbe79`, any `+0x18` VBO-index
+change; the `+0x10` argument is used only at `0x1010cc3b8`. Cost ~0.6 vs
+~2.2 µs/call; mode-0 batching is empty on paused Venice (`MODE0_DOMAIN_EMPTY`,
+20261007 census). API lesson: `glMultiDrawElements` availability needs a runtime
+lookup in the active gameplay GL context; an inventory or GL version string is
+not proof.
 
-**Mesh draw records.** `CGraphics::RenderBuckets` @ `0x10149cedc` →
-`CPdxMeshObject::RenderBuckets` @ `0x1014c7da4` walks `SFlushData` (0x50) and a
-separate 0xe8 draw-subrecord loop; `GfxDrawIndexed` is the landmark at
-`0x14c8404`. `CArray<SFlushData>::Append` @ `0x1014c72b0` constructs only 0x50
-parents; 0xe8 records live in mesh-type data and have a separate loader. The
-engine already skips effect/raster setup on a repeated effect pointer, but
-`_ObjectConstants` @ `0x102251ae8` is still updated/bound per subrecord. The
-v3.1 recurrence screen on paused Venice found **0** hits for same-parent
-(54,945), cross-parent (1,290,465) and pointer-cross-parent (1,290,465)
-signatures; this is fixture-scoped and does not cover other maps/cameras.
+**Mesh.** `CGraphics::RenderBuckets` @ `0x10149cedc` → `CPdxMeshObject::RenderBuckets`
+@ `0x1014c7da4`; `SFlushData` is 0x50 bytes and 0xe8 draw subrecords load
+separately (`GfxDrawIndexed` landmark `0x14c8404`). `CArray<SFlushData>::Append`
+@ `0x1014c72b0` builds only 0x50 parents. Repeated effect pointers skip
+effect/raster setup, but `_ObjectConstants` @ `0x102251ae8` is updated/bound per
+subrecord. v3.1 recurrence: **0** hits for same-parent (54,945), cross-parent
+(1,290,465) and pointer-cross-parent (1,290,465); fixture-scoped.
 
-**Map text.** Same-state adjacent country-name draws are ~379/frame; the
-`GfxDrawIndexed` callsite is image offset `0xe11647` (return `0x100e1164c`,
-`CCountryNameCollection::RenderNames`), below the border batching floor unless
-adjacency is underestimated.
+**Map text.** ~379 same-state country-name draws/frame; the `GfxDrawIndexed`
+callsite is image `0xe11647` (return `0x100e1164c`,
+`CCountryNameCollection::RenderNames`), below the border batching floor.

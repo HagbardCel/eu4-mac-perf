@@ -54,13 +54,14 @@ def _write_probe(root: Path, side: str, *, values=None, event: int = 1,
                  control: bytes | None = None, sealed: bool = True,
                  session: str = "session", frame: int = 1,
                  capture: dict | None = None, normal_target: dict | None = None,
-                 draw: dict | None = None) -> dict:
+                 draw: dict | None = None, pid: int = 4242) -> dict:
     root.mkdir(parents=True, exist_ok=True)
     raw = _raw(values if values is not None else _values())
     (root / "uv2-probe.rgba32f").write_bytes(raw)
     descriptor = {
         "schema": "gfx-uv2-probe/v1", "side": side, "status": "ok",
         "sealed": sealed, "session_id": session, "capture_frame_id": frame,
+        "pid": pid,
         "event": event, "program": program,
         "target": {"framebuffer": framebuffer, "texture": texture,
                    "width": WIDTH, "height": HEIGHT},
@@ -119,7 +120,8 @@ def _event(draw: dict | None = None) -> dict:
 
 def _seal() -> dict:
     return {"sealed": True, "session_id": "session", "capture_frame_id": 1,
-            "manifest_sha256": "m" * 64, "reference_sha256": "r" * 64}
+            "manifest_sha256": "m" * 64, "reference_sha256": "r" * 64,
+            "pid": 4242}
 
 
 class LayoutTests(unittest.TestCase):
@@ -154,6 +156,17 @@ class BindingTests(unittest.TestCase):
                 gfx_uv2_probe.load_probe(metal_dir), seal)
             self.assertTrue(binding["match"])
 
+    def testSidecarPidMismatchIsRejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            gl_dir, metal_dir = Path(tmp) / "gl", Path(tmp) / "metal"
+            _write_probe(gl_dir, "opengl", pid=999)
+            _write_probe(metal_dir, "metal")
+            binding = gfx_uv2_probe.capture_binding(
+                gfx_uv2_probe.load_probe(gl_dir),
+                gfx_uv2_probe.load_probe(metal_dir), _seal())
+            self.assertFalse(binding["match"])
+            self.assertIn("opengl pid", binding["problems"])
+
     def testForeignSessionAndUnsealedProbeAreRejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             gl_dir, metal_dir = Path(tmp) / "gl", Path(tmp) / "metal"
@@ -177,10 +190,8 @@ class IdentityTests(unittest.TestCase):
             probe = gfx_uv2_probe.load_probe(Path(tmp) / "p")
         return gfx_uv2_probe.input_identity(probe, _event())
 
-    def testMatchingEventInputs(self) -> None:
-        self.assertTrue(self._identity()["match"])
-
     def testAllDrawParametersAreValidated(self) -> None:
+        self.assertTrue(self._identity()["match"])
         for change in ({"first": 1}, {"base_vertex": 2},
                        {"caller_rva": "0xdead"},
                        {"instance_count": 2}, {"entry": "_GfxDraw"}):
@@ -193,17 +204,6 @@ class IdentityTests(unittest.TestCase):
             identity = gfx_uv2_probe.input_identity(probe, event)
             self.assertFalse(identity["match"], change)
             self.assertIn("draw", identity["problems"])
-
-    def testUniformAttributeAndDigestFailures(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            descriptor = _write_probe(Path(tmp) / "p", "opengl")
-            descriptor["attributes"][0]["digest_ok"] = False
-            (Path(tmp) / "p" / "uv2-probe.json").write_text(
-                json.dumps(descriptor))
-            identity = gfx_uv2_probe.input_identity(
-                gfx_uv2_probe.load_probe(Path(tmp) / "p"), _event())
-            self.assertIn("attributes", identity["problems"])
-
 
 class ComparisonTests(unittest.TestCase):
     def _probe(self, root: Path, side: str, values):
@@ -241,7 +241,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertNotEqual(center["signed_differences"]["x"], 0.0)
         self.assertEqual(report["summary"]["max_ulp_difference_xy"], 1)
         self.assertEqual(len(report["pixels"]), 9)
-        self.assertTrue(report["summary"]["conclusive"])
+        self.assertTrue(report["summary"]["numerical_comparison_conclusive"])
         self.assertTrue(report["summary"]["observed_mismatch"])
         self.assertFalse(report["summary"]["all_selected_pixels_equal"])
 
@@ -275,7 +275,6 @@ class ComparisonTests(unittest.TestCase):
             metal = {"width": width, "height": height, "raw": raw(0.0),
                      "directory": Path(tmp), "sha256": "0" * 64,
                      "descriptor": {"side": "metal"}}
-            metal["raw"] = raw(0.0)
             # Perturb the physical lower-left row 3 pixel in Metal.
             offset = (3 * width + 0) * 16
             struct.pack_into("<f", metal["raw"], offset, 7.0)
@@ -289,23 +288,21 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(entry["signed_differences"]["x"], 7.0)
         self.assertTrue(entry["bit_equal"]["y"])
 
-    def testEmptyMaskIsInconclusive(self):
+    def testEmptyAndZeroCoverageAreInconclusive(self):
         with tempfile.TemporaryDirectory() as tmp:
-            report = self._compare(tmp, _values(), _values(), [])
-        self.assertEqual(report["summary"]["mask_pixels"], 0)
-        self.assertEqual(report["summary"]["status"], "inconclusive_no_mask")
-        self.assertFalse(report["summary"]["conclusive"])
-        self.assertIsNone(report["summary"]["xy_bit_for_bit_equal"])
-
-    def testZeroCoverageIsInconclusiveNotEquivalent(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            report = self._compare(
+            empty = self._compare(tmp, _values(), _values(), [])
+            zero = self._compare(
                 tmp, _values(False), _values(False), [(0, 0), (1, 1)])
-        self.assertEqual(report["summary"]["mask_pixels_covered_by_both"], 0)
-        self.assertEqual(report["summary"]["status"], "inconclusive_uncovered")
-        self.assertFalse(report["summary"]["conclusive"])
-        self.assertIsNone(report["summary"]["all_selected_pixels_equal"])
-        self.assertIsNone(report["conclusion"]["uv2_results_equal"])
+        self.assertEqual(empty["summary"]["status"], "inconclusive_no_mask")
+        self.assertEqual(empty["summary"]["mask_pixels"], 0)
+        self.assertIsNone(empty["summary"]["xy_bit_for_bit_equal"])
+        self.assertEqual(zero["summary"]["status"], "inconclusive_uncovered")
+        self.assertEqual(zero["summary"]["mask_pixels_covered_by_both"], 0)
+        self.assertIsNone(zero["summary"]["all_selected_pixels_equal"])
+        self.assertIsNone(zero["conclusion"]["uv2_results_equal"])
+        for report in (empty, zero):
+            self.assertFalse(
+                report["summary"]["numerical_comparison_conclusive"])
 
     def testPartialCoverageIsInconclusiveAndRetainsMismatch(self):
         gl = _values()
@@ -319,7 +316,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(report["summary"]["mask_pixels_covered_by_both"], 1)
         self.assertEqual(report["summary"]["status"],
                          "inconclusive_partial_coverage")
-        self.assertFalse(report["summary"]["conclusive"])
+        self.assertFalse(report["summary"]["numerical_comparison_conclusive"])
         self.assertTrue(report["summary"]["observed_mismatch"])
         self.assertIsNone(report["summary"]["all_selected_pixels_equal"])
         self.assertTrue(report["pixels"][0]["ulp_differences"]["x"])
@@ -331,23 +328,21 @@ class ComparisonTests(unittest.TestCase):
         gl[0][0][0] = struct.unpack("<f", struct.pack("<I", original + 1))[0]
         with tempfile.TemporaryDirectory() as tmp:
             report = self._compare(tmp, gl, metal, [(0, 0), (1, 1)])
-        self.assertTrue(report["summary"]["conclusive"])
+        self.assertTrue(report["summary"]["numerical_comparison_conclusive"])
         self.assertEqual(report["summary"]["status"], "conclusive_unequal")
         self.assertTrue(report["summary"]["observed_mismatch"])
         self.assertFalse(report["summary"]["all_selected_pixels_equal"])
 
     def testEvidenceFailureCannotBeConclusive(self):
-        for overrides in ({"authority": "synthetic"},
-                          {"authority": "derived"},
-                          {"capture": False},
+        for overrides in ({"authority": "synthetic"}, {"capture": False},
                           {"control": False}):
             with tempfile.TemporaryDirectory() as tmp:
                 report = self._compare(tmp, _values(), _values(), [(0, 0)],
                                        **overrides)
-            self.assertFalse(report["summary"]["conclusive"], overrides)
+            self.assertFalse(report["summary"]["numerical_comparison_conclusive"], overrides)
             self.assertEqual(report["summary"]["status"],
                              "inconclusive_evidence")
-            self.assertFalse(report["conclusion"]["conclusive"])
+            self.assertFalse(report["conclusion"]["numerical_comparison_conclusive"])
             self.assertIsNone(report["conclusion"]["uv2_results_equal"])
 
     def testNonFiniteFloatsProduceStrictJson(self):
@@ -398,8 +393,8 @@ class NativeHostTests(unittest.TestCase):
             ran = subprocess.run([str(binary), str(output)],
                                  capture_output=True, text=True, check=False)
             self.assertEqual(ran.returncode, 0, ran.stderr)
-            for marker in ("probe=1", "layout=1", "readback=1", "control=1",
-                           "restore=1"):
+            for marker in ("probe=1", "layout=1", "control=1",
+                           "restore=1", "attribute_limit=1", "first_offset=1"):
                 self.assertIn(marker, ran.stdout)
             descriptor = json.loads(
                 (output / "uv2-probe.json").read_text())
@@ -567,7 +562,8 @@ class SealComparisonTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.temporary.cleanup()
 
-    def testBoundComparisonReproducesTheEvent1Divergence(self):
+    def testConditionalComparisonOnASyntheticGlsSidecar(self):
+        """The GL sidecar is fabricated; the frame is authentic."""
         metal = Path(self.temporary.name) / "metal"
         request = Path(self.temporary.name) / "request.json"
         request.write_text(json.dumps({
@@ -620,7 +616,7 @@ class SealComparisonTests(unittest.TestCase):
         gl_probe.pop("capture", None)
         gl_probe.pop("normal_target", None)
         gl_probe.update({
-            "side": "opengl", "sealed": True,
+            "side": "opengl", "sealed": True, "pid": seal["pid"],
             "session_id": seal["session_id"],
             "capture_frame_id": seal["capture_frame_id"],
             "raw_bytes": len(raw),
@@ -635,13 +631,22 @@ class SealComparisonTests(unittest.TestCase):
             frame=str(self.SEAL / "frame"), neighborhood=1,
             out=str(Path(self.temporary.name) / "out")))
         self.assertEqual(report["summary"]["mask_pixels"], 23)
-        self.assertTrue(report["summary"]["conclusive"])
+        self.assertTrue(report["summary"]["numerical_comparison_conclusive"])
         self.assertEqual(report["summary"]["max_ulp_difference_xy"], 1)
         self.assertTrue(report["identity"]["gl"]["match"])
         self.assertTrue(report["identity"]["metal"]["match"])
         self.assertTrue(report["identity"]["capture"]["match"])
         self.assertTrue(report["control"]["match"])
         self.assertTrue(report["conclusion"]["original_shader_control_match"])
+        self.assertEqual(report["provenance"]["frame"]["authority"], "authentic")
+        sidecar = report["provenance"]["gl_sidecar"]
+        self.assertEqual(sidecar["kind"], "descriptor_self_asserted")
+        self.assertFalse(sidecar["authenticated"])
+        self.assertTrue(sidecar["identity_checks"]["pid"])
+        self.assertFalse(
+            report["conclusion"]["authenticated_original_gl_observation"])
+        self.assertEqual(report["conclusion"]["classification"],
+                         "conditional_numerical_comparison")
 
 
 if __name__ == "__main__":

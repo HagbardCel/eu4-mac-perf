@@ -222,6 +222,8 @@ def capture_binding(gl: dict, metal: dict, seal: dict) -> dict:
             problems.append(f"{label} session")
         if capture.get("capture_frame_id") != seal.get("capture_frame_id"):
             problems.append(f"{label} capture frame")
+    if gl["descriptor"].get("pid") != seal.get("pid"):
+        problems.append("opengl pid")
     if metal_capture.get("manifest_sha256") != seal.get("manifest_sha256"):
         problems.append("metal replay did not execute the sealed manifest")
     if metal_capture.get("reference_sha256") != seal.get("reference_sha256"):
@@ -247,6 +249,19 @@ def _draw(record: dict, event_draw: dict) -> dict:
     }
 
 
+def _uniform_map(uniforms) -> dict:
+    result = {}
+    for uniform in uniforms or []:
+        name = uniform.get("name")
+        if name is None:
+            continue
+        if uniform.get("kind") == "sampler" or uniform.get("type") == "sampler":
+            result[name] = {"kind": "sampler", "unit": uniform.get("unit")}
+        else:
+            result[name] = {"sha256": uniform.get("sha256")}
+    return result
+
+
 def input_identity(probe: dict, event: dict) -> dict:
     """Checks the probe descriptor against the captured event's exact inputs."""
     descriptor = probe["descriptor"]
@@ -259,44 +274,20 @@ def input_identity(probe: dict, event: dict) -> dict:
     probe_texture = probe_target.get("texture")
     if probe_texture is None:
         probe_texture = (probe_target.get("color_attachment") or {}).get("name")
-    observed = {
-        "event": event.get("index"),
-        "program": program.get("name"),
-        "framebuffer": target.get("framebuffer"),
-        "texture": color.get("name"),
-        "internal_format": color.get("internal_format"),
-        "draw": event.get("draw"),
-    }
-    checks["program"] = descriptor.get("program") == observed["program"]
-    checks["framebuffer"] = probe_target.get("framebuffer") == observed["framebuffer"]
-    checks["texture"] = probe_texture == observed["texture"]
-    expected_draw = _draw(observed["draw"] or {}, observed["draw"] or {})
-    actual_draw = _draw(descriptor.get("draw") or {}, observed["draw"] or {})
+    checks["program"] = descriptor.get("program") == program.get("name")
+    checks["framebuffer"] = probe_target.get("framebuffer") == target.get("framebuffer")
+    checks["texture"] = probe_texture == color.get("name")
+    event_draw = event.get("draw") or {}
+    expected_draw = _draw(event_draw, event_draw)
+    actual_draw = _draw(descriptor.get("draw") or {}, event_draw)
     checks["draw"] = actual_draw == expected_draw
     shaders = {stage.get("stage"): stage.get("sha256")
                for stage in program.get("shaders") or []}
     sources = descriptor.get("sources") or {}
     checks["vertex_source"] = sources.get("vertex_sha256") == shaders.get("vertex")
     checks["fragment_source"] = sources.get("fragment_sha256") == shaders.get("pixel")
-    captured_uniforms = {}
-    for uniform in program.get("uniforms") or []:
-        name = uniform.get("name")
-        if name is None:
-            continue
-        if uniform.get("type") == "sampler":
-            captured_uniforms[name] = {"kind": "sampler", "unit": uniform.get("unit")}
-        else:
-            captured_uniforms[name] = {"sha256": uniform.get("sha256")}
-    probe_uniforms = {}
-    for uniform in descriptor.get("uniforms") or []:
-        name = uniform.get("name")
-        if name is None:
-            continue
-        if uniform.get("kind") == "sampler":
-            probe_uniforms[name] = {"kind": "sampler", "unit": uniform.get("unit")}
-        else:
-            probe_uniforms[name] = {"sha256": uniform.get("sha256")}
-    checks["uniforms"] = captured_uniforms == probe_uniforms
+    checks["uniforms"] = _uniform_map(program.get("uniforms")) == _uniform_map(
+        descriptor.get("uniforms"))
     captured_attributes = {a.get("name"): a.get("sha256")
                            for a in event.get("attributes") or []}
     probe_attributes = {a.get("name"): a.get("sha256")
@@ -311,8 +302,7 @@ def input_identity(probe: dict, event: dict) -> dict:
     for name, passed in checks.items():
         if not passed:
             problems.append(name)
-    return {"match": not problems, "problems": problems, "checks": checks,
-            "observed": observed}
+    return {"match": not problems, "problems": problems, "checks": checks}
 
 
 def control_correspondence(control: dict, reference: dict, width: int,
@@ -441,7 +431,7 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
         "mask_pixels_covered_by_both": len(covered),
         "coverage_complete": complete,
         "status": status,
-        "conclusive": conclusive,
+        "numerical_comparison_conclusive": conclusive,
         "observed_mismatch": observed_mismatch,
         "all_selected_pixels_equal": all_equal,
         "xy_bit_for_bit_equal": all_equal if conclusive else None,
@@ -457,12 +447,16 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
                       "sha256": metal["sha256"]},
         },
         "identity": identity, "control": control,
-        "mask": {"pixels": [{"x": x, "y": y} for x, y in mask]},
+        "mask": {},
         "summary": summary, "pixels": entries,
         "conclusion": {
             "authority": authority,
             "evidence_checks": evidence_checks,
-            "conclusive": conclusive,
+            "numerical_comparison_conclusive": conclusive,
+            "authenticated_original_gl_observation": False,
+            "classification": ("conditional_numerical_comparison"
+                               if conclusive
+                               else "unverified_diagnostic_observation"),
             "uv2_results_equal": all_equal if conclusive else None,
             "original_shader_control_match": control.get("match") is True,
             "xy_bit_for_bit_equal": all_equal if conclusive else None,
@@ -518,14 +512,26 @@ def run(args: argparse.Namespace) -> dict:
     }
     report = compare(gl, metal, identity=identity, control=control, mask=mask,
                      neighborhood=int(args.neighborhood), authority=authority)
-    report["conclusion"]["trusted_evidence"] = (
-        trace.get("_trusted_evidence") is not None)
-    report["inputs"]["frame"] = {
-        "path": str(frame_dir), "event": event_index,
-        "session_id": seal.get("session_id"),
-        "capture_frame_id": seal.get("capture_frame_id"),
-        "manifest_sha256": seal.get("manifest_sha256"),
-        "reference_sha256": seal.get("reference_sha256")}
+    sidecar_checks = {
+        "capture": identity["capture"]["match"],
+        "pid": gl["descriptor"].get("pid") == seal.get("pid"),
+        "event": gl["descriptor"].get("event") == event_index,
+        "draw": identity["gl"]["checks"].get("draw") is True,
+    }
+    report["provenance"] = {
+        "frame": {"authority": authority, "sealed": seal.get("sealed"),
+                  "trusted_evidence": trace.get("_trusted_evidence") is not None},
+        "gl_sidecar": {
+            "kind": "descriptor_self_asserted", "authenticated": False,
+            "identity_checks": sidecar_checks,
+            "reason": "the seal does not attest the uv2 sidecar bytes",
+        },
+        "metal_sidecar": {"kind": "replay_derived", "authenticated": False},
+    }
+    report["conclusion"]["authenticated_original_gl_observation"] = False
+    report["conclusion"]["sidecar_identity_checks"] = sidecar_checks
+    report["provenance"]["frame"].update(
+        {"path": str(frame_dir), "event": event_index})
     report["mask"]["observation"] = {
         "path": str(reference["path"]), "sha256": reference["sha256"],
         "event": reference["event"], "timing": reference["timing"],

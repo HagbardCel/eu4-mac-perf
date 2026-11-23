@@ -7297,20 +7297,6 @@ typedef struct {
     uv2_attribute attributes[UV2_PROBE_MAX_ATTRS];
 } uv2_state_guard;
 
-static int uv2_probe_identifier_ok(const char *text) {
-    if (text == NULL || text[0] == 0) {
-        return 0;
-    }
-    for (const char *cursor = text; *cursor != 0; cursor++) {
-        char character = *cursor;
-        if (!((character >= 'a' && character <= 'z') ||
-              (character >= 'A' && character <= 'Z') ||
-              (character >= '0' && character <= '9') || character == '_')) {
-            return 0;
-        }
-    }
-    return 1;
-}
 
 /* Reads the original vertex and fragment sources from the live program.  The
  * engine compiled these bytes from GLSL; glGetShaderSource returns them
@@ -7604,6 +7590,10 @@ static void uv2_probe_apply_uniforms(GLuint source, GLuint destination) {
     }
 }
 
+static int uv2_probe_attribute_count_ok(GLint count) {
+    return count >= 0 && count <= UV2_PROBE_MAX_ATTRS;
+}
+
 static void uv2_probe_save_state(uv2_state_guard *guard, GLuint program,
                                  uintptr_t master) {
     memset(guard, 0, sizeof(*guard));
@@ -7648,9 +7638,6 @@ static void uv2_probe_save_state(uv2_state_guard *guard, GLuint program,
     glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &attribute_count);
     if (attribute_count < 0) {
         attribute_count = 0;
-    }
-    if (attribute_count > UV2_PROBE_MAX_ATTRS) {
-        attribute_count = UV2_PROBE_MAX_ATTRS;
     }
     for (GLint i = 0; i < attribute_count; i++) {
         char name[256];
@@ -7969,11 +7956,8 @@ static int uv2_probe_attribute_digest(const uv2_attribute *attribute,
                                       int indexed, int count,
                                       int instance_count, int first,
                                       int32_t index_first, int32_t index_last,
-                                      char *sha, uint64_t *range_begin,
-                                      uint64_t *range_bytes) {
+                                      char *sha) {
     sha[0] = 0;
-    *range_begin = 0;
-    *range_bytes = 0;
     if (!attribute->active || !attribute->enabled) {
         return 0;
     }
@@ -8015,8 +7999,6 @@ static int uv2_probe_attribute_digest(const uv2_attribute *attribute,
             return -1;
         }
         sha256_hex(base + begin, (size_t)span, sha);
-        *range_begin = begin;
-        *range_bytes = span;
         return 0;
     }
     uint64_t offset = (uint64_t)(int64_t)attribute->offset;
@@ -8046,8 +8028,6 @@ static int uv2_probe_attribute_digest(const uv2_attribute *attribute,
                        data);
     sha256_hex(data, (size_t)bytes, sha);
     free(data);
-    *range_begin = begin;
-    *range_bytes = bytes;
     return 0;
 }
 
@@ -8057,6 +8037,9 @@ static void uv2_probe_write_failure(const char *status, const char *reason,
                                     int observed_program,
                                     int observed_framebuffer,
                                     int observed_texture) {
+    (void)observed_program;
+    (void)observed_framebuffer;
+    (void)observed_texture;
     char *buffer = NULL;
     size_t size = 0;
     FILE *memory = open_memstream(&buffer, &size);
@@ -8066,15 +8049,10 @@ static void uv2_probe_write_failure(const char *status, const char *reason,
                 "{\"schema\":\"gfx-uv2-probe/v1\",\"side\":\"opengl\","
                 "\"status\":\"%s\",\"reason\":\"%s\","
                 "\"session_id\":\"%s\",\"capture_frame_id\":%llu,\"pid\":%d,"
-                "\"event\":%d,\"program\":%d,\"observed\":{\"program\":%d,"
-                "\"framebuffer\":%d,\"texture\":%d},"
-                "\"expected\":{\"program\":%d,\"framebuffer\":%d,"
-                "\"texture\":%d}}",
+                "\"event\":%d,\"program\":%d}",
                 status, reason, g.session_id,
                 (unsigned long long)g.capture_id, (int)getpid(),
-                g_uv2_probe.event, g_uv2_probe.program, observed_program,
-                observed_framebuffer, observed_texture, g_uv2_probe.program,
-                g_uv2_probe.framebuffer, g_uv2_probe.texture);
+                g_uv2_probe.event, g_uv2_probe.program);
         fclose(memory);
         if (!out.failed && buffer != NULL) {
             char path[FTRACE_PATH];
@@ -8099,11 +8077,12 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         return 0;
     }
     if (!indexed || count <= 0 || mode == 0 || instances != 1 ||
-        base_vertex != 0) {
+        base_vertex != 0 || first != 0) {
         g_uv2_probe_done = 1;
         uv2_probe_write_failure("selection_unsupported",
                                 "the probe supports single-instance indexed "
-                                "draws with base_vertex zero only", -1, -1, -1);
+                                "draws with base_vertex and first zero only",
+                                -1, -1, -1);
         return 0;
     }
     if (mkdir_p(g_uv2_probe.dir) != 0) {
@@ -8214,6 +8193,17 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         g_uv2_probe_done = 1;
         return 0;
     }
+    GLint active_attributes = 0;
+    glGetProgramiv((GLuint)program, GL_ACTIVE_ATTRIBUTES, &active_attributes);
+    if (!uv2_probe_attribute_count_ok(active_attributes)) {
+        uv2_probe_write_failure(
+            "unsupported_attribute_count",
+            "the original program declares more active attributes than the "
+            "diagnostic state guard supports", (int)program,
+            (int)draw_framebuffer, (int)texture_name);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
     uv2_state_guard guard;
     uv2_probe_save_state(&guard, (GLuint)program, master);
     if (guard.attribute_count == 0) {
@@ -8303,8 +8293,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                                 (int)draw_framebuffer, (int)texture_name);
         goto done;
     }
-    if (!uv2_probe_identifier_ok(g_uv2_probe.varying) ||
-        strstr(vertex_source, g_uv2_probe.varying) == NULL) {
+    if (strstr(vertex_source, g_uv2_probe.varying) == NULL) {
         uv2_probe_write_failure("varying_missing",
                                 "the original vertex stage does not declare "
                                 "the uv2 varying", (int)program,
@@ -8574,8 +8563,7 @@ done:
                         "\"sealed\":%s,"
                         "\"session_id\":\"%s\",\"capture_frame_id\":%llu,"
                         "\"pid\":%d,\"event\":%d,\"program\":%d,"
-                        "\"target\":{\"framebuffer\":%d,\"texture\":%d,"
-                        "\"width\":%d,\"height\":%d},"
+                        "\"target\":{\"framebuffer\":%d,\"texture\":%d},"
                         "\"draw\":{\"entry\":\"%s\",\"mode\":%u,"
                         "\"count\":%d,\"first\":%d,\"instances\":%d,"
                         "\"base_vertex\":%d,\"indexed\":%s,"
@@ -8585,18 +8573,14 @@ done:
                         "\"width\":%d,\"height\":%d,\"row_stride\":%d,"
                         "\"raw_file\":\"%s\",\"raw_bytes\":%zu,"
                         "\"raw_sha256\":\"%s\","
-                        "\"control\":{\"file\":\"%s\","
-                        "\"pixel_format\":\"BGRA8\",\"scope\":\"RGB\","
-                        "\"sha256\":\"%s\"},"
+                        "\"control\":{\"file\":\"%s\",\"sha256\":\"%s\"},"
                         "\"sources\":{\"vertex_sha256\":\"%s\","
                         "\"fragment_sha256\":\"%s\"},"
-                        "\"indices\":{\"buffer\":%d,\"count\":%d,"
-                        "\"sha256\":\"%s\"}",
+                        "\"indices\":{\"count\":%d,\"sha256\":\"%s\"}",
                         bool_text(g.seal_enabled != 0), g.session_id,
                         (unsigned long long)g.capture_id,
                         (int)getpid(), event, (int)program,
                         (int)draw_framebuffer, (int)texture_name,
-                        width, height,
                         indexed ? "_GfxDrawIndexed" : "_GfxDraw", mode, count,
                         first, instances, base_vertex,
                         bool_text(indexed),
@@ -8604,7 +8588,7 @@ done:
                         width, height,
                         width * 16, probe_file, probe_bytes, probe_sha,
                         control_file, control_sha, vertex_sha, fragment_sha,
-                        (int)element_buffer, count, index_sha);
+                        count, index_sha);
                 /* Attribute and uniform input digests, computed from the live
                    driver state and compared offline with the sealed capture. */
                 jprintf(&out, ",\"attributes\":[");
@@ -8615,20 +8599,16 @@ done:
                         continue;
                     }
                     char digest[65] = "";
-                    uint64_t range_begin = 0;
-                    uint64_t range_bytes = 0;
                     int digest_ok = attribute->enabled
                         ? uv2_probe_attribute_digest(
                               attribute, indexed, count, instances, first,
-                              index_first, index_last, digest, &range_begin,
-                              &range_bytes)
+                              index_first, index_last, digest)
                         : 0;
                     jprintf(&out,
                             "%s{\"name\":\"%s\",\"location\":%d,"
                             "\"enabled\":%s,\"components\":%d,"
                             "\"gl_type\":\"0x%x\",\"normalized\":%s,"
                             "\"stride\":%d,\"offset\":%d,\"divisor\":%d,"
-                            "\"range_begin\":%llu,\"range_bytes\":%llu,"
                             "\"sha256\":\"%s\",\"digest_ok\":%s}",
                             emitted > 0 ? "," : "", attribute->name,
                             attribute->location,
@@ -8636,9 +8616,7 @@ done:
                             (int)attribute->size, (unsigned)attribute->type,
                             bool_text(attribute->normalized),
                             (int)attribute->stride, (int)attribute->offset,
-                            (int)attribute->divisor,
-                            (unsigned long long)range_begin,
-                            (unsigned long long)range_bytes, digest,
+                            (int)attribute->divisor, digest,
                             bool_text(digest_ok == 0 && attribute->enabled));
                     emitted++;
                 }
@@ -8782,7 +8760,7 @@ static void uv2_probe_prepare(int event, int indexed, unsigned mode, int count,
     g_uv2_probe_pending.master = master;
     g_uv2_probe_pending.caller_rva = caller_rva;
     if (!indexed || count <= 0 || mode == 0 || instances != 1 ||
-        base_vertex != 0) {
+        base_vertex != 0 || first != 0) {
         return;
     }
     GLint program = 0;
@@ -8884,6 +8862,10 @@ static void uv2_probe_finish(void) {
         g_uv2_probe_pending.base_vertex, g_uv2_probe_pending.master);
     g_uv2_probe_require_pre = 0;
     uv2_probe_clear_pending();
+}
+
+int eu4_gfx_uv2_probe_test_attribute_count_ok(int count) {
+    return uv2_probe_attribute_count_ok((GLint)count);
 }
 
 int eu4_gfx_uv2_probe_test_configure(const char *directory, int event,

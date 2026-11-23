@@ -1356,7 +1356,7 @@ Future **targeted** measurements (including further R0-M work) remain possible w
 
 - CPU reconciliation obtained in epoch A.
 - Drawable census **not evaluated** (`unsupported_drawable` readback policy).
-- Automated stack attribution failed on an unsupported `sample` formatting variant.
+- Automated stack attribution failed on an unsupported Rosetta `sample` formatting variant. A separate **offline requalification** with the PR #43 parser produced `partial_complete` (1,744 rows, root 791), with **≈22.9% of sample weight unattributed**. This is a limited offline analysis, not a successful original acquisition: the session remains **`incomplete_gates`**, and the unattributed share limits optimization guidance.
 - Acquisition status **`incomplete_gates`**; frame staticity and lossless-skip candidates were **not** evaluated.
 
 ## Current technical direction
