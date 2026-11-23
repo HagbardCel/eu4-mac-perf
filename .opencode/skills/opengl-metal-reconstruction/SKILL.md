@@ -36,8 +36,12 @@ Prefer the mounted DSH tools over composing equivalent shell commands:
   decompilation, paginated static cross-references);
 - captured event resource graph → `eu4_capture` with `op=graph`;
 - existing differential evidence → `eu4_diff_inspect`;
-- previous session evidence → `eu4_session`;
+- one captured event's original inputs, exact uniform bits, bound Metal
+  correspondence and first divergence → `eu4_case_inspect` with `event`;
 - replay/case inspection → `eu4_replay` / `eu4_case_inspect`.
+
+Before a speculative experiment, inspect the first verified divergence and
+its exact inputs, bindings and pixels.
 
 Use shell commands for work the native tools do not cover: editing source,
 compiling, focused tests and specialized analysis. Do not wrap routine shell

@@ -165,6 +165,12 @@ test('argument mapping covers each tool', () => {
     '--full'])
   assert.deepEqual(buildArgs('eu4_case_inspect', { case: '/c' }),
     ['eu4_case_inspect', '--case', '/c'])
+  assert.deepEqual(buildArgs('eu4_case_inspect', {
+    case: '/c', event: 1, pixel: '129,4', frame: 2,
+    metal: '/m', shaders: '/s', full: true,
+  }), ['eu4_case_inspect', '--case', '/c', '--event', '1',
+    '--pixel', '129,4', '--frame', '2', '--metal', '/m',
+    '--shaders', '/s', '--full'])
 })
 
 test('environment is allowlisted', () => {

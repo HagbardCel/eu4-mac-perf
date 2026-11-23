@@ -2551,6 +2551,40 @@ def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
         if result.get(key) != replay.get(key):
             problems.append(
                 f"producer receipt result.{key} disagrees with replay.json")
+    declared = []
+    for item in replay.get("checkpoints") or []:
+        name = Path(str(item.get("file"))).name if isinstance(item, dict) else ""
+        if not name or Path(str(item.get("file"))).name != str(
+                item.get("file")) or name in declared:
+            problems.append("replay.json checkpoint files are invalid")
+        else:
+            declared.append(name)
+    recorded = result.get("checkpoint_files")
+    if recorded is None:
+        recorded = [] if not declared else None
+    if not isinstance(recorded, list):
+        problems.append("producer receipt has no checkpoint file list")
+    else:
+        seen = []
+        for item in recorded:
+            name = str(item.get("file") or "") if isinstance(item, dict) else ""
+            if (not name or Path(name).name != name or name in seen
+                    or not _valid_sha256(item.get("sha256")
+                                         if isinstance(item, dict) else None)):
+                problems.append("producer receipt checkpoint file entry is invalid")
+                continue
+            path = case_dir / "replay" / name
+            if not path.is_file():
+                problems.append(
+                    f"producer receipt checkpoint file is missing: {name}")
+            elif item.get("sha256") != _sha(path):
+                problems.append(
+                    f"producer receipt checkpoint digest mismatch: {name}")
+            seen.append(name)
+        if set(seen) != set(declared):
+            problems.append(
+                "producer receipt checkpoint files do not match replay.json")
+
     seal = _case_capture_seal(case_dir, manifest)
     capture = receipt.get("capture") if isinstance(
         receipt.get("capture"), dict) else {}

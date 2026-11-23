@@ -164,16 +164,6 @@ def campaign_status(result: dict) -> dict:
     }
 
 
-def campaign_classification(result: dict) -> str | None:
-    """The source campaign's authoritative status, or None when unresolved.
-
-    An inconsistent record is never presented as the campaign verdict; callers
-    that need the diagnosis use :func:`campaign_status` for the reasons.
-    """
-    value = campaign_status(result)
-    return value["status"] if value["consistent"] else None
-
-
 def _campaign_floor(result: dict) -> str:
     """The campaign status a case may not exceed, or INCOMPLETE when unresolved."""
     campaign = campaign_status(result)
@@ -243,8 +233,7 @@ def _choose_pair(result: dict, pair_index: int | None = None) -> dict | None:
 
 
 def _analysis(result: dict, pair: dict | None, comparison: dict | None,
-              classification: str, artifacts: dict,
-              semantic: dict | None = None) -> str:
+              classification: str, artifacts: dict) -> str:
     scenario = result.get("scenario") or {}
     stop = result.get("stop") or {}
     health = result.get("health") or {}
@@ -319,17 +308,6 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
             f"attribution is withheld: {detail}. A packaged case cannot claim "
             "stronger attribution than its source campaign."
         )
-    if semantic:
-        first = (semantic.get("first") or {})
-        lines.append(
-            f"- First semantic divergence: `{first.get('field')}` "
-            f"(reference `{first.get('reference')}`, candidate "
-            f"`{first.get('candidate')}`)."
-        )
-        lines.append(
-            f"- Semantic localization: `{semantic.get('status')}` at operation "
-            f"{semantic.get('operation_index')}."
-        )
     lines += [
         f"- Artifact budget: {artifacts.get('bytes')} / {artifacts.get('max_bytes')} bytes; "
         f"dropped {artifacts.get('dropped')}.",
@@ -398,11 +376,10 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
         missing.append("- Reference raw frame for the paired index.")
     if pair and not (pair.get("dumps") or {}).get("candidate", {}).get("found"):
         missing.append("- Candidate raw frame for the paired index.")
-    if not semantic:
-        missing.append(
-            "- Per-draw semantic operation prefix (caller/shader/uniform/sampler/target) "
-            "for the failing frame."
-        )
+    missing.append(
+        "- Per-draw operation prefix (caller/shader/uniform/sampler/target) "
+        "for the failing frame."
+    )
     lines += missing or ["- None identified for the compared frame."]
     lines += [
         "",
@@ -421,8 +398,7 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
 
 def build_case(run_dir: Path, *, out_dir: Path | None = None,
                pair_index: int | None = None,
-               semantic: dict | None = None,
-               resources: dict | None = None) -> dict:
+               ) -> dict:
     run_dir = Path(run_dir).resolve()
     result = _read_json(run_dir / "result.json")
     if result is None:
@@ -433,7 +409,7 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
     classification = _classify(result, pair, comparison)
     case_dir = Path(out_dir) if out_dir is not None else run_dir / "case"
     case_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("frames", "difference", "operations", "resources", "gpu", "repro"):
+    for name in ("frames", "difference", "gpu", "repro"):
         (case_dir / name).mkdir(exist_ok=True)
     artifacts = result.get("artifacts") or {}
     manifest = {
@@ -531,56 +507,6 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
         if record:
             gpu_records.append({"path": str(path.relative_to(run_dir)), "record": record})
     _write_json(case_dir / "gpu" / "raw-failures.json", {"records": gpu_records})
-    operations = {
-        "alignment": (comparison or {}).get("alignment"),
-        "comparison_reasons": (comparison or {}).get("reasons"),
-        "first_divergence": None,
-        "note": "A per-draw semantic prefix is required for operation-level localization.",
-    }
-    if semantic is not None:
-        operations["semantic"] = semantic
-        _write_json(case_dir / "operations" / "semantic.json", semantic)
-    else:
-        _write_json(case_dir / "semantic.json", {
-            "status": "missing",
-            "reason": "the live campaign stored frame bytes and health, not a per-draw operation prefix",
-        })
-    _write_json(case_dir / "operations" / "alignment.json", operations)
-    if resources is not None:
-        _write_json(case_dir / "resources" / "lineage.json", resources)
-    else:
-        _write_json(case_dir / "resources" / "lineage.json", {
-            "schema": "gfx-resource-lineage/v1",
-            "status": "missing",
-            "reason": "resource events are captured by the selected-event replay path",
-        })
-    if classification == CONFIRMED_RENDERING and semantic is None and pair:
-        _write_json(case_dir / "repro" / "targeted-capture-request.json", {
-            "schema": "gfx-targeted-capture-request/v1",
-            "session_id": result.get("session_id"),
-            "frame_index": pair.get("frame_index"),
-            "candidate_frame_index": pair.get("candidate_frame_index"),
-            "caller_signature": (pair.get("reference") or {}).get("caller_signature"),
-            "draws": (pair.get("reference") or {}).get("draws"),
-            "required": [
-                "ordered draw/clear/resolve operations",
-                "caller and shader identities",
-                "effective sampler-to-texture-unit mapping",
-                "vertex/index and uniform bindings",
-                "render-target and viewport state",
-                "raster/depth/blend state",
-                "GPU execution status",
-            ],
-            "suggested_command": (
-                "python3 -m automation.m6_frame capture --caller-rva <rva> "
-                "--occurrence <n> --output <dir>"
-            ),
-            "note": (
-                "The live campaign stores frame payloads and health, not a "
-                "per-draw operation prefix. Capture this prefix once before "
-                "another full campaign."
-            ),
-        })
     repro = {
         "schema": "gfx-diagnostic-repro/v1",
         "kind": "image-comparison",
@@ -592,8 +518,8 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
     }
     _write_json(case_dir / "repro" / "repro.json", repro)
     (case_dir / "analysis.md").write_text(
-        _analysis(result, pair, comparison, classification, artifacts,
-                  semantic=semantic), encoding="utf-8"
+        _analysis(result, pair, comparison, classification, artifacts),
+        encoding="utf-8"
     )
     packaged = {
         "schema": SCHEMA,

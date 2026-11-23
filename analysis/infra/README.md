@@ -28,7 +28,6 @@ Operational entry points:
 python3 -m automation.agent_tools eu4_re_query resolve SShaderOpenGL
 python3 -m automation.agent_tools eu4_diff_inspect --run <session-dir> --build-case
 python3 -m automation.agent_tools eu4_case_inspect --case <case-dir>
-python3 -m automation.gfx_metrics report --root <campaign-root> --ledger <ledger>
 ```
 
 Status and limits are authoritative in [docs/status.md](../../docs/status.md).

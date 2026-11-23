@@ -408,7 +408,7 @@ contradictory status, an unqualified `match` flag, and the pass-path floor.
 
 The PR was rebased onto `origin/main` `5a0ac03` before validation. Focused
 modules (`test_gfx_dual_run`, `test_gfx_case`, `test_agent_tools`,
-`test_offline_campaign`, `test_gfx_metrics`, `test_gfx_replay_case`,
+`test_offline_campaign`, `test_gfx_event_evidence`, `test_gfx_replay_case`,
 `test_gfx_qualification`) pass: 197 tests, OK.
 
 Full suite on clean worktrees with the same command

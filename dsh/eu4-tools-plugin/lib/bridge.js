@@ -189,6 +189,12 @@ export function buildArgs(tool, args = {}) {
     add('--sampler-shift-min', 'sampler_shift_min')
   } else if (tool === 'eu4_case_inspect') {
     add('--case', 'case')
+    add('--event', 'event')
+    add('--pixel', 'pixel')
+    add('--frame', 'frame')
+    add('--metal', 'metal')
+    add('--shaders', 'shaders')
+    if (args.full) output.push('--full')
   } else {
     throw new Error(`unknown EU4 tool: ${tool}`)
   }

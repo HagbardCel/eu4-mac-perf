@@ -534,7 +534,6 @@ class CaseAgreementTests(unittest.TestCase):
         self.assertFalse(status["consistent"], status)
         self.assertIsNone(status["status"])
         self.assertIn("no classification", " ".join(status["problems"]))
-        self.assertIsNone(gfx_case.campaign_classification(result))
         self.assertEqual(gfx_case._classify(result, pair, comparison),
                          gfx_case.INCOMPLETE)
 

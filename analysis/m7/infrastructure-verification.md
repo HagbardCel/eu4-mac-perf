@@ -20,7 +20,7 @@ python3 -m unittest \
 **107 tests, OK** via `automation.test_runner`. Node plugin suite:
 `npm test --prefix dsh/eu4-tools-plugin` → **9/9 pass**.
 
-Broader dependent modules (`test_gfx_metrics`, `test_gfx_replay_case`,
+Broader dependent modules (`test_gfx_event_evidence`, `test_gfx_replay_case`,
 `test_gfx_diagnostics`, `test_gfx_session`, `test_gfx_frame_graph`,
 `test_gfx_capture_native`, `test_gfx_frame_observe`,
 `test_gfx_live_capture_report`, the DSH suites) were run separately; the only

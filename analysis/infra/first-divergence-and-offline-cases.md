@@ -3,23 +3,6 @@
 **Status: implemented; synthetic historical regressions pass, a real package
 was produced, and one real correspondence failure was found and corrected.**
 
-## Semantic operation comparison
-
-`automation/gfx_semantic.py` normalizes only the fields the reconstructed
-engine contracts depend on:
-
-- draw/caller identity, topology, shader effect/variant;
-- sampler-to-texture-unit mapping (`texN` must map to unit N);
-- texture identities/digests, uniform values, render target and extent;
-- viewport/scissor, raster/cull, depth, blend;
-- clear flags/colour, resolve source/destination/orientation/scale;
-- GPU completion/refusal and observer-state restoration.
-
-It does not introduce a universal graphics IR. `first_divergence` walks the
-aligned prefix and returns the earliest mismatched field, with both normalized
-operations and the original operation pair. A missing side is `insufficient`,
-not `match`.
-
 ## Historical regressions (no EU4 launch)
 
 | Historical defect | Synthetic regression |
@@ -67,7 +50,7 @@ resource for every frame.
 - `result.json` (classification, stop, frame/health/comparison)
 - `frames/` (both raw payloads, normalized previews)
 - `difference/` (amplified difference image, exact statistics)
-- `operations/` (alignment evidence; semantic prefix when available)
+- `operations/` (alignment evidence)
 - `resources/` (lineage or an explicit missing-evidence record)
 - `gpu/` (health and raw failure records)
 - `analysis.md` (confirmed observations, excluded explanations, hypotheses,

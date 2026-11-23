@@ -229,8 +229,16 @@ export function definitions(run) {
     ),
     tool(
       'eu4_case_inspect',
-      'Summarize a diagnostic case package (classification, analysis path, artifact list).',
-      { case: string('case directory') },
+      'Inspect a diagnostic case. With --event, returns one captured event\'s original GL inputs, exact uniform FP32 bits, Metal correspondence, first divergence and missing evidence; add --pixel X,Y for a pixel read. Without --event, returns the bounded case summary.',
+      {
+        case: string('case directory or sealed frame directory'),
+        event: integer('captured event stream index to inspect'),
+        pixel: string('optional pixel coordinate X,Y on the selected event target'),
+        frame: integer('1-based sequence index for a multi-frame case'),
+        metal: string('already-produced Metal result directory for a sealed frame'),
+        shaders: string('translated shader directory for a sealed frame'),
+        full: boolean('return the complete selected-event view instead of the bounded projection'),
+      },
       ['case'],
       safe('eu4_case_inspect'),
     ),

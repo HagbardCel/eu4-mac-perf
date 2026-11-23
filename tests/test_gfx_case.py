@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import gfx_case, gfx_flight, gfx_semantic  # noqa: E402
+from automation import gfx_case, gfx_flight  # noqa: E402
 
 try:
     import numpy as np
@@ -214,24 +214,6 @@ class CaseBuilderTests(unittest.TestCase):
         (self.run / "result.json").write_text(json.dumps(self.result))
         packaged = gfx_case.build_case(self.run)
         self.assertEqual(packaged["classification"], gfx_case.GPU_FAILURE)
-
-    def test_semantic_prefix_is_packaged_and_explained(self):
-        reference = {"kind": "draw", "draw_id": "d1", "caller_rva": "0x1",
-                     "samplers": {"tex7": {"binding": 7}},
-                     "target_size": [8, 6], "shader": {"identity": "fx"},
-                     "draws": 1}
-        candidate = {"kind": "draw", "draw_id": "d1", "caller_rva": "0x1",
-                     "samplers": {"tex7": {"binding": 6}},
-                     "target_size": [8, 6], "shader": {"identity": "fx"},
-                     "draws": 1}
-        semantic = gfx_semantic.first_divergence([reference], [candidate])
-        packaged = gfx_case.build_case(
-            self.run, semantic=semantic, resources={"schema": "test"})
-        case_dir = Path(packaged["case_dir"])
-        self.assertTrue((case_dir / "operations" / "semantic.json").is_file())
-        analysis = (case_dir / "analysis.md").read_text()
-        self.assertIn("samplers.tex7.unit", analysis)
-        self.assertNotIn("Per-draw semantic operation prefix (caller/shader", analysis)
 
     def test_incomplete_campaign_keeps_the_measured_difference(self):
         self.result["classification"] = "incomplete"
