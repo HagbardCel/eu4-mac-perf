@@ -18,6 +18,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import struct
 import sys
 from pathlib import Path
@@ -26,12 +27,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import (gfx_event_evidence, gfx_frame_compare, m6_compare,
-                        m6_frame)  # noqa: E402
+from automation import (gfx_event_evidence, gfx_frame_compare,
+                        gfx_observation)  # noqa: E402
 
 SCHEMA = "gfx-uv2-probe/v1"
 COMPARISON_SCHEMA = "gfx-uv2-probe-comparison/v1"
 NEIGHBORHOOD_MAX = 4
+MAX_MASK_PIXELS = 4096
 
 
 class ProbeError(RuntimeError):
@@ -155,11 +157,23 @@ def _diff_mask(left, right):
     return gfx_frame_compare.difference_mask(left, right, 0)
 
 
-def _differences(left, right) -> list[tuple[int, int]]:
+def _differences(left, right,
+                 limit: int = MAX_MASK_PIXELS) -> list[tuple[int, int]]:
+    """Returns divergent pixels in the probe's lower-left convention.
+
+    ``load_frame`` decodes to a top-left array, while the raw uv2 payloads are
+    lower-left.  The conversion happens here, once, before sampling.
+    """
     import numpy as np
 
     mask = _diff_mask(left, right)
-    return [(int(x), int(y)) for y, x in np.argwhere(mask)]
+    count = int(np.count_nonzero(mask))
+    if count > limit:
+        raise ProbeError(
+            f"divergent mask has {count} pixels; the diagnostic budget is "
+            f"{limit}; refusing an unbounded report")
+    height = int(left.shape[0])
+    return [(int(x), height - 1 - int(y)) for y, x in np.argwhere(mask)]
 
 
 def _f32_bits(raw: bytes, offset: int) -> int:
@@ -315,7 +329,8 @@ def control_correspondence(control: dict, reference: dict, width: int,
     count = int(np.count_nonzero(mismatched))
     first = []
     for y, x in np.argwhere(mismatched)[:16]:
-        first.append({"x": int(x), "y": int(y),
+        first.append({"x": int(x), "y": height - 1 - int(y),
+                      "orientation": "lower_left",
                       "control_rgb": [int(v) for v in left[y, x, :3]],
                       "reference_rgb": [int(v) for v in right[y, x, :3]],
                       "max_channel_error": int(mismatched[y, x])})
@@ -342,8 +357,14 @@ def _neighborhood(mask: list[tuple[int, int]], width: int, height: int,
     return sorted(coordinates, key=lambda item: (item[1], item[0]))
 
 
+def _json_number(value: float):
+    """JSON has no NaN/Infinity token; raw bits remain in the bit fields."""
+    return value if math.isfinite(value) else None
+
+
 def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
-            mask: list[tuple[int, int]], neighborhood: int) -> dict:
+            mask: list[tuple[int, int]], neighborhood: int,
+            authority: str) -> dict:
     width, height = gl["width"], gl["height"]
     if (width, height) != (metal["width"], metal["height"]):
         raise ProbeError("the OpenGL and Metal probe extents differ")
@@ -357,6 +378,12 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
         metal_values = [_bits_float(bits) for bits in metal_bits]
         bit_equal = {name: gl_bits[i] == metal_bits[i]
                      for i, name in enumerate(components)}
+        signed = {}
+        for i, name in enumerate(components):
+            difference = metal_values[i] - gl_values[i]
+            signed[name] = (_json_number(difference)
+                            if math.isfinite(gl_values[i])
+                            and math.isfinite(metal_values[i]) else None)
         entries.append({
             "x": x, "y": y, "orientation": "lower_left",
             "mask_pixel": (x, y) in mask_set,
@@ -364,11 +391,11 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
                         for i, name in enumerate(components)},
             "metal_bits": {name: f"0x{metal_bits[i]:08x}"
                            for i, name in enumerate(components)},
-            "gl_values": {name: gl_values[i] for i, name in enumerate(components)},
-            "metal_values": {name: metal_values[i]
+            "gl_values": {name: _json_number(gl_values[i])
+                          for i, name in enumerate(components)},
+            "metal_values": {name: _json_number(metal_values[i])
                              for i, name in enumerate(components)},
-            "signed_differences": {name: metal_values[i] - gl_values[i]
-                                   for i, name in enumerate(components)},
+            "signed_differences": signed,
             "ulp_differences": {name: _ulp(gl_bits[i], metal_bits[i])
                                 for i, name in enumerate(components)},
             "bit_equal": bit_equal,
@@ -378,46 +405,69 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
         })
     covered = [e for e in entries if e["mask_pixel"]
                and e["covered"]["gl"] and e["covered"]["metal"]]
-    conclusive = bool(covered)
+    coverage = len(mask)
+    complete = coverage > 0 and len(covered) == coverage
+    observed_mismatch = None
+    if covered:
+        observed_mismatch = any(
+            not (e["bit_equal"]["x"] and e["bit_equal"]["y"]) for e in covered)
+    all_equal = (not observed_mismatch) if complete else None
+    evidence_checks = {
+        "capture_authority": authority == "authentic",
+        "capture_binding": identity["capture"]["match"],
+        "input_identity": identity["gl"]["match"] and identity["metal"]["match"],
+        "original_shader_control": control.get("match") is True,
+        "coverage_complete": complete,
+    }
+    evidence_ok = all(evidence_checks.values())
+    conclusive = evidence_ok and complete
+    if conclusive:
+        status = ("conclusive_unequal" if observed_mismatch
+                  else "conclusive_equal")
+    elif coverage == 0:
+        status = "inconclusive_no_mask"
+    elif not covered:
+        status = "inconclusive_uncovered"
+    elif not complete:
+        status = "inconclusive_partial_coverage"
+    else:
+        status = "inconclusive_evidence"
     ulps = [e["ulp_differences"][c] for e in covered for c in ("x", "y")]
-    signed = [abs(e["signed_differences"][c]) for e in covered for c in ("x", "y")]
+    signed_abs = [abs(e["signed_differences"][c]) for e in covered
+                  for c in ("x", "y")
+                  if e["signed_differences"][c] is not None]
     summary = {
-        "mask_pixels": len(mask),
-        "reported_pixels": len(entries),
+        "mask_pixels": coverage,
         "mask_pixels_covered_by_both": len(covered),
-        "mask_pixels_uncovered": len(mask) - len(covered),
-        "status": "compared" if conclusive else "inconclusive",
+        "coverage_complete": complete,
+        "status": status,
         "conclusive": conclusive,
-        # An empty comparison is unknown, never equal.
-        "bit_for_bit_equal_xy": (
-            all(e["bit_equal"]["x"] and e["bit_equal"]["y"] for e in covered)
-            if conclusive else None),
-        "max_ulp_difference_xy": max(ulps) if conclusive else None,
-        "max_abs_signed_difference_xy": max(signed) if conclusive else None,
+        "observed_mismatch": observed_mismatch,
+        "all_selected_pixels_equal": all_equal,
+        "xy_bit_for_bit_equal": all_equal if conclusive else None,
+        "max_ulp_difference_xy": max(ulps) if covered else None,
+        "max_abs_signed_difference_xy": max(signed_abs) if signed_abs else None,
     }
     return {
         "schema": COMPARISON_SCHEMA,
         "created_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "inputs": {
-            "gl": {"directory": str(gl["directory"]), "sha256": gl["sha256"],
-                   "descriptor": gl["descriptor"]},
+            "gl": {"directory": str(gl["directory"]), "sha256": gl["sha256"]},
             "metal": {"directory": str(metal["directory"]),
-                      "sha256": metal["sha256"],
-                      "descriptor": metal["descriptor"]},
+                      "sha256": metal["sha256"]},
         },
         "identity": identity, "control": control,
         "mask": {"pixels": [{"x": x, "y": y} for x, y in mask]},
         "summary": summary, "pixels": entries,
         "conclusion": {
-            "kind": "diagnostic_evidence",
-            "input_identity_match": identity["gl"]["match"] and identity["metal"]["match"],
-            "capture_binding_match": identity["capture"]["match"],
-            "original_shader_control_match": control.get("match") is True,
+            "authority": authority,
+            "evidence_checks": evidence_checks,
             "conclusive": conclusive,
-            "xy_bit_for_bit_equal": summary["bit_for_bit_equal_xy"],
+            "uv2_results_equal": all_equal if conclusive else None,
+            "original_shader_control_match": control.get("match") is True,
+            "xy_bit_for_bit_equal": all_equal if conclusive else None,
         },
     }
-
 
 def run(args: argparse.Namespace) -> dict:
     gl = load_probe(Path(args.gl))
@@ -427,6 +477,7 @@ def run(args: argparse.Namespace) -> dict:
         raise ProbeError("the OpenGL and Metal probes name different events")
     frame_dir = Path(args.frame)
     trace, seal, event = frame_context(frame_dir, event_index)
+    authority = gfx_observation.authority(trace, seal)
     target = gl["descriptor"].get("target") or {}
     texture = target.get("texture")
     if texture is None:
@@ -466,7 +517,9 @@ def run(args: argparse.Namespace) -> dict:
         "capture": capture_binding(gl, metal, seal),
     }
     report = compare(gl, metal, identity=identity, control=control, mask=mask,
-                     neighborhood=int(args.neighborhood))
+                     neighborhood=int(args.neighborhood), authority=authority)
+    report["conclusion"]["trusted_evidence"] = (
+        trace.get("_trusted_evidence") is not None)
     report["inputs"]["frame"] = {
         "path": str(frame_dir), "event": event_index,
         "session_id": seal.get("session_id"),
@@ -481,7 +534,8 @@ def run(args: argparse.Namespace) -> dict:
         "path": str(color_path), "sha256": metal_mask["sha256"]}
     out = Path(args.out) if args.out else gl["directory"]
     out.mkdir(parents=True, exist_ok=True)
-    (out / "comparison.json").write_text(json.dumps(report, indent=2) + "\n")
+    (out / "comparison.json").write_text(
+        json.dumps(report, indent=2, allow_nan=False) + "\n")
     return report
 
 
@@ -506,7 +560,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps({"status": "ok", "summary": report["summary"],
                       "conclusion": report["conclusion"],
                       "out": str(Path(args.out or args.gl) / "comparison.json")},
-                     indent=2))
+                     indent=2, allow_nan=False))
     return 0
 
 

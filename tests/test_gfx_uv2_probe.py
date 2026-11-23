@@ -210,12 +210,22 @@ class ComparisonTests(unittest.TestCase):
         _write_probe(root, side, values=values)
         return gfx_uv2_probe.load_probe(root)
 
-    def _identity(self):
+    def _identity(self, *, capture=True, control=True):
         return {"gl": {"match": True, "problems": [], "checks": {},
                        "observed": {}},
                 "metal": {"match": True, "problems": [], "checks": {},
                           "observed": {}},
-                "capture": {"match": True, "problems": []}}
+                "capture": {"match": capture, "problems": []}}
+
+    def _compare(self, tmp, gl_values, metal_values, mask, *,
+                 authority="authentic", capture=True, control=True,
+                 neighborhood=0):
+        return gfx_uv2_probe.compare(
+            self._probe(Path(tmp) / "gl", "opengl", gl_values),
+            self._probe(Path(tmp) / "metal", "metal", metal_values),
+            identity=self._identity(capture=capture),
+            control={"match": control}, mask=mask, neighborhood=neighborhood,
+            authority=authority)
 
     def testRawBitsValuesUlpsAndBitEquality(self):
         metal = _values()
@@ -223,11 +233,7 @@ class ComparisonTests(unittest.TestCase):
         gl = _values()
         gl[1][1][0] = struct.unpack("<f", struct.pack("<I", original + 1))[0]
         with tempfile.TemporaryDirectory() as tmp:
-            report = gfx_uv2_probe.compare(
-                self._probe(Path(tmp) / "gl", "opengl", gl),
-                self._probe(Path(tmp) / "metal", "metal", metal),
-                identity=self._identity(), control={"match": True},
-                mask=[(1, 1)], neighborhood=1)
+            report = self._compare(tmp, gl, metal, [(1, 1)], neighborhood=1)
         center = [e for e in report["pixels"]
                   if (e["x"], e["y"]) == (1, 1)][0]
         self.assertFalse(center["bit_equal"]["x"])
@@ -235,31 +241,142 @@ class ComparisonTests(unittest.TestCase):
         self.assertNotEqual(center["signed_differences"]["x"], 0.0)
         self.assertEqual(report["summary"]["max_ulp_difference_xy"], 1)
         self.assertEqual(len(report["pixels"]), 9)
-        self.assertFalse(report["summary"]["bit_for_bit_equal_xy"])
+        self.assertTrue(report["summary"]["conclusive"])
+        self.assertTrue(report["summary"]["observed_mismatch"])
+        self.assertFalse(report["summary"]["all_selected_pixels_equal"])
 
-    def testZeroCoverageIsInconclusiveNotEquivalent(self):
+    def testLowerLeftSamplingUsesTheCorrectRawRow(self):
+        width, height = 2, 4
+        # Construct in lower-left order: only (0, 3) differs.
+        left = bytearray([10, 20, 30, 255] * (width * height))
+        right = bytearray(left)
+        right[3 * width * 4] = 11
         with tempfile.TemporaryDirectory() as tmp:
+            a = Path(tmp) / "a.bgra"
+            b = Path(tmp) / "b.bgra"
+            a.write_bytes(bytes(left))
+            b.write_bytes(bytes(right))
+            left_image = gfx_uv2_probe._image(
+                a, hashlib.sha256(bytes(left)).hexdigest(), width, height, "a")
+            right_image = gfx_uv2_probe._image(
+                b, hashlib.sha256(bytes(right)).hexdigest(), width, height, "b")
+            mask = gfx_uv2_probe._differences(left_image, right_image)
+            self.assertEqual(mask, [(0, 3)])
+            # Distinct raw values at the lower-left row 3 and row 0.
+            def raw(value):
+                body = bytearray()
+                for y in range(height):
+                    for x in range(width):
+                        body.extend(struct.pack("<4f", value, y, 0.0, 1.0))
+                return body
+            gl = {"width": width, "height": height, "raw": raw(0.0),
+                  "directory": Path(tmp), "sha256": "0" * 64,
+                  "descriptor": {"side": "opengl"}}
+            metal = {"width": width, "height": height, "raw": raw(0.0),
+                     "directory": Path(tmp), "sha256": "0" * 64,
+                     "descriptor": {"side": "metal"}}
+            metal["raw"] = raw(0.0)
+            # Perturb the physical lower-left row 3 pixel in Metal.
+            offset = (3 * width + 0) * 16
+            struct.pack_into("<f", metal["raw"], offset, 7.0)
             report = gfx_uv2_probe.compare(
-                self._probe(Path(tmp) / "gl", "opengl", _values(False)),
-                self._probe(Path(tmp) / "metal", "metal", _values(False)),
-                identity=self._identity(), control={"match": True},
-                mask=[(0, 0), (1, 1)], neighborhood=0)
-        self.assertEqual(report["summary"]["mask_pixels_covered_by_both"], 0)
-        self.assertFalse(report["summary"]["conclusive"])
-        self.assertIsNone(report["summary"]["bit_for_bit_equal_xy"])
-        self.assertIsNone(report["conclusion"]["xy_bit_for_bit_equal"])
-        self.assertFalse(report["conclusion"]["conclusive"])
+                gl, metal, identity=self._identity(), control={"match": True},
+                mask=mask, neighborhood=0, authority="authentic")
+        entry = report["pixels"][0]
+        self.assertEqual((entry["x"], entry["y"]), (0, 3))
+        self.assertEqual(entry["gl_values"]["x"], 0.0)
+        self.assertEqual(entry["metal_values"]["x"], 7.0)
+        self.assertEqual(entry["signed_differences"]["x"], 7.0)
+        self.assertTrue(entry["bit_equal"]["y"])
 
     def testEmptyMaskIsInconclusive(self):
         with tempfile.TemporaryDirectory() as tmp:
-            report = gfx_uv2_probe.compare(
-                self._probe(Path(tmp) / "gl", "opengl", _values()),
-                self._probe(Path(tmp) / "metal", "metal", _values()),
-                identity=self._identity(), control={"match": True},
-                mask=[], neighborhood=1)
+            report = self._compare(tmp, _values(), _values(), [])
         self.assertEqual(report["summary"]["mask_pixels"], 0)
+        self.assertEqual(report["summary"]["status"], "inconclusive_no_mask")
         self.assertFalse(report["summary"]["conclusive"])
-        self.assertIsNone(report["summary"]["bit_for_bit_equal_xy"])
+        self.assertIsNone(report["summary"]["xy_bit_for_bit_equal"])
+
+    def testZeroCoverageIsInconclusiveNotEquivalent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = self._compare(
+                tmp, _values(False), _values(False), [(0, 0), (1, 1)])
+        self.assertEqual(report["summary"]["mask_pixels_covered_by_both"], 0)
+        self.assertEqual(report["summary"]["status"], "inconclusive_uncovered")
+        self.assertFalse(report["summary"]["conclusive"])
+        self.assertIsNone(report["summary"]["all_selected_pixels_equal"])
+        self.assertIsNone(report["conclusion"]["uv2_results_equal"])
+
+    def testPartialCoverageIsInconclusiveAndRetainsMismatch(self):
+        gl = _values()
+        metal = _values()
+        gl[1][1][3] = 0.0
+        metal[1][1][3] = 0.0
+        original = struct.unpack("<I", struct.pack("<f", gl[0][0][0]))[0]
+        gl[0][0][0] = struct.unpack("<f", struct.pack("<I", original + 1))[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            report = self._compare(tmp, gl, metal, [(0, 0), (1, 1)])
+        self.assertEqual(report["summary"]["mask_pixels_covered_by_both"], 1)
+        self.assertEqual(report["summary"]["status"],
+                         "inconclusive_partial_coverage")
+        self.assertFalse(report["summary"]["conclusive"])
+        self.assertTrue(report["summary"]["observed_mismatch"])
+        self.assertIsNone(report["summary"]["all_selected_pixels_equal"])
+        self.assertTrue(report["pixels"][0]["ulp_differences"]["x"])
+
+    def testFullCoverageIsConclusive(self):
+        gl = _values()
+        metal = _values()
+        original = struct.unpack("<I", struct.pack("<f", gl[0][0][0]))[0]
+        gl[0][0][0] = struct.unpack("<f", struct.pack("<I", original + 1))[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            report = self._compare(tmp, gl, metal, [(0, 0), (1, 1)])
+        self.assertTrue(report["summary"]["conclusive"])
+        self.assertEqual(report["summary"]["status"], "conclusive_unequal")
+        self.assertTrue(report["summary"]["observed_mismatch"])
+        self.assertFalse(report["summary"]["all_selected_pixels_equal"])
+
+    def testEvidenceFailureCannotBeConclusive(self):
+        for overrides in ({"authority": "synthetic"},
+                          {"authority": "derived"},
+                          {"capture": False},
+                          {"control": False}):
+            with tempfile.TemporaryDirectory() as tmp:
+                report = self._compare(tmp, _values(), _values(), [(0, 0)],
+                                       **overrides)
+            self.assertFalse(report["summary"]["conclusive"], overrides)
+            self.assertEqual(report["summary"]["status"],
+                             "inconclusive_evidence")
+            self.assertFalse(report["conclusion"]["conclusive"])
+            self.assertIsNone(report["conclusion"]["uv2_results_equal"])
+
+    def testNonFiniteFloatsProduceStrictJson(self):
+        gl = _values()
+        gl[0][0] = [float("nan"), 0.0, 0.0, 1.0]
+        metal = _values()
+        metal[0][0] = [float("inf"), float("-inf"), -0.0, 1.0]
+        with tempfile.TemporaryDirectory() as tmp:
+            report = self._compare(tmp, gl, metal, [(0, 0)])
+        entry = report["pixels"][0]
+        self.assertEqual(entry["gl_bits"]["x"], "0x7fc00000")
+        self.assertEqual(entry["metal_bits"]["x"], "0x7f800000")
+        self.assertIsNone(entry["gl_values"]["x"])
+        self.assertIsNone(entry["metal_values"]["x"])
+        self.assertIsNone(entry["signed_differences"]["x"])
+        self.assertFalse(entry["all_components_bit_equal"])
+        self.assertFalse(report["summary"]["all_selected_pixels_equal"])
+        json.dumps(report, allow_nan=False)
+
+    def testMaskBudgetIsRefusedWithTheActualCount(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            gl = np.zeros((65, 65, 4), dtype=np.uint8)
+            metal = np.full((65, 65, 4), 255, dtype=np.uint8)
+            with self.assertRaises(gfx_uv2_probe.ProbeError) as caught:
+                gfx_uv2_probe._differences(gl, metal)
+        self.assertIn("4225", str(caught.exception))
+        self.assertIn("4096", str(caught.exception))
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the native probe host is macOS")
@@ -362,6 +479,52 @@ class MetalProbeTests(unittest.TestCase):
         self.assertEqual(
             (probe / "uv2-color.bgra").stat().st_size, 1728 * 1117 * 4)
         self.assertEqual(descriptor["capture"]["sealed"], False)
+
+    def testInconsistentCheckpointRequestIsRefused(self) -> None:
+        cases = {
+            "resource": {"resource": "tex:999"},
+            "target": {"target": "999", "resource": "tex:999"},
+            "timing": {"timing": "pre_event"},
+            "file": {"file": "other.bgra"},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(case=label):
+                output = Path(self.temporary.name) / f"bad-{label}"
+                checkpoint = output / "request.json"
+                output.mkdir()
+                checkpoint.write_text(json.dumps({
+                    "schema": "gfx-frame-checkpoint-request/v1",
+                    "checkpoints": [dict({
+                        "event": 1, "target": "433", "resource": "tex:433",
+                        "file": "uv2-color.bgra", "timing": "post_event",
+                    }, **overrides)]}))
+                ran = self._replay(
+                    output,
+                    {"EU4_FRAME_REPLAY_UV2_PROBE": "1",
+                     "EU4_FRAME_REPLAY_UV2_PROBE_EVENT": "1",
+                     "EU4_FRAME_REPLAY_UV2_PROBE_PROGRAM": "310",
+                     "EU4_FRAME_REPLAY_UV2_PROBE_FRAMEBUFFER": "6",
+                     "EU4_FRAME_REPLAY_UV2_PROBE_TEXTURE": "433",
+                     "EU4_FRAME_REPLAY_UV2_PROBE_DIR": str(output / "uv2-probe")},
+                    checkpoint=checkpoint)
+                replay = json.loads((output / "replay.json").read_text())
+                if label == "target":
+                    # The existing checkpoint path refuses a missing target
+                    # before the probe can publish a diagnostic.
+                    self.assertEqual(replay["status"], "failed")
+                    self.assertEqual(
+                        replay["failures"][0]["stage"], "checkpoint_readback")
+                else:
+                    self.assertEqual(ran.returncode, 0, ran.stderr)
+                    self.assertEqual(replay["status"], "ok")
+                    self.assertEqual(replay["uv2_probe"]["status"], "error")
+                    self.assertIn("no post_event checkpoint matches",
+                                  replay["uv2_probe"]["reason"])
+                descriptor = json.loads(
+                    (output / "uv2-probe" / "uv2-probe.json").read_text())
+                self.assertEqual(descriptor["status"], "error")
+                self.assertIn("no post_event checkpoint matches",
+                              descriptor["reason"])
 
     def testNonSelectedEventWritesNoProbe(self) -> None:
         output = Path(self.temporary.name) / "skipped"

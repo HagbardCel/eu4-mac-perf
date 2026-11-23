@@ -20,3 +20,8 @@ Tier-1 planning narratives, and the historical roadmap were retired because
 their canonical results and current limits live in [../status.md](../status.md)
 and the active documents above. The removed text remains in git history; no
 measured evidence was deleted.
+
+`docs/repo-lifecycle.csv`, `docs/repo-inventory.csv`, `docs/repo-edges.csv` and
+`docs/repo-map.md` are generated snapshots pinned by `docs/repo-audit-context.json`
+(`source.ref`), not assertions about the current tree. Regenerate with
+`python3 -m tooling.common.repo_audit --write`; do not edit them by hand.

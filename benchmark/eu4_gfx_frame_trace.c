@@ -7561,6 +7561,49 @@ static int uv2_probe_copy_uniform_element(GLuint source, GLuint destination,
     return 1;
 }
 
+static void uv2_probe_apply_uniforms(GLuint source, GLuint destination) {
+    GLint uniform_count = 0;
+    glGetProgramiv(source, GL_ACTIVE_UNIFORMS, &uniform_count);
+    for (GLint i = 0; i < uniform_count; i++) {
+        char name[256];
+        GLsizei length = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        glGetActiveUniform(source, (GLuint)i, sizeof(name), &length, &size,
+                           &type, name);
+        char base[256];
+        snprintf(base, sizeof(base), "%s", name);
+        char *bracket = strstr(base, "[0]");
+        if (bracket != NULL) {
+            *bracket = 0;
+        }
+        uv2_uniform_shape shape;
+        if (uv2_probe_uniform_shape(type, &shape) != 0) {
+            continue;
+        }
+        int elements = size > 0 ? size : 1;
+        for (int element = 0; element < elements; element++) {
+            char element_name[300];
+            if (elements == 1) {
+                snprintf(element_name, sizeof(element_name), "%s", base);
+            } else {
+                snprintf(element_name, sizeof(element_name), "%s[%d]", base,
+                         element);
+            }
+            GLint source_location = glGetUniformLocation(source, element_name);
+            if (source_location < 0) {
+                continue;
+            }
+            GLint destination_location =
+                glGetUniformLocation(destination, element_name);
+            float value[16] = {0};
+            (void)uv2_probe_copy_uniform_element(
+                source, destination, source_location, destination_location,
+                &shape, value, sizeof(value));
+        }
+    }
+}
+
 static void uv2_probe_save_state(uv2_state_guard *guard, GLuint program,
                                  uintptr_t master) {
     memset(guard, 0, sizeof(*guard));
@@ -8026,9 +8069,7 @@ static void uv2_probe_write_failure(const char *status, const char *reason,
                 "\"event\":%d,\"program\":%d,\"observed\":{\"program\":%d,"
                 "\"framebuffer\":%d,\"texture\":%d},"
                 "\"expected\":{\"program\":%d,\"framebuffer\":%d,"
-                "\"texture\":%d},"
-                "\"notes\":[\"diagnostic evidence only; the sealed reference is "
-                "unchanged\"]}",
+                "\"texture\":%d}}",
                 status, reason, g.session_id,
                 (unsigned long long)g.capture_id, (int)getpid(),
                 g_uv2_probe.event, g_uv2_probe.program, observed_program,
@@ -8255,8 +8296,6 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
              "    gl_FragColor = vec4(%s, 0.0, 1.0);\n"
              "}\n",
              g_uv2_probe.varying, g_uv2_probe.varying);
-    char probe_fragment_sha[65];
-    sha256_hex(probe_fragment, strlen(probe_fragment), probe_fragment_sha);
     if (uv2_probe_program_sources((GLuint)program, &vertex_source,
                                   &fragment_source, vertex_sha, fragment_sha,
                                   reason, sizeof(reason)) != 0) {
@@ -8413,49 +8452,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     }
     /* ---- control pass with the original shader pair ---- */
     glUseProgram(control_program);
-    {
-        GLint uniform_count = 0;
-        glGetProgramiv((GLuint)program, GL_ACTIVE_UNIFORMS, &uniform_count);
-        for (GLint i = 0; i < uniform_count; i++) {
-            char name[256];
-            GLsizei length = 0;
-            GLint size = 0;
-            GLenum type = 0;
-            glGetActiveUniform((GLuint)program, (GLuint)i, sizeof(name),
-                               &length, &size, &type, name);
-            char base[256];
-            snprintf(base, sizeof(base), "%s", name);
-            char *bracket = strstr(base, "[0]");
-            if (bracket != NULL) {
-                *bracket = 0;
-            }
-            uv2_uniform_shape shape;
-            if (uv2_probe_uniform_shape(type, &shape) != 0) {
-                continue;
-            }
-            int elements = size > 0 ? size : 1;
-            for (int element = 0; element < elements; element++) {
-                char element_name[300];
-                if (elements == 1) {
-                    snprintf(element_name, sizeof(element_name), "%s", base);
-                } else {
-                    snprintf(element_name, sizeof(element_name), "%s[%d]",
-                             base, element);
-                }
-                GLint source_location =
-                    glGetUniformLocation((GLuint)program, element_name);
-                if (source_location < 0) {
-                    continue;
-                }
-                GLint destination_location =
-                    glGetUniformLocation(control_program, element_name);
-                float value[16] = {0};
-                (void)uv2_probe_copy_uniform_element(
-                    (GLuint)program, control_program, source_location,
-                    destination_location, &shape, value, sizeof(value));
-            }
-        }
-    }
+    uv2_probe_apply_uniforms((GLuint)program, control_program);
     {
         uv2_attribute *attributes = guard.attributes;
         for (int i = 0; i < guard.attribute_count; i++) {
@@ -8501,49 +8498,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     }
     /* ---- uv2 probe pass with the original vertex stage ---- */
     glUseProgram(probe_program);
-    {
-        GLint uniform_count = 0;
-        glGetProgramiv((GLuint)program, GL_ACTIVE_UNIFORMS, &uniform_count);
-        for (GLint i = 0; i < uniform_count; i++) {
-            char name[256];
-            GLsizei length = 0;
-            GLint size = 0;
-            GLenum type = 0;
-            glGetActiveUniform((GLuint)program, (GLuint)i, sizeof(name),
-                               &length, &size, &type, name);
-            char base[256];
-            snprintf(base, sizeof(base), "%s", name);
-            char *bracket = strstr(base, "[0]");
-            if (bracket != NULL) {
-                *bracket = 0;
-            }
-            uv2_uniform_shape shape;
-            if (uv2_probe_uniform_shape(type, &shape) != 0) {
-                continue;
-            }
-            int elements = size > 0 ? size : 1;
-            for (int element = 0; element < elements; element++) {
-                char element_name[300];
-                if (elements == 1) {
-                    snprintf(element_name, sizeof(element_name), "%s", base);
-                } else {
-                    snprintf(element_name, sizeof(element_name), "%s[%d]",
-                             base, element);
-                }
-                GLint source_location =
-                    glGetUniformLocation((GLuint)program, element_name);
-                if (source_location < 0) {
-                    continue;
-                }
-                GLint destination_location =
-                    glGetUniformLocation(probe_program, element_name);
-                float value[16] = {0};
-                (void)uv2_probe_copy_uniform_element(
-                    (GLuint)program, probe_program, source_location,
-                    destination_location, &shape, value, sizeof(value));
-            }
-        }
-    }
+    uv2_probe_apply_uniforms((GLuint)program, probe_program);
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_ALPHA_TEST);
@@ -8620,9 +8575,7 @@ done:
                         "\"session_id\":\"%s\",\"capture_frame_id\":%llu,"
                         "\"pid\":%d,\"event\":%d,\"program\":%d,"
                         "\"target\":{\"framebuffer\":%d,\"texture\":%d,"
-                        "\"internal_format\":%d,\"width\":%d,\"height\":%d,"
-                        "\"viewport\":[%d,%d,%d,%d]},"
-                        "\"varying\":\"%s\","
+                        "\"width\":%d,\"height\":%d},"
                         "\"draw\":{\"entry\":\"%s\",\"mode\":%u,"
                         "\"count\":%d,\"first\":%d,\"instances\":%d,"
                         "\"base_vertex\":%d,\"indexed\":%s,"
@@ -8634,31 +8587,24 @@ done:
                         "\"raw_sha256\":\"%s\","
                         "\"control\":{\"file\":\"%s\","
                         "\"pixel_format\":\"BGRA8\",\"scope\":\"RGB\","
-                        "\"width\":%d,\"height\":%d,\"row_stride\":%d,"
-                        "\"origin\":\"lower_left\",\"bytes\":%zu,"
                         "\"sha256\":\"%s\"},"
                         "\"sources\":{\"vertex_sha256\":\"%s\","
-                        "\"fragment_sha256\":\"%s\","
-                        "\"probe_fragment_sha256\":\"%s\"},"
+                        "\"fragment_sha256\":\"%s\"},"
                         "\"indices\":{\"buffer\":%d,\"count\":%d,"
                         "\"sha256\":\"%s\"}",
                         bool_text(g.seal_enabled != 0), g.session_id,
                         (unsigned long long)g.capture_id,
                         (int)getpid(), event, (int)program,
                         (int)draw_framebuffer, (int)texture_name,
-                        (int)internal_format, width, height,
-                        guard.viewport[0], guard.viewport[1], guard.viewport[2],
-                        guard.viewport[3], g_uv2_probe.varying,
+                        width, height,
                         indexed ? "_GfxDrawIndexed" : "_GfxDraw", mode, count,
                         first, instances, base_vertex,
                         bool_text(indexed),
                         (unsigned long long)g_uv2_probe_pending.caller_rva,
                         width, height,
                         width * 16, probe_file, probe_bytes, probe_sha,
-                        control_file, width, height, width * 4, control_bytes,
-                        control_sha, vertex_sha, fragment_sha,
-                        probe_fragment_sha, (int)element_buffer, count,
-                        index_sha);
+                        control_file, control_sha, vertex_sha, fragment_sha,
+                        (int)element_buffer, count, index_sha);
                 /* Attribute and uniform input digests, computed from the live
                    driver state and compared offline with the sealed capture. */
                 jprintf(&out, ",\"attributes\":[");

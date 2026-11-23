@@ -383,3 +383,35 @@ GPU
 The higher in this graph we can safely eliminate or aggregate work, the greater the expected payoff.
 
 At present, the most promising engineering path is to continue bottom-up enough to understand the Gfx backend boundary, while using selected high-value loops (especially borders) as concrete optimization laboratories.
+
+## Retired investigation summaries (kept for reconstruction/Metal work)
+
+**Border draw semantics.** `_GfxDrawIndexed` @ `0x1015eaa77` passes mode from
+`+0x08`, index type `0x1403` and index pointer `0`; `%ecx` selects
+`glDrawElements` (zero) or `glDrawElementsBaseVertex` (nonzero). `GfxSetIndexBuffer`
+@ `0x1015ec28e` writes the cached IBO at `+0x68` and its bind is idempotent; a
+null handle performs no bind. Deferred attribute/uniform uploads and
+`EnableVertexAttribArrays` run inside `GfxDrawIndexed` (`+0x128`, `+0x170`), so
+pre-draw observation must happen after that call. Mode-0 border records keep
+`indices[i]=0`; record `+0x04` is not the GL base vertex. Homogeneous mode-0
+runs are separated by the colour fast path (`je` @ `0x1010cc1d5`), the special
+precolor mask `0xB0` @ `0x1010cbe79`, and any `+0x18` VBO-index change. The
+`+0x10` helper argument is used only at site `0x1010cc3b8`. Border draws cost
+~0.6 µs/call vs ~2.2 µs for mesh; mode-0 batching is empty on paused Venice
+(`MODE0_DOMAIN_EMPTY`, 20261007 census).
+
+**Mesh draw records.** `CGraphics::RenderBuckets` @ `0x10149cedc` →
+`CPdxMeshObject::RenderBuckets` @ `0x1014c7da4` walks `SFlushData` (0x50) and a
+separate 0xe8 draw-subrecord loop; `GfxDrawIndexed` is the landmark at
+`0x14c8404`. `CArray<SFlushData>::Append` @ `0x1014c72b0` constructs only 0x50
+parents; 0xe8 records live in mesh-type data and have a separate loader. The
+engine already skips effect/raster setup on a repeated effect pointer, but
+`_ObjectConstants` @ `0x102251ae8` is still updated/bound per subrecord. The
+v3.1 recurrence screen on paused Venice found **0** hits for same-parent
+(54,945), cross-parent (1,290,465) and pointer-cross-parent (1,290,465)
+signatures; this is fixture-scoped and does not cover other maps/cameras.
+
+**Map text.** Same-state adjacent country-name draws are ~379/frame; the
+`GfxDrawIndexed` callsite is image offset `0xe11647` (return `0x100e1164c`,
+`CCountryNameCollection::RenderNames`), below the border batching floor unless
+adjacency is underestimated.

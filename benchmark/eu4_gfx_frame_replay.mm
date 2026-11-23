@@ -2451,7 +2451,6 @@ static NSString *uv2_probe_fragment_source(NSDictionary *program_entry,
 static id<MTLFunction> uv2_probe_compile_fragment(NSDictionary *program_entry,
                                                    NSDictionary *vertex_stage,
                                                    NSInteger *location_out,
-                                                   NSString **source_out,
                                                    NSError **error) {
     if (g_uv2_probe_fragment_function != nil) {
         return g_uv2_probe_fragment_function;
@@ -2477,9 +2476,6 @@ static id<MTLFunction> uv2_probe_compile_fragment(NSDictionary *program_entry,
         return nil;
     }
     g_uv2_probe_fragment_function = function;
-    if (source_out != NULL) {
-        *source_out = source;
-    }
     return function;
 }
 
@@ -2518,7 +2514,6 @@ static void uv2_probe_record_failure(NSString *reason, NSDictionary *event,
         },
         @"observed": observed ?: @{},
         @"target": event[@"target"] ?: @{},
-        @"notes": @[@"diagnostic evidence only; the normal replay is unchanged"],
     } mutableCopy];
     g_uv2_probe_failure = document;
     g_uv2_probe_status = 2;
@@ -2547,14 +2542,13 @@ static NSDictionary *uv2_probe_read_capture_identity(NSString *frame_path) {
         number(seal[@"sealed"], 0) != 1) {
         return @{@"sealed": @NO, @"reason": @"frame seal is not valid"};
     }
-    NSMutableDictionary *identity = [@{
+    return @{
         @"sealed": @YES,
         @"session_id": seal[@"session_id"] ?: @"",
         @"capture_frame_id": seal[@"capture_frame_id"] ?: @0,
         @"manifest_sha256": seal[@"manifest_sha256"] ?: @"",
         @"reference_sha256": seal[@"reference_sha256"] ?: @"",
-    } mutableCopy];
-    return identity;
+    };
 }
 
 /* Reads every recorded probe target back after the frame command buffer has
@@ -2607,8 +2601,9 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
     [blit commit];
     if (!wait_for_transfer(blit, @"uv2 probe readback", &error)) {
         NSString *reason = failure_text(error, @"uv2 probe readback failed");
-        uv2_probe_record_failure(reason, record[@"event"] ?: @{},
-                                 record[@"observed"] ?: @{});
+        uv2_probe_record_failure(
+            reason, @{@"target": record[@"target"] ?: @{}},
+            record[@"observed"] ?: @{});
         uv2_probe_write_descriptor(directory, g_uv2_probe_failure);
         return @{@"status": @"error", @"reason": reason};
     }
@@ -2632,11 +2627,23 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
     /* The normal event target is read at the event boundary by the existing
        checkpoint path, so its contents are not the end-of-frame state. */
     NSString *color_name = @"uv2-color.bgra";
+    NSDictionary *probe_target = record[@"target"] ?: @{};
+    NSString *expected_target = [NSString stringWithFormat:@"%d",
+                                 g_uv2_probe.texture];
+    NSString *expected_resource = [NSString stringWithFormat:@"tex:%d",
+                                   g_uv2_probe.texture];
+    NSUInteger expected_width = number(probe_target[@"width"], 0);
+    NSUInteger expected_height = number(probe_target[@"height"], 0);
     NSDictionary *checkpoint = nil;
     for (NSDictionary *item in g_checkpoint_results) {
         if ([item[@"event"] isEqual:record[@"event"]] &&
             [item[@"file"] isEqual:color_name] &&
-            number(item[@"ok"], 0) == 1) {
+            [item[@"target"] isEqual:expected_target] &&
+            [item[@"resource"] isEqual:expected_resource] &&
+            [item[@"timing"] isEqualToString:@"post_event"] &&
+            number(item[@"ok"], 0) == 1 &&
+            number(item[@"width"], 0) == expected_width &&
+            number(item[@"height"], 0) == expected_height) {
             checkpoint = item;
             break;
         }
@@ -2646,9 +2653,15 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
     NSData *color_data = checkpoint != nil
         ? [NSData dataWithContentsOfFile:color_path] : nil;
     if (color_data == nil) {
-        NSString *reason = @"the event-boundary normal target was not read";
-        uv2_probe_record_failure(reason, record[@"event"] ?: @{},
-                                 record[@"observed"] ?: @{});
+        NSString *reason = [NSString stringWithFormat:
+            @"no post_event checkpoint matches event %@, target %@, "
+             "resource %@, file %@ and the %lux%lu event target (results: %@)",
+            record[@"event"] ?: @(-1), expected_target, expected_resource,
+            color_name, (unsigned long)expected_width,
+            (unsigned long)expected_height, g_checkpoint_results ?: @[]];
+        uv2_probe_record_failure(
+            reason, @{@"target": record[@"target"] ?: @{}},
+            record[@"observed"] ?: @{});
         uv2_probe_write_descriptor(directory, g_uv2_probe_failure);
         return @{@"status": @"error", @"reason": reason};
     }
@@ -2687,6 +2700,61 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
         @"descriptor": [directory stringByAppendingPathComponent:
                                      @"uv2-probe.json"],
     };
+}
+
+typedef struct {
+    MTLViewport viewport;
+    NSUInteger target_width;
+    NSUInteger target_height;
+    NSDictionary *scissor;
+    NSDictionary *cull;
+    MTLCullMode cull_mode;
+    BOOL cull_empty;
+    BOOL no_cull;
+    NSUInteger primitive_mode;
+} draw_binding;
+
+/* Applies viewport, scissor and culling.  Shared by the normal draw and the
+ * isolated uv2 diagnostic so the two paths cannot drift. */
+static void apply_draw_binding(id<MTLRenderCommandEncoder> encoder,
+                               const draw_binding *binding) {
+    [encoder setViewport:binding->viewport];
+    BOOL scissor_empty = NO;
+    NSDictionary *scissor = binding->scissor;
+    if (number(scissor[@"enabled"], 0) != 0) {
+        MTLScissorRect rect;
+        if (!scissor_rect_for(scissor[@"box"], binding->target_width,
+                              binding->target_height, &rect)) {
+            scissor_empty = YES;
+        } else {
+            [encoder setScissorRect:rect];
+        }
+    } else {
+        MTLScissorRect rect = {0, 0, binding->target_width,
+                               binding->target_height};
+        [encoder setScissorRect:rect];
+    }
+    if (binding->cull_empty || scissor_empty) {
+        MTLScissorRect empty = {0, 0, 0, 0};
+        [encoder setScissorRect:empty];
+    }
+    if (binding->cull_empty || binding->no_cull ||
+        number(binding->cull[@"enabled"], 0) == 0 ||
+        !topology_supports_culling(binding->primitive_mode)) {
+        [encoder setCullMode:MTLCullModeNone];
+        return;
+    }
+    [encoder setCullMode:binding->cull_mode];
+    NSUInteger gl_front = (NSUInteger)strtoul(
+        [string_value(binding->cull[@"front"]) ?: @"0x901" UTF8String],
+        NULL, 0);
+    const char *flip = getenv("EU4_FRAME_REPLAY_FLIP_WINDING");
+    if (flip != NULL && flip[0] == '1') {
+        gl_front = gl_front == 0x901 ? 0x900 : 0x901;
+    }
+    [encoder setFrontFacingWinding:gl_front == 0x901
+               ? MTLWindingCounterClockwise
+               : MTLWindingClockwise];
 }
 
 static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
@@ -3184,7 +3252,6 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         NSUInteger target_height = number(target_info[@"height"], g_default_target.height);
         MTLViewport metal_viewport = viewport_for(
             state[@"viewport"], target_width, target_height);
-        [encoder setViewport:metal_viewport];
         NSDictionary *scissor = state[@"scissor"] ?: @{};
         NSDictionary *draw_event = event[@"draw"] ?: @{};
         NSUInteger primitive_mode = number(draw_event[@"mode"], 0x0004);
@@ -3192,9 +3259,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         BOOL no_cull = no_cull_env != NULL && no_cull_env[0] == '1';
         BOOL cull_empty = NO;
         MTLCullMode cull_mode = MTLCullModeNone;
-        BOOL cull_known = effective_cull(
-            cull, primitive_mode, no_cull, &cull_mode, &cull_empty);
-        if (!cull_known) {
+        if (!effective_cull(cull, primitive_mode, no_cull, &cull_mode,
+                            &cull_empty)) {
             if (error != NULL) {
                 *error = [NSError errorWithDomain:kErrorDomain code:67
                                          userInfo:@{NSLocalizedDescriptionKey:
@@ -3205,44 +3271,10 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             [encoder endEncoding];
             return NO;
         }
-        BOOL scissor_empty = NO;
-        if (number(scissor[@"enabled"], 0) != 0) {
-            MTLScissorRect rect;
-            if (!scissor_rect_for(scissor[@"box"], target_width,
-                                  target_height, &rect)) {
-                scissor_empty = YES;
-            } else {
-                [encoder setScissorRect:rect];
-            }
-        } else {
-            MTLScissorRect rect = {0, 0, target_width, target_height};
-            [encoder setScissorRect:rect];
-        }
-        if (cull_empty || scissor_empty) {
-            MTLScissorRect empty = {0, 0, 0, 0};
-            [encoder setScissorRect:empty];
-        }
-        if (cull_known && !cull_empty && !no_cull
-            && number(cull[@"enabled"], 0) != 0
-            && topology_supports_culling(primitive_mode)) {
-            [encoder setCullMode:cull_mode];
-            /* The captured GL front-face winding maps directly to Metal's
-               winding: with the flipped viewport origin, a primitive the engine
-               treats as front-facing is front-facing for Metal as well. This is
-               validated by the rendered two-winding fixture in
-               test_gfx_render_state. */
-            NSUInteger gl_front = (NSUInteger)strtoul(
-                [string_value(cull[@"front"]) ?: @"0x901" UTF8String], NULL, 0);
-            const char *flip = getenv("EU4_FRAME_REPLAY_FLIP_WINDING");
-            if (flip != NULL && flip[0] == '1') {
-                gl_front = gl_front == 0x901 ? 0x900 : 0x901;
-            }
-            [encoder setFrontFacingWinding:gl_front == 0x901
-                       ? MTLWindingCounterClockwise
-                       : MTLWindingClockwise];
-        } else {
-            [encoder setCullMode:MTLCullModeNone];
-        }
+        draw_binding binding = {metal_viewport, target_width, target_height,
+                                scissor, cull, cull_mode, cull_empty, no_cull,
+                                primitive_mode};
+        apply_draw_binding(encoder, &binding);
         if (depth_test) {
             MTLDepthStencilDescriptor *depth_descriptor = [MTLDepthStencilDescriptor new];
             depth_descriptor.depthCompareFunction = compare_function(
@@ -3738,12 +3770,11 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     @{@"reason": @"only indexed draws are supported"});
             } else {
                 NSInteger varying_location = -1;
-                NSString *probe_source = nil;
                 NSError *probe_error = nil;
                 id<MTLFunction> probe_fragment =
                     uv2_probe_compile_fragment(program_entry, vs,
                                                &varying_location,
-                                               &probe_source, &probe_error);
+                                               &probe_error);
                 if (probe_fragment == nil) {
                     uv2_probe_record_failure(
                         failure_text(probe_error,
@@ -3817,49 +3848,12 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                             } else {
                                 [probe_encoder setRenderPipelineState:
                                                     probe_pipeline];
-                                [probe_encoder setViewport:metal_viewport];
-                                if (scissor_empty || cull_empty) {
-                                    MTLScissorRect empty = {0, 0, 0, 0};
-                                    [probe_encoder setScissorRect:empty];
-                                } else if (number(scissor[@"enabled"], 0) !=
-                                           0) {
-                                    MTLScissorRect rect;
-                                    if (scissor_rect_for(
-                                            scissor[@"box"], target_width,
-                                            target_height, &rect)) {
-                                        [probe_encoder setScissorRect:rect];
-                                    }
-                                } else {
-                                    MTLScissorRect rect = {
-                                        0, 0, target_width, target_height};
-                                    [probe_encoder setScissorRect:rect];
-                                }
-                                if (cull_known && !cull_empty && !no_cull &&
-                                    number(cull[@"enabled"], 0) != 0 &&
-                                    topology_supports_culling(
-                                        primitive_mode)) {
-                                    [probe_encoder setCullMode:cull_mode];
-                                    NSUInteger gl_front =
-                                        (NSUInteger)strtoul(
-                                            [string_value(cull[@"front"])
-                                                ?: @"0x901" UTF8String],
-                                            NULL, 0);
-                                    const char *flip =
-                                        getenv("EU4_FRAME_REPLAY_FLIP_WINDING");
-                                    if (flip != NULL && flip[0] == '1') {
-                                        gl_front = gl_front == 0x901
-                                                       ? 0x900
-                                                       : 0x901;
-                                    }
-                                    [probe_encoder
-                                        setFrontFacingWinding:
-                                            gl_front == 0x901
-                                                ? MTLWindingCounterClockwise
-                                                : MTLWindingClockwise];
-                                } else {
-                                    [probe_encoder
-                                        setCullMode:MTLCullModeNone];
-                                }
+                                draw_binding probe_binding = {
+                                    metal_viewport, target_width, target_height,
+                                    scissor, cull, cull_mode, cull_empty,
+                                    no_cull, primitive_mode};
+                                apply_draw_binding(probe_encoder,
+                                                   &probe_binding);
                                 if (number(vs[@"msl_uniform_buffer"],
                                            NSUIntegerMax) != NSUIntegerMax &&
                                     vertex_uniforms.length > 0) {
@@ -3924,33 +3918,11 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                                     @"event": event[@"index"] ?: @(-1),
                                     @"program": program[@"name"] ?: @(-1),
                                     @"target": probe_target,
-                                    @"varying": [NSString stringWithUTF8String:
-                                                     g_uv2_probe.varying],
-                                    @"varying_location": @(varying_location),
                                     @"sources": @{
                                         @"vertex_sha256":
                                             vs[@"source_sha256"] ?: @"",
                                         @"fragment_sha256":
                                             fs[@"source_sha256"] ?: @"",
-                                        @"probe_fragment_sha256":
-                                            uv2_probe_sha256(
-                                                [probe_source
-                                                    dataUsingEncoding:
-                                                        NSUTF8StringEncoding]),
-                                        @"probe_fragment_source":
-                                            probe_source ?: @"",
-                                    },
-                                    @"vertex_msl": @{
-                                        @"file": vs[@"msl_file"] ?: @"",
-                                        @"sha256": uv2_probe_sha256(
-                                            [NSData dataWithContentsOfFile:
-                                                [shaderDir
-                                                    stringByAppendingPathComponent:
-                                                        vs[@"msl_file"] ?: @""]]
-                                                ?: [NSData data]),
-                                        @"entry": vs[@"msl_entry"] ?: @"",
-                                        @"function_identity_order":
-                                            vertex_identity ?: @"",
                                     },
                                     @"draw": draw_event,
                                     @"capture":
@@ -3963,12 +3935,6 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                                         @"sha256":
                                             indices[@"sha256"] ?: @"",
                                     },
-                                    @"viewport": @[
-                                        @(metal_viewport.originX),
-                                        @(metal_viewport.originY),
-                                        @(metal_viewport.width),
-                                        @(metal_viewport.height),
-                                    ],
                                     @"texture": probe_texture,
                                 };
                                 [g_uv2_probe_records addObject:record];

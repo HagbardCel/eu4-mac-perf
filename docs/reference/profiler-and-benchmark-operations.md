@@ -552,3 +552,26 @@ Run parser and report tests with:
 ```sh
 python3 -m unittest discover -s tests -v
 ```
+
+## Measurement qualification (qualified vs intrusive diagnostic)
+
+**Qualified (`qualified_v1`)**: the offline Tier-1 causal admission passed for
+the current build (training + held-out per policy). Only then may absolute
+per-frame timings and overhead gates be interpreted quantitatively. **Intrusive
+diagnostic (`intrusive_diagnostic_v1`)**: selected with
+`eu4_frame_model.py preflight --intrusive-diagnostic-contract` (build/scene
+integrity + registered WP11 terminal record; no held-out or archive update).
+Its output is structurally useful but quantitatively unqualified: no held-out
+claims, no absolute profiler microseconds as uninstrumented EU IV truth, and
+relative attribution only with explicit observer-effect estimates.
+
+WP11 (`33339073`, policy `tier1_causal_steady_state_hybrid_v4`) is the terminal
+failed v4 admission. The one-launch Phase C protocol is a 90 s paused warm-up
+then **R1 20 s → C1 20 s → R2 20 s → C2 20 s → R3 20 s** (R = lean reference,
+C = counters/profile path; the forensic tail is excluded from R/C brackets).
+C reduces throughput ~33%, so it is a different regime; component-level bias
+subtraction was never validated for that archive. Report R↔C perturbation plus
+category/path shares and rank stability, not bias-adjusted absolute
+microseconds. Verify the capsule with
+`eu4_frame_model.py verify-evidence <dir>`; the canonical outcome remains
+`docs/status.md`.

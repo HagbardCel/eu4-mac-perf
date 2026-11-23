@@ -17,8 +17,8 @@ Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — s
 
 | Gate | Deliverable |
 |------|-------------|
-| 0 API viability | [border-gl-multidraw-api-availability.md](border-gl-multidraw-api-availability.md) |
-| 1 Semantic mergeability | [border-multidraw-barriers.md](border-multidraw-barriers.md) |
+| 0 API viability | [consolidated rendering findings](../docs/eu4_macos_rendering_findings.md) |
+| 1 Semantic mergeability | [consolidated rendering findings](../docs/eu4_macos_rendering_findings.md) |
 | 2 Realizability | [border-multidraw-mutation-topology.md](border-multidraw-mutation-topology.md) |
 | 3a Temporal / 3b Post-loop | topology + barriers |
 | 4 Argument reconstruction | [border-draw-record-layout.json](border-draw-record-layout.json) |

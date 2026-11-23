@@ -8,7 +8,7 @@ does not mean the live release gates have passed. The original review was agains
 `54cbcc43`; corrective work builds on `96a9d2d` and the release-gate follow-up.
 Measurement and CI evidence are recorded in
 [the verification record](frame-model-verification.md). The
-[feedback review and next implementation plan](frame-model-next-iteration-plan.md)
+[current capabilities and limits](../docs/status.md)
 proposes diagnostic ablations, draw-path qualification and causal/forensic
 separation. Its proposed admission policy does not change the current gates.
 
