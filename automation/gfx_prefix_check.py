@@ -388,6 +388,22 @@ def verify_trusted_evidence(trusted_root: Path | str,
     return record
 
 
+def verify_adjacent_trusted_evidence(frame_dir: Path) -> dict | None:
+    """Resolve the same optional trusted copy used by event inspection."""
+    root = frame_dir.parent
+    path = root / "trusted-evidence.json"
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise PrefixCheckError(f"{path}: {exc}") from exc
+    try:
+        return verify_trusted_evidence(root, frame_dir)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise PrefixCheckError(f"{path}: {exc}") from exc
+
+
 def _git(workspace: Path, *args: str) -> str:
     completed = subprocess.run(
         ["git", "-C", str(workspace), *args], capture_output=True, text=True,

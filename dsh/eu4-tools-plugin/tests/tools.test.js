@@ -134,6 +134,10 @@ test('argument mapping covers each tool', () => {
   assert.deepEqual(buildArgs('eu4_replay', { op: 'verify', case: '/c' }),
     ['eu4_replay', 'verify', '--case', '/c'])
   assert.deepEqual(buildArgs('eu4_replay', {
+    op: 'independent', frame: '/f', replay_out: '/o', policy: '/p', rationale: '/r',
+  }), ['eu4_replay', 'independent', '--frame', '/f', '--replay-out', '/o',
+    '--policy', '/p', '--rationale', '/r'])
+  assert.deepEqual(buildArgs('eu4_replay', {
     op: 'sequence', frame_dirs: ['/f1', '/f2'], shaders: '/s', replay_out: '/o',
     max_frames: 2, max_bytes: 4096, case_max_bytes: 8192, max_seconds: 30,
     frame_timeout: 10, timeout: 60, continue_on_difference: true,

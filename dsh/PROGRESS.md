@@ -212,6 +212,10 @@ passes against the same profile.
 
 ## Known limitations
 
+- **Automatic `/goal` blocking has a three-round minimum in the current DSH
+  runtime.** If the runtime refuses `update_goal(action="blocked")`, preserve
+  the recorded blocker and surface it to the operator. The round count does
+  not justify another experiment or establish that the campaign deadline ran out.
 - **`dsh --profile headless` answers one turn.** Measured: a goal created in that
   turn gets no further round. `run-campaign.sh` is therefore for campaigns that
   finish in one turn; multi-round campaigns use the Web path.

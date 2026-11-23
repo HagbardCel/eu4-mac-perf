@@ -245,11 +245,12 @@ class ToolTests(unittest.TestCase):
         args = SimpleNamespace(
             replay_op="independent", rationale=RATIONALE, frame="frame", replay_out=str(self.root / "out"),
             shaders=None, disable_render_target_vflip=False,
-            sampler_shift=None, sampler_shift_min=7,
+            sampler_shift=None, sampler_shift_min=7, policy="policy.json",
         )
         with mock.patch.object(gfx_independent_replay, "replay",
-                               return_value=report):
+                               return_value=report) as replay:
             value = agent_tools.eu4_replay(args)
+        self.assertEqual(replay.call_args.kwargs["policy"], "policy.json")
         self.assertFalse(value["ok"])
         self.assertEqual(value["status"], "invalid")
         self.assertEqual(value["result"]["checkpoint_validation"]["status"],
@@ -2315,6 +2316,7 @@ class StrategyBCaseToolTests(ToolTests):
         self.assertFalse(value["ok"])
         self.assertEqual(value["status"], "incomplete")
         self.assertEqual(value["outcome"]["evidence"], "unverified")
+        self.assertEqual(value["outcome"]["failure_kind"], "evidence_missing")
 
     def test_v2_replay_failure_is_structured_not_an_exception(self):
         case = self.make_v2_case()

@@ -37,21 +37,14 @@ for new renderer code or altered reference inputs.
 
 After an experiment, classify the conclusion as **supported** (evidence favors
 the explanation), **falsified** (the tested intervention or prediction was
-contradicted) or **unresolved** (the experiment did not discriminate); these are
-reasoning conventions, not machine-readable fields.
-An unsuccessful texture-decoding substitution does not disprove every
-texture-precision mechanism, and an LOD clamp that leaves one output unchanged
-is not proof that every sample used LOD zero.  Numerical magnitudes and
-correlation results are not measured causal errors unless supporting evidence
-establishes causation.  A repeated failed hypothesis causes reassessment, not
-automatic termination.
-
-A perturbation that changes an output establishes sensitivity to that
-perturbation, not causal attribution for the original discrepancy.  For A/B
-pixel comparisons, inspect the actual differing coordinates, channels, signed
-errors and overlap—not merely pixel counts or image hashes.  Verify that both
-compared executions produced valid diagnostic evidence before drawing
-conclusions.
+contradicted) or **unresolved** (the experiment did not discriminate). A
+negative perturbation excludes the tested intervention or predicted response.
+Fewer differing pixels show sensitivity to the change. Estimating the fraction
+causally explained requires attribution of the original discrepancy. Gradient
+correlation alone cannot identify hardware interpolation as the cause.
+Statistical significance requires a justified null model that accounts for
+spatial dependence and nonuniform errors. In A/B comparisons, inspect the
+differing coordinates, channels, signed errors and overlap of both outcomes.
 
 The operator deadline is authoritative only through
 `python3 -m automation.campaign_guard status --state $EU4_CAMPAIGN_STATE`.
@@ -59,18 +52,13 @@ Never report a deadline stop unless that status shows no remaining time or a
 campaign action is refused with `kind=deadline`; an unsupported correction path
 or a missing observation is reported as its actual cause.
 
-Keep a compact running record in `progress.md` or another allowed `analysis/m7/`
-location containing: the divergent operation and affected output, relevant
-original-engine/captured evidence, relevant Metal implementation evidence, the
-leading unresolved explanation, the expected observation that would distinguish
-it, and the outcome of the chosen experiment. Do not run a new GPU experiment
-when the same question can be resolved by inspecting already available shader,
-state or source evidence, and do not repeat a rejected experiment unless new
-evidence materially changes the hypothesis. Preserve the distinction between
-falsifying an intervention and eliminating an entire causal mechanism. Do not
-rewrite a lengthy report after every unsuccessful experiment; produce a
-detailed report when a meaningful causal finding, a milestone or a genuine
-blocker is established.
+Maintain one compact current investigation record in `progress.md` or an
+allowed `analysis/m7/` location. Record the first divergent event and target,
+relevant evidence and provenance, tested hypothesis and prediction, observed
+result, conclusion (supported, falsified or unresolved), and the next
+discriminating observation or genuine blocker. Preserve negative results and
+link supporting artifacts. Revisit a rejected experiment only when new evidence
+materially changes the hypothesis. Never invent work to fill a round counter.
 
 ## Evidence convention
 
@@ -100,42 +88,28 @@ record it and continue with the available authentic evidence.
 
 ## Sequence
 
-1. Inspect the existing sealed evidence and prior experiments relevant to the
-   current first divergence. Record identities, the first confirmed divergence
-   and which earlier results remain valid for the unchanged inputs. Before a
-   significant new GPU experiment, establish the evidence base:
-   - identify the first divergent operation and its original caller, program,
-     target resource and producer relationships from the authenticated event
-     stream;
-   - consult relevant original-engine knowledge with the native research tools
-     (`eu4_re_query` for fast indexed lookups, `eu4_research` for sealed
-     instructions and detailed decompilation) where the question is within the
-     corpus;
-   - inspect the actual captured GLSL, resource bindings, sampler/raster state,
-     geometry and available historical experimental evidence;
-   - compare those original inputs and semantics against the Metal replay;
-   - identify the smallest unresolved semantic or numerical difference that a
-     targeted experiment could discriminate.
+1. Review the prior evidence and follow the first divergence with the cheapest
+   supported operations.
+   - For an established divergence and a supported frame or case, call
+     `eu4_case_inspect` with the event before writing a parser. Read its
+     original caller, program, target, producer relationships and Metal evidence.
+   - Look up relevant original functions with `eu4_re_query`, then use
+     `eu4_research` when instructions or decompilation can distinguish the
+     hypotheses. Skip corpus calls for questions the executable cannot answer.
+   - Read the exact captured GLSL, state or source that can resolve the current
+     question. Label claims **Known original behavior**, **Known Metal
+     behavior** or **Unresolved difference** and cite the evidence for each.
+   - Use native `eu4_replay diagnose` when Metal artifacts already exist or
+     `independent` when a justified GPU experiment is needed. Check the outcome
+     fields before using a comparison as evidence.
+   - Use shell or a custom script for an unsupported operation or a native
+     failure. Record the exact failure reason and avoid repeated retries.
+     In a fallback, check the exit status and parse the JSON envelope before
+     interpreting any comparison. Pixel files alone cannot validate evidence.
 
-   Prefer the existing native DSH tools for supported operations: original-engine
-   research, captured-state/resource-graph inspection, historical evidence
-   discovery, differential diagnosis and replay. Use shell commands when an
-   operation is not supported by a native tool, including source editing,
-   compilation, focused tests and specialized analysis.
-
-   Label each relevant statement **Known original behavior** (runtime capture,
-   executable instructions or existing qualified evidence), **Known Metal
-   behavior** (implementation inspection or executed Metal evidence) or
-   **Unresolved difference** (not established by either source), and prefer
-   candidate-side experiments that separate unresolved differences. This is an
-   evidence-first workflow, not a mandatory large reverse-engineering exercise:
-   do not force Ghidra analysis when the disputed mechanism is texture-filtering
-   precision, floating-point implementation detail or another behavior the
-   original executable cannot resolve; do not query hundreds of unrelated
-   functions; do not launch Ghidra or EU4. If the corpus is unavailable, report
-   that limitation and proceed on other valid evidence when it is sufficient.
-   The original authenticated OpenGL pixels remain the sole authoritative
-   reference.
+   Choose calls that answer the question. `eu4_diff_run`, `eu4_capture` and
+   Ghidra are unnecessary for a supported offline comparison. This campaign
+   never launches EU4 or Ghidra.
 2. Run the synthetic drawable-format observer and focused offline tests only
    when the current task and existing verification evidence require them. Do not
    launch EU4 if a required observer is incomplete or a relevant prefix test
@@ -157,10 +131,14 @@ record it and continue with the available authentic evidence.
    one-use authorization. If the existing evidence is insufficient, stop with
    `requires_additional_evidence` and name the exact capture request (caller
    set, prefix scope, required observations) for the operator; request a new
-   capture only when the required observation is genuinely absent from the
-   existing evidence and the proposed capture can actually produce it. Do not
-   attempt a capture from this objective and never construct a custom launcher
-   or bypass the one-use launch guard.
+   capture only when it can provide a necessary observation. In a gap report,
+   distinguish observations already in the authenticated frame, available
+   operator-controlled observations still to be made, and observations current
+   tooling cannot obtain. The [UV2 probe](../../docs/harness.md#event-1-uv2-diagnostic-probe)
+   already targets event 1, program 310, framebuffer 6 and texture 433.
+   Its [comparison](../../automation/gfx_uv2_probe.py) is conditional and
+   `fragment_attribution_verified=false` leaves the original fragment-level
+   cause unresolved. Only the operator may authorize and run that capture.
 4. Run the independent checker after a substantive renderer correction and
    before claiming the requested exact-prefix milestone; reuse the current
    checker cache and execution facilities. Record the earliest verified
@@ -178,16 +156,10 @@ record it and continue with the available authentic evidence.
    `requires_additional_evidence` and name the exact missing observation. Do not
    demand exhaustive investigation of every conceivable hypothesis; the test is
    whether the next necessary discriminating experiment is available.
-8. Before declaring a candidate-scope limitation, give a concrete causal
-   attribution to an excluded component, or state precisely why the next
-   necessary discriminating experiment cannot be performed with available
-   evidence and authorized tools. Declaring a component out of scope requires
-   specific evidence linking the discrepancy to that component, not a plausible
-   but unsupported attribution. If the defect belongs to a component outside
-   the candidate's authorized scope (for example trusted shader translation or
-   capture instrumentation), report the genuine candidate-scope limitation and
-   the exact component. Do not compensate by changing unrelated renderer
-   behavior; a correction belongs in the component that owns the defect.
+8. Before declaring a candidate-scope limitation, either cite causal evidence
+   linking the discrepancy to the excluded component or identify the next
+   discriminating experiment and why it is unavailable. Correct a defect only
+   in the component that owns it.
 
 ## Stop conditions
 
