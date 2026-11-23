@@ -375,6 +375,21 @@ python3 -m automation.agent_tools eu4_case_inspect --case <case> --full
 python3 -m automation.agent_tools eu4_replay verify --case <case>
 ```
 
+### Event evidence inspection
+
+`eu4_case_inspect --event <index>` projects one captured event without capture,
+replay, launch or cache. `--frame` selects a sequence frame;
+`--metal`/`--shaders` name an existing replay/translation.
+
+```sh
+python3 -m automation.agent_tools eu4_case_inspect \
+  --case <case-or-sealed-frame> --event 1 --pixel 512,341
+```
+It returns a bounded (8,192-byte) record with identity, program/resource
+references, exact FP32 bits, bindings/state, observations, omission counts and
+pixel differences. Metal correspondence requires the replay's request/receipt
+to bind the capture; `--full` adds the raw event.
+
 ### Baseline reuse
 
 `automation.case_baseline` records one identity for an existing case only after
@@ -658,15 +673,3 @@ reuse `EU4_DSH_WORKSPACE`, which the campaign bridge reserves for its candidate
 workspace assertion. `run-campaign.sh` mounts the plugin in its headless
 overlay with `infra` pinned to the trusted checkout. Plugin tests:
 `npm test --prefix dsh/eu4-tools-plugin` (Node `--test`, no EU4).
-
-## Metrics
-
-```sh
-python3 -m automation.gfx_metrics report \
-  --root .local/infra/dual-1 \
-  --ledger .local/infra/dual-1/authority/dual-6.json
-```
-
-Counts launches from the authoritative ledger, observed/paired/aligned/compared
-frames, inconclusive comparisons, artifact bytes and offline cases. Inconclusive
-work is never folded into a pass.

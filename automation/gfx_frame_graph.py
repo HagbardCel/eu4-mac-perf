@@ -571,7 +571,8 @@ CAPTURE_IDENTITY_FIELDS = (
 
 def _graph_capture_identity(frame_dir: Path, trace: dict,
                             history: dict | None = None,
-                            checkpoints: list[dict] | None = None) -> dict:
+                            checkpoints: list[dict] | None = None,
+                            trusted_evidence: dict | None = None) -> dict:
     """Frame identity from the graph's own records, never an invented schema.
 
     The authoritative source is the same-process frame seal.  A fixture or
@@ -586,7 +587,8 @@ def _graph_capture_identity(frame_dir: Path, trace: dict,
     seal_path = Path(frame_dir) / "frame-seal.json"
     try:
         seal = m6_frame.load_seal(
-            frame_dir, trace=trace, verify_counts=False, verify_blobs=False)
+            frame_dir, trace=trace, verify_counts=False, verify_blobs=False,
+            trusted_evidence=trusted_evidence)
     except m6_frame.FrameError as exc:
         if seal_path.exists():
             # A present but invalid seal is not the same as an unsealed
@@ -688,12 +690,14 @@ def _clear_coverage(event: dict, writes: list[str], width,
     }
 
 
-def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
+def build(frame_dir: Path | str, trace: dict | None = None, *,
+          trusted_evidence: dict | None = None) -> dict:
     """Derive the resource graph and coverage classification for one frame.
 
     ``trace`` may be an already verified ``m6_frame.load_trace`` result.  The
     diagnostic path passes it so one capture is not hashed twice; callers that
-    only have a directory keep the original signature.
+    only have a directory keep the original signature.  ``trusted_evidence``
+    is forwarded to the existing seal verifier for a relocated snapshot.
     """
     from automation import m6_frame
 
@@ -1166,7 +1170,8 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
         if resources[key]["consumers"] and not key.startswith("fb:")
     )
     capture = _graph_capture_identity(
-        frame_dir, trace, history, checkpoints=default_checkpoints)
+        frame_dir, trace, history, checkpoints=default_checkpoints,
+        trusted_evidence=trusted_evidence)
     if capture.get("source") == "invalid_seal":
         problem = ("frame seal is present but invalid: "
                    + str(capture.get("problem") or "unknown seal problem"))

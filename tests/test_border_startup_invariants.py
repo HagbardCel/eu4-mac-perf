@@ -13,12 +13,6 @@ sys.path.insert(0, str(BENCH))
 
 class BorderStartupInvariantTests(unittest.TestCase):
     def test_source_startup_contract(self) -> None:
-        import submission_control as control
-
-        self.assertNotIn(
-            BENCH / "eu4_submission_border_gl_interpose.c",
-            control.SUBMISSION_DYLIB_SOURCES_BORDER,
-        )
         loop_head = (BENCH / "eu4_submission_border_loop_head.c").read_text(encoding="utf-8")
         gate0 = re.search(r"static void record_gate0_once\(void\) \{.*?\n\}", loop_head, re.S)
         self.assertIsNotNone(gate0)

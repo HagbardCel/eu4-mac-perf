@@ -334,7 +334,7 @@ bytes; truncation is explicit and identity, verification, first divergence,
 unresolved interval, recommended checkpoint and artifact references are
 preserved. If those essential fields themselves cannot fit, the tool fails with
 a bounded `output_cap_exceeded` error instead of dropping them. Full reports
-stay on disk. `automation.case_baseline` records an identity only after
+stay on disk. `automation.case_baseline` records identity only after
 `gfx_replay_case.verify()` passes (its single payload pass re-hashes every
 declared file), and the replay result is a complete full-frame execution: `stage=complete`,
 `status=ok`, `readback=true`, `partial=false`, `timed_out=false`, `failed=0`,

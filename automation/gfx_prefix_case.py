@@ -185,39 +185,3 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
                      if path.is_file()),
         "derived_from": manifest["derived_from"],
     }
-
-
-def build_case(frame_dir: Path | str, end: int,
-               destination: Path | str) -> dict:
-    """Build and verify a bounded derived-prefix case."""
-    frame = build_prefix_frame(frame_dir, end, destination)
-    derived = Path(frame["frame_dir"])
-    result = gfx_prefix_check.evaluate(
-        derived, None, require_end=end, trusted_execution=True)
-    case = {
-        "schema": SCHEMA,
-        "case_id": f"gfx-prefix-{end}-{frame['derived_from']['original_session_id']}",
-        "frame": frame,
-        "checker": {
-            "verdict": result.get("verdict"),
-            "first_divergence": result.get("first_divergence"),
-            "verified_prefix": result.get("verified_prefix"),
-            "problems_count": result.get("problems_count"),
-        },
-        "files": [
-            {"path": path.relative_to(derived).as_posix(),
-             "bytes": path.stat().st_size, "sha256": _sha(path)}
-            for path in sorted(derived.rglob("*")) if path.is_file()
-        ],
-        "reproduction": {
-            "command": [
-                "python3.14", "-c",
-                "from automation import gfx_prefix_check; "
-                f"gfx_prefix_check.evaluate({str(derived)!r}, None, "
-                f"require_end={end}, trusted_execution=True)",
-            ],
-            "note": "derived prefix; not the original full seal",
-        },
-    }
-    (derived.parent / "case.json").write_text(json.dumps(case, indent=2) + "\n")
-    return case

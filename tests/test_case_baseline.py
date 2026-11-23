@@ -37,8 +37,11 @@ def _write_case(root: Path) -> Path:
     add("replay/replay.json", json.dumps({
         "status": "ok", "stage": "complete", "readback": True,
         "partial": False, "timed_out": False, "failed": 0,
-        "command_status": 4, "events": 3, "encoded": 3}).encode())
+        "command_status": 4, "events": 3, "encoded": 3,
+        "checkpoints": [{"event": 0, "target": "0", "file": "event0.bgra"}]
+    }).encode())
     add("replay/metal-frame.bgra", b"\0" * 16)
+    add("replay/event0.bgra", b"checkpoint")
     replay_bytes = (case / "replay" / "replay.json").read_bytes()
     metal_bytes = (case / "replay" / "metal-frame.bgra").read_bytes()
     add("replay/producer-receipt.json", json.dumps({
@@ -59,6 +62,8 @@ def _write_case(root: Path) -> Path:
             "status": "ok", "stage": "complete", "readback": True,
             "partial": False, "timed_out": False, "failed": 0,
             "command_status": 4, "events": 3, "encoded": 3,
+            "checkpoint_files": [{"file": "event0.bgra",
+                                  "sha256": hashlib.sha256(b"checkpoint").hexdigest()}],
         },
     }).encode())
     add("diagnostic-report.json", json.dumps({
@@ -297,6 +302,15 @@ class BaselineIdentityTests(unittest.TestCase):
                     ("benchmark/root.mm",))
         self.assertIn("benchmark/eu4_gfx_replay_semantics.h", first)
         self.assertNotEqual(first, second)
+
+    def test_changed_checkpoint_is_invalid(self):
+        from automation import gfx_replay_case
+        (self.case / "replay" / "event0.bgra").write_bytes(b"changed")
+        manifest = json.loads((self.case / "case.json").read_text())
+        result = gfx_replay_case.verify_producer_receipt(self.case, manifest)
+        self.assertEqual(result["status"], "invalid")
+        self.assertTrue(any("digest mismatch" in problem
+                            for problem in result["problems"]), result)
 
     def test_missing_replay_json_is_invalid_not_an_exception(self):
         from automation import gfx_replay_case

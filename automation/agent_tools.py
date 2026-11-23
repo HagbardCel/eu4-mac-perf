@@ -62,7 +62,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from automation import (gfx_align, gfx_case, gfx_diagnostics, gfx_dual_run,
-                        gfx_frame_graph, gfx_independent_replay, gfx_replay_case,
+                        gfx_event_evidence, gfx_frame_graph,
+                        gfx_independent_replay, gfx_replay_case,
                         gfx_scenario)  # noqa: E402
 from automation import (evidence_index, gfx_frame_compare, gfx_session, launch_lease,
                         launch_ledger, python_runtime)  # noqa: E402
@@ -2254,6 +2255,10 @@ def _compact_case_view(case_path: Path, schema: str, manifest: dict,
 
 def _json_text(value) -> str:
     """The exact envelope serialization used on stdout (UTF-8, no escaping)."""
+    if isinstance(value, dict) and (value.get("result") or {}).get(
+            "schema") == "gfx-event-evidence/v1":
+        return json.dumps(value, separators=(",", ":"),
+                          ensure_ascii=False) + "\n"
     return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -2511,36 +2516,6 @@ def _bounded_envelope(value: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
     minimal["result"]["truncated"] = True
     minimal["result"]["output_bytes"] = _utf8_len(minimal)
     return minimal
-
-
-def _case_diagnosis_view(case_path: Path, manifest: dict) -> dict:
-    report = _optional_json(case_path / "diagnostic-report.json")
-    if not report:
-        report = _optional_json(case_path / "report.json")
-    qualification = (report.get("qualification")
-                     or manifest.get("qualification") or {})
-    return {
-        "schema": report.get("schema"),
-        "classification": report.get("classification")
-        or manifest.get("classification"),
-        "status": report.get("status"),
-        "outcome": report.get("outcome") or qualification,
-        "qualified": bool(qualification.get("qualified")),
-        "diagnostic_qualified": bool(
-            qualification.get("diagnostic_qualified")),
-        "axes": qualification.get("axes"),
-        "first_divergence": report.get("first_divergence")
-        or manifest.get("first_divergence"),
-        "checkpoints": report.get("checkpoints"),
-        "checkpoint_validation": report.get("checkpoint_validation"),
-        "state_coverage": report.get("state_coverage"),
-        "provenance": report.get("provenance"),
-        "operation_coverage": report.get("operation_coverage"),
-        "binding_audit": report.get("binding_audit"),
-        "final": (report.get("pixels") or {}).get("final")
-        or report.get("final"),
-        "replay": report.get("replay"),
-    }
 
 
 def _diagnosis_outcome(report: dict, *, verification_ok: bool = True,
@@ -3400,12 +3375,12 @@ def _strategy_b_verify_result(case_path: Path, schema: str,
     }
     if schema == gfx_replay_case.SEQUENCE_SCHEMA:
         value["sequence"] = _case_sequence_view(case_path)
-        value["diagnosis"] = _case_diagnosis_view(case_path, manifest)
+        value["diagnosis"] = _diagnosis_report(case_path, manifest)
         value["reproduction"] = (manifest.get("reproduction")
                                  or value["sequence"].get("reproduction")
                                  or {})
     else:
-        value["diagnosis"] = _case_diagnosis_view(case_path, manifest)
+        value["diagnosis"] = _diagnosis_report(case_path, manifest)
     return _envelope(
         "eu4_replay", status, value,
         reason="; ".join(str(item) for item in
@@ -3782,8 +3757,102 @@ def eu4_replay(args: argparse.Namespace) -> dict:
     raise ValueError(f"unknown replay operation: {args.replay_op}")
 
 
+def _parse_pixel(value: str | None) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    try:
+        x, y = (int(part) for part in str(value).split(","))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("--pixel requires two integers X,Y") from exc
+    if x < 0 or y < 0:
+        raise ValueError("--pixel coordinates must be non-negative")
+    return x, y
+
+
+def _event_case_inspect(args: argparse.Namespace, path: Path) -> dict:
+    try:
+        pixel = _parse_pixel(getattr(args, "pixel", None))
+    except ValueError as exc:
+        return _envelope("eu4_case_inspect", "invalid",
+                         reason=str(exc), diagnostic="invalid")
+    kind, schema, _manifest, detail = _case_schema(path)
+    verification = None
+    if kind == CASE_KIND_STRATEGY_B:
+        verification = _strategy_b_verify(path)
+    elif kind != CASE_KIND_MISSING and not (
+            path / "frame-trace.json").is_file():
+        return _case_invalid_envelope(
+            "eu4_case_inspect", path, kind, schema, detail)
+    try:
+        value = gfx_event_evidence.inspect_event(
+            path, args.event,
+            frame_index=getattr(args, "inspect_frame", None),
+            metal=getattr(args, "metal", None),
+            shaders=getattr(args, "shaders", None),
+            pixel=pixel, full=bool(getattr(args, "full", False)),
+            verification=verification)
+    except gfx_event_evidence.EventEvidenceError as exc:
+        status = ("not_found" if exc.kind in (
+            "not_found", "event_not_found", "frame_not_found") else "invalid")
+        return _envelope(
+            "eu4_case_inspect", status,
+            {"case": str(path), "event": args.event},
+            reason=str(exc),
+            diagnostic="unavailable" if status == "not_found" else "invalid",
+            evidence=None if status == "not_found" else "invalid")
+    status, diagnostic, evidence = "ok", "complete", "valid"
+    if verification is not None:
+        verification_status, verification_diagnostic, evidence = (
+            _case_verification_outcome(verification, schema))
+        if verification_status != "ok":
+            status = verification_status
+            diagnostic = verification_diagnostic
+    capture = value.get("capture") or {}
+    if evidence == "valid" and not (
+            capture.get("sealed") is True
+            and capture.get("authority") == "authentic"):
+        evidence = "unverified"
+    divergence = value.get("divergence") or {}
+    verdict = {
+        "match": "equal", "exact": "equal",
+        "divergent": "different", "divergent_diagnostic": "different",
+    }.get(str(divergence.get("status") or ""))
+    envelope = _envelope(
+        "eu4_case_inspect", status, value,
+        reason="; ".join(str(item) for item in
+                         (verification or {}).get("problems") or []),
+        diagnostic=diagnostic, verdict=verdict, evidence=evidence,
+        qualified=False)
+    if not getattr(args, "full", False) and _utf8_len(envelope) > 8192:
+        return _envelope(
+            "eu4_case_inspect", "failed", {
+                "error": "event_output_cap_exceeded",
+                "output_cap_bytes": 8192,
+                "artifacts": value.get("artifacts") or {},
+                "detail": "the selected event exceeds the compact budget; "
+                          "use --full or read the referenced artifacts",
+            }, reason="the selected event exceeds the compact budget",
+            diagnostic="failed", evidence="invalid", qualified=False)
+    return envelope
+
+
 def eu4_case_inspect(args: argparse.Namespace) -> dict:
     path = Path(args.case)
+    if args.event is None and any(
+            value is not None for value in
+            (getattr(args, "pixel", None), getattr(args, "inspect_frame", None),
+             getattr(args, "metal", None), getattr(args, "shaders", None))):
+        return _envelope(
+            "eu4_case_inspect", "invalid",
+            reason="--pixel, --frame, --metal and --shaders require --event",
+            diagnostic="invalid")
+    if args.event is not None or getattr(args, "pixel", None) is not None:
+        if not path.is_dir():
+            return _envelope("eu4_case_inspect", "not_found", {
+                "case": str(path), "exists": False,
+            }, diagnostic="unavailable",
+               reason=f"case directory does not exist: {path}")
+        return _event_case_inspect(args, path)
     if not path.is_dir():
         return _envelope("eu4_case_inspect", "not_found", {
             "case": str(path), "exists": False,
@@ -3806,7 +3875,7 @@ def eu4_case_inspect(args: argparse.Namespace) -> dict:
             "case_id": manifest.get("case_id"),
             "title": manifest.get("title"),
             "verification": _case_verification_view(verification),
-            "diagnosis": _case_diagnosis_view(path, manifest),
+            "diagnosis": _diagnosis_report(path, manifest),
             "reproduction": (manifest.get("reproduction")
                              or (verification.get("sequence") or {}).get(
                                  "reproduction") or {}),
@@ -4031,8 +4100,21 @@ def _parser() -> argparse.ArgumentParser:
 
     case = sub.add_parser("eu4_case_inspect")
     case.add_argument("--case", required=True, type=Path)
+    case.add_argument("--event", type=int, default=None,
+                      help="inspect one captured event by its stream index")
+    case.add_argument("--pixel", default=None, metavar="X,Y",
+                      help="also read one pixel from the selected event's "
+                           "original and Metal observations")
+    case.add_argument("--frame", dest="inspect_frame", type=int, default=None,
+                      help="1-based sequence index for a multi-frame case; "
+                           "required when more than one frame is recorded")
+    case.add_argument("--metal", type=Path, default=None,
+                      help="already-produced Metal result directory for a "
+                           "sealed frame without a packaged replay")
+    case.add_argument("--shaders", default=None,
+                      help="translated shader directory for a sealed frame")
     case.add_argument("--full", action="store_true",
-                      help="return the complete manifest/report view instead "
+                      help="return the complete selected-event view instead "
                            "of the bounded agent projection")
     return parser
 

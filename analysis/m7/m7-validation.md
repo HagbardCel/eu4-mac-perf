@@ -27,7 +27,7 @@ Focused modules, re-run after the correction and after rebasing onto current
 python3.14 -m automation.test_runner run --label m7-case-floor \
   --module tests.test_gfx_qualification --module tests.test_gfx_case \
   --module tests.test_agent_tools --module tests.test_offline_campaign \
-  --module tests.test_gfx_dual_run --module tests.test_gfx_metrics \
+  --module tests.test_gfx_dual_run --module tests.test_gfx_event_evidence \
   --module tests.test_gfx_replay_case
 ```
 

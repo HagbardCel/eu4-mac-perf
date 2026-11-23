@@ -167,14 +167,9 @@ the `Paused` banner. See [Experiment A](experiments/2026-11-14-experiment-a.md).
 
 ## First-divergence integration (offline)
 
-`gfx_case.build_case(..., semantic=...)` now packages a semantic divergence:
-`operations/semantic.json` contains the first mismatched field, the analysis
-names it, and the missing-evidence claim is suppressed. When no operation prefix
-exists, `repro/targeted-capture-request.json` records the exact frame, caller
-signature and required operation fields for one targeted capture before another
-campaign. This is a capture request, not yet a packaged executable renderer
-reproduction; the existing selected-event replay remains the executable path
-when a trace exists.
+`gfx_case.build_case` packages the frame comparison and a targeted-capture
+request. The superseded semantic argument was removed; `eu4_case_inspect
+--event` is the selected-event path when a trace exists.
 
 ## Cleanup
 

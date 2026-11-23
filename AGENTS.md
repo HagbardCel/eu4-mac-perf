@@ -126,9 +126,11 @@ Before starting another live EU4 run:
 3. replay known local cases (`eu4_replay`);
 4. inspect the recorded differential observations (`eu4_diff_inspect`,
    `eu4_capture health/frames`);
-5. use one targeted live diagnostic if the evidence is insufficient;
-6. run a dual-process campaign only when no adequate offline case exists;
-7. run the full qualification after corrections.
+5. inspect the first divergent event (`eu4_case_inspect --event ...`) before a
+   numerical experiment; it reuses captured evidence;
+6. use one targeted live diagnostic if the evidence is insufficient;
+7. run a dual-process campaign only when no adequate offline case exists;
+8. run the full qualification after corrections.
 
 Use `python3 -m automation.agent_tools <tool> ...` (or the native DSH tools) for
 these steps; do not compose new launch/capture scripts. A new EU4 launch needs a
