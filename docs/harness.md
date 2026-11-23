@@ -145,9 +145,9 @@ Outputs: `$OUT/uv2-probe/{uv2-probe.json,uv2-probe.rgba32f,uv2-control.bgra}`,
 `comparison.json` separates the isolated numerical result
 (`numerical_comparison_conclusive`, classified `conditional_numerical_comparison`)
 from the always-false authenticated original-GL claim.
-`fragment_attribution_verified` is always false for this probe: it does not
-capture fragment-shader discard, colour masking or logic operations, and event 1
-is depth-tested. Missing or partial draw state is unverified; control RGB
+`fragment_attribution_verified` is always false for this probe: shader discard,
+colour-mask and logic-op effects on fragment correspondence are not evaluated,
+and event 1 is depth-tested. Missing or partial draw state is unverified; control RGB
 equality and coverage alpha are not evidence.
 
 Refused: non-RGB8, multisample, stencil/alpha, non-zero indexed `first` or

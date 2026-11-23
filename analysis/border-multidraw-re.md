@@ -11,7 +11,7 @@ runs (`943×31` frames). Record `+0x04` varies but is **not** GL basevertex on m
 ([addendum](border-mode0-basevertex-evidence-addendum.md)). Loop-head target:
 **`glMultiDrawElements`** with shared mode/type/IBO.
 
-Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — see [gfx-subrecord-post-v31-decision.md](gfx-subrecord-post-v31-decision.md).
+Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — see [gfx-subrecord-hypothesis-matrix.md](gfx-subrecord-hypothesis-matrix.md). This is fixture-scoped; it is not a general impossibility claim.
 
 ## Gate chain (PR B → PR C)
 

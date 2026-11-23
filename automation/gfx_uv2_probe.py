@@ -358,8 +358,9 @@ def fragment_attribution(state: dict | None) -> dict:
     if not isinstance(state, dict):
         state = {}
     problems = ["the isolated pass does not prove contributing-fragment identity",
-                "fragment-shader discard is not captured",
-                "colour mask and logic operation are not captured"]
+                "fragment-shader discard effects are not evaluated",
+                "colour-mask and logic-op effects on fragment correspondence "
+                "are not evaluated"]
     for key, field, reason in (
             ("blend", "enabled", "blending can select a different fragment"),
             ("depth", "test", "depth test can reject or supersede a fragment"),

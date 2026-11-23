@@ -91,7 +91,7 @@ last draw of parent A → exit 0xe8 inner loop → advance 80-byte parent iterat
 → load parent B → enter subrecord loop → reach B setup before 0x14c832a
 ```
 
-Static map shows buffer binds occur **inside** the per-subrecord setup block, not in parent iteration glue ([`mesh-draw-dependency-map.md`](mesh-draw-dependency-map.md)).
+Static map shows buffer binds occur **inside** the per-subrecord setup block, not in parent iteration glue ([`canonical rendering findings`](../docs/eu4_macos_rendering_findings.md)).
 
 ## Invocation boundary
 
