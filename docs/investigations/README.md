@@ -12,3 +12,11 @@ Detailed technical analyses remain in their original paths during migration. Pre
 | Metal sessions: what the probes tested | [metal-probe-approaches.md](metal-probe-approaches.md) |
 
 Generated JSON under `analysis/evidence/` supports measurements; interpretation belongs in findings or status.
+
+## Retired narratives
+
+The October–November 2026 profiler/roadmap notes, WP-series memos, Stage-2 and
+Tier-1 planning narratives, and the historical roadmap were retired because
+their canonical results and current limits live in [../status.md](../status.md)
+and the active documents above. The removed text remains in git history; no
+measured evidence was deleted.

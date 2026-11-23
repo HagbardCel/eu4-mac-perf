@@ -1,24 +1,15 @@
 #!/usr/bin/env python3
 """Numerical comparison for the opt-in event-1 uv2 diagnostic probe.
 
-Consumes the two diagnostic descriptors produced by the original-OpenGL capture
-(``gfx-uv2-probe/v1``, side ``opengl``) and the Metal replay (side ``metal``),
-the captured frame they were produced from, and the existing divergent-pixel
-mask.  It reports raw float32 bits, numeric values, signed differences, ULP
-differences, pixel coordinates and orientation for every compared pixel.  It
-does not produce a similarity score.
+Both probe descriptors, the divergent-pixel selection and the original-shader
+control reference are bound to one authenticated sealed frame and to the same
+Metal replay execution that produced the probe.  The report gives raw float32
+bits, numeric values, signed differences, ULP differences, coordinates and
+orientation; it never substitutes an aggregate similarity score.
 
-The probe values are diagnostic evidence only.  A difference is attributable to
-the original OpenGL numerical behaviour only when the descriptor proves the
-same draw inputs and the original-shader control reproduces the authentic
-post-event colour output; both checks are reported explicitly.
-
-    python3 -m automation.gfx_uv2_probe compare \
-        --gl <capture>/uv2-probe \
-        --metal <capture>/metal/uv2-probe \
-        --frame <capture>/frame \
-        --mask-gl <seal-blob> --mask-metal <seal-metal-event1> \
-        --out <capture>/uv2-probe
+    python3 -m automation.gfx_uv2_probe compare \\
+        --gl <capture>/uv2-probe --metal <metal>/uv2-probe \\
+        --frame <capture>/frame --out <capture>/uv2-probe
 """
 
 from __future__ import annotations
@@ -31,16 +22,23 @@ import struct
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import (gfx_event_evidence, gfx_frame_compare, m6_compare,
+                        m6_frame)  # noqa: E402
+
 SCHEMA = "gfx-uv2-probe/v1"
 COMPARISON_SCHEMA = "gfx-uv2-probe-comparison/v1"
-MAX_MASK_PIXELS = 4096
+NEIGHBORHOOD_MAX = 4
 
 
 class ProbeError(RuntimeError):
     pass
 
 
-def _sha256_bytes(body: bytes) -> str:
+def _sha256(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
@@ -55,7 +53,7 @@ def _read_json(path: Path) -> dict:
 
 
 def load_probe(directory: Path) -> dict:
-    """Loads one diagnostic descriptor and validates its declared layout."""
+    """Loads one descriptor and validates its declared layout and payload."""
     directory = Path(directory)
     descriptor_path = directory / "uv2-probe.json"
     if not descriptor_path.is_file():
@@ -65,50 +63,103 @@ def load_probe(directory: Path) -> dict:
         raise ProbeError(f"unexpected probe schema in {descriptor_path}")
     side = descriptor.get("side")
     if side not in ("opengl", "metal"):
-        raise ProbeError(f"unknown probe side {side!r} in {descriptor_path}")
+        raise ProbeError(f"unknown probe side {side!r}")
     if descriptor.get("status") != "ok":
         raise ProbeError(
-            f"{side} probe did not produce numbers: "
-            f"{descriptor.get('status')} ({descriptor.get('reason', '')})"
-        )
+            f"{side} probe did not produce numbers: {descriptor.get('status')} "
+            f"({descriptor.get('reason', '')})")
     if descriptor.get("pixel_format") != "RGBA32F":
         raise ProbeError(f"{side} probe is not RGBA32F")
     if descriptor.get("origin") != "lower_left":
         raise ProbeError(f"{side} probe origin is not lower_left")
-    width = descriptor.get("width")
-    height = descriptor.get("height")
-    if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
+    width, height = descriptor.get("width"), descriptor.get("height")
+    if not isinstance(width, int) or not isinstance(height, int):
         raise ProbeError(f"{side} probe dimensions are invalid")
-    expected_stride = width * 16
-    if descriptor.get("row_stride") != expected_stride:
-        raise ProbeError(
-            f"{side} probe row_stride {descriptor.get('row_stride')} != "
-            f"{expected_stride}"
-        )
+    if width <= 0 or height <= 0:
+        raise ProbeError(f"{side} probe dimensions are invalid")
+    if descriptor.get("row_stride") != width * 16:
+        raise ProbeError(f"{side} probe row_stride does not match its extent")
     raw_path = directory / str(descriptor.get("raw_file") or "")
     if not raw_path.is_file():
         raise ProbeError(f"missing {side} probe payload: {raw_path}")
     raw = raw_path.read_bytes()
-    expected_bytes = width * height * 16
-    if len(raw) != expected_bytes:
-        raise ProbeError(
-            f"{side} probe payload {len(raw)} bytes != {expected_bytes}"
-        )
-    if descriptor.get("raw_bytes") != len(raw):
-        raise ProbeError(f"{side} probe declares a different payload size")
-    digest = _sha256_bytes(raw)
+    if len(raw) != width * height * 16 or descriptor.get("raw_bytes") != len(raw):
+        raise ProbeError(f"{side} probe payload size is inconsistent")
+    digest = _sha256(raw)
     if descriptor.get("raw_sha256") != digest:
         raise ProbeError(f"{side} probe payload digest does not match")
-    return {
-        "directory": directory,
-        "descriptor": descriptor,
-        "path": raw_path,
-        "raw": raw,
-        "sha256": digest,
-        "width": width,
-        "height": height,
-        "side": side,
-    }
+    return {"directory": directory, "descriptor": descriptor, "raw": raw,
+            "sha256": digest, "width": width, "height": height, "side": side}
+
+def frame_context(frame_dir: Path, event_index: int) -> tuple[dict, dict, dict]:
+    """Loads the authenticated sealed frame and one captured draw event."""
+    try:
+        # The existing verified loader accepts both a direct sealed frame and
+        # an authenticated trusted-evidence copy of one.
+        trace, seal = gfx_event_evidence._load_frame(frame_dir)
+    except Exception as exc:  # noqa: BLE001 - report as a probe input error
+        raise ProbeError(f"frame is not a verified sealed capture: {exc}") from exc
+    if seal is None or seal.get("sealed") is not True:
+        raise ProbeError("frame seal is not sealed")
+    events = trace.get("_events") or []
+    if not 0 <= event_index < len(events):
+        raise ProbeError(f"event {event_index} is outside the captured frame")
+    event = events[event_index]
+    if event.get("kind") != "draw":
+        raise ProbeError(f"event {event_index} is not a draw")
+    return trace, seal, event
+
+
+def post_observation(trace: dict, event_index: int, resource: str) -> dict:
+    prefix = trace.get("_prefix") or {}
+    for record in prefix.get("post_events") or []:
+        if record.get("event") == event_index and record.get("resource") == resource:
+            return record
+    raise ProbeError(
+        f"the capture has no post-event observation for event {event_index} "
+        f"({resource}); capture with --prefix-end")
+
+
+def observation_image(frame_dir: Path, record: dict) -> dict:
+    color = record.get("color") or {}
+    name = color.get("file")
+    if not name:
+        raise ProbeError("the post-event observation has no colour payload")
+    path = Path(frame_dir) / "blobs" / str(name)
+    if not path.is_file():
+        raise ProbeError(f"missing observation payload: {path}")
+    body = path.read_bytes()
+    width, height = record.get("width"), record.get("height")
+    if not isinstance(width, int) or not isinstance(height, int):
+        raise ProbeError("the post-event observation extent is invalid")
+    if len(body) != width * height * 4 or color.get("sha256") != _sha256(body):
+        raise ProbeError("the post-event observation payload is inconsistent")
+    return {"path": path, "sha256": _sha256(body), "width": width,
+            "height": height, "origin": "lower_left", "pixel_format": "BGRA8",
+            "event": record.get("event"), "timing": record.get("timing"),
+            "resource": record.get("resource")}
+
+
+def _image(path: Path, sha256: str, width: int, height: int, label: str):
+    try:
+        image = gfx_frame_compare.load_frame(
+            path, width, height, origin="lower_left", pixel_format="BGRA8",
+            expected_sha256=sha256)
+    except gfx_frame_compare.CompareError as exc:
+        raise ProbeError(f"{label} image is unusable: {exc}") from exc
+    image[:, :, 3] = 255  # RGB8 scope: the alpha byte is not compared.
+    return image
+
+
+def _diff_mask(left, right):
+    return gfx_frame_compare.difference_mask(left, right, 0)
+
+
+def _differences(left, right) -> list[tuple[int, int]]:
+    import numpy as np
+
+    mask = _diff_mask(left, right)
+    return [(int(x), int(y)) for y, x in np.argwhere(mask)]
 
 
 def _f32_bits(raw: bytes, offset: int) -> int:
@@ -120,192 +171,80 @@ def _bits_float(bits: int) -> float:
 
 
 def _ordered_bits(bits: int) -> int:
-    """Maps float32 bits to a monotonic integer for ULP differences."""
     if bits & 0x80000000:
         return -(bits & 0x7FFFFFFF)
     return bits
 
 
-def _ulp(a_bits: int, b_bits: int) -> int:
-    return abs(_ordered_bits(a_bits) - _ordered_bits(b_bits))
+def _ulp(left: int, right: int) -> int:
+    return abs(_ordered_bits(left) - _ordered_bits(right))
 
 
 def _sample(probe: dict, x: int, y: int) -> list[int]:
     offset = (y * probe["width"] + x) * 16
-    return [_f32_bits(probe["raw"], offset + 4 * component) for component in range(4)]
+    return [_f32_bits(probe["raw"], offset + 4 * component)
+            for component in range(4)]
 
 
-def _load_bgra(path: Path, width: int, height: int, label: str) -> dict:
-    path = Path(path)
-    try:
-        body = path.read_bytes()
-    except OSError as exc:
-        raise ProbeError(f"unreadable {label} image {path}: {exc}") from exc
-    if len(body) != width * height * 4:
-        raise ProbeError(
-            f"{label} image {len(body)} bytes != {width}x{height}x4"
-        )
+def _capture(probe: dict) -> dict:
+    descriptor = probe["descriptor"]
+    capture = descriptor.get("capture")
+    if isinstance(capture, dict):
+        return capture
+    return {"sealed": descriptor.get("sealed"),
+            "session_id": descriptor.get("session_id"),
+            "capture_frame_id": descriptor.get("capture_frame_id")}
+
+
+def capture_binding(gl: dict, metal: dict, seal: dict) -> dict:
+    """Requires both probes to name the sealed capture they are compared to."""
+    problems = []
+    gl_capture = _capture(gl)
+    metal_capture = _capture(metal)
+    for label, capture in (("opengl", gl_capture), ("metal", metal_capture)):
+        if capture.get("sealed") is not True:
+            problems.append(f"{label} probe is not bound to a sealed frame")
+        if capture.get("session_id") != seal.get("session_id"):
+            problems.append(f"{label} session")
+        if capture.get("capture_frame_id") != seal.get("capture_frame_id"):
+            problems.append(f"{label} capture frame")
+    if metal_capture.get("manifest_sha256") != seal.get("manifest_sha256"):
+        problems.append("metal replay did not execute the sealed manifest")
+    if metal_capture.get("reference_sha256") != seal.get("reference_sha256"):
+        problems.append("metal replay reference differs from the seal")
     return {
-        "path": str(path),
-        "sha256": _sha256_bytes(body),
-        "width": width,
-        "height": height,
-        "pixel_format": "BGRA8",
-        "origin": "lower_left",
-        "body": body,
+        "match": not problems,
+        "problems": problems,
+        "opengl": gl_capture,
+        "metal": metal_capture,
     }
 
 
-def divergent_pixels(left: dict, right: dict, *, scope: str = "RGB") -> list[dict]:
-    """Exact per-pixel colour differences between two BGRA8 images."""
-    if left["width"] != right["width"] or left["height"] != right["height"]:
-        raise ProbeError("mask images have different extents")
-    width = left["width"]
-    height = left["height"]
-    channels = 3 if scope == "RGB" else 4
-    pixels = []
-    a = left["body"]
-    b = right["body"]
-    for index in range(width * height):
-        offset = index * 4
-        differences = [
-            abs(a[offset + channel] - b[offset + channel])
-            for channel in range(channels)
-        ]
-        if max(differences) != 0:
-            pixels.append(
-                {
-                    "x": index % width,
-                    "y": index // width,
-                    "gl_bgra": list(a[offset:offset + 4]),
-                    "metal_bgra": list(b[offset:offset + 4]),
-                    "channel_differences": differences,
-                    "max_channel_error": max(differences),
-                }
-            )
-            if len(pixels) > MAX_MASK_PIXELS:
-                raise ProbeError(
-                    f"mask exceeds {MAX_MASK_PIXELS} divergent pixels; "
-                    "refusing an unbounded comparison"
-                )
-    return pixels
-
-
-def _reference_color(frame_dir: Path, event: int, texture: int) -> dict | None:
-    """Returns the authentic post-event colour observation from the capture."""
-    observations = Path(frame_dir) / "prefix-observations.jsonl"
-    if not observations.is_file():
-        return None
-    resource = f"tex:{texture}"
-    for line in observations.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if (
-            record.get("event") == event
-            and record.get("timing") == "post_event"
-            and record.get("resource") == resource
-        ):
-            color = record.get("color") or {}
-            name = color.get("file")
-            if not name:
-                return None
-            path = Path(frame_dir) / "blobs" / str(name)
-            if not path.is_file():
-                return None
-            return {
-                "path": str(path),
-                "sha256": color.get("sha256") or "",
-                "width": record.get("width"),
-                "height": record.get("height"),
-                "pixel_format": record.get("pixel_format") or "",
-                "origin": record.get("origin") or "",
-                "body": path.read_bytes(),
-            }
-    return None
-
-
-def control_correspondence(control: dict, reference: dict) -> dict:
-    """Exact RGB comparison of the diagnostic control with the authentic output."""
-    if control["width"] != reference["width"] or control["height"] != reference["height"]:
-        return {
-            "status": "mismatched_extent",
-            "match": False,
-            "control": {"path": control["path"], "sha256": control["sha256"]},
-            "reference": {"path": reference["path"], "sha256": reference["sha256"]},
-        }
-    a = control["body"]
-    b = reference["body"]
-    mismatched = 0
-    max_error = 0
-    first = []
-    for index in range(control["width"] * control["height"]):
-        offset = index * 4
-        differences = [abs(a[offset + c] - b[offset + c]) for c in range(3)]
-        error = max(differences)
-        if error != 0:
-            mismatched += 1
-            if len(first) < 16:
-                first.append(
-                    {
-                        "x": index % control["width"],
-                        "y": index // control["width"],
-                        "control_bgra": list(a[offset:offset + 4]),
-                        "reference_bgra": list(b[offset:offset + 4]),
-                        "max_channel_error": error,
-                    }
-                )
-        max_error = max(max_error, error)
+def _draw(record: dict, event_draw: dict) -> dict:
     return {
-        "status": "compared",
-        "match": mismatched == 0,
-        "scope": "RGB",
-        "pixels": control["width"] * control["height"],
-        "mismatched_pixels": mismatched,
-        "max_channel_error": max_error,
-        "first_differences": first,
-        "control": {
-            "path": control["path"],
-            "sha256": control["sha256"],
-            "pixel_format": control["pixel_format"],
-            "origin": control["origin"],
-        },
-        "reference": {
-            "path": reference["path"],
-            "sha256": reference["sha256"],
-            "pixel_format": reference["pixel_format"],
-            "origin": reference["origin"],
-        },
+        "entry": record.get("entry"),
+        "mode": record.get("mode"),
+        "count": record.get("count"),
+        "first": record.get("first", 0),
+        "base_vertex": record.get("base_vertex", 0),
+        "instances": record.get("instances", record.get("instance_count", 1)),
+        "indexed": bool(record.get("indexed")),
+        "caller_rva": record.get("caller_rva"),
     }
-
-
-def _load_event(frame_dir: Path, event: int) -> dict:
-    events_path = Path(frame_dir) / "frame-events.jsonl"
-    if not events_path.is_file():
-        raise ProbeError(f"missing captured event stream: {events_path}")
-    for line in events_path.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if record.get("kind") == "draw" and record.get("index") == event:
-            return record
-    raise ProbeError(f"event {event} is not a captured draw in {frame_dir}")
 
 
 def input_identity(probe: dict, event: dict) -> dict:
     """Checks the probe descriptor against the captured event's exact inputs."""
     descriptor = probe["descriptor"]
-    checks = {}
     problems = []
+    checks = {}
     program = event.get("program") or {}
     target = event.get("target") or {}
     color = target.get("color_attachment") or {}
+    probe_target = descriptor.get("target") or {}
+    probe_texture = probe_target.get("texture")
+    if probe_texture is None:
+        probe_texture = (probe_target.get("color_attachment") or {}).get("name")
     observed = {
         "event": event.get("index"),
         "program": program.get("name"),
@@ -315,45 +254,16 @@ def input_identity(probe: dict, event: dict) -> dict:
         "draw": event.get("draw"),
     }
     checks["program"] = descriptor.get("program") == observed["program"]
-    if not checks["program"]:
-        problems.append("program")
-    probe_target = descriptor.get("target") or {}
-    probe_framebuffer = probe_target.get("framebuffer")
-    probe_texture = probe_target.get("texture")
-    if probe_texture is None:
-        probe_texture = (probe_target.get("color_attachment") or {}).get("name")
-    checks["framebuffer"] = probe_framebuffer == observed["framebuffer"]
-    if not checks["framebuffer"]:
-        problems.append("framebuffer")
+    checks["framebuffer"] = probe_target.get("framebuffer") == observed["framebuffer"]
     checks["texture"] = probe_texture == observed["texture"]
-    if not checks["texture"]:
-        problems.append("texture")
-    draw = event.get("draw") or {}
-    probe_draw = descriptor.get("draw") or {}
-    checks["draw"] = (
-        probe_draw.get("count") == draw.get("count")
-        and probe_draw.get("mode") == draw.get("mode")
-        and bool(probe_draw.get("indexed")) == bool(draw.get("indexed"))
-    )
-    if not checks["draw"]:
-        problems.append("draw")
-
-    shader_by_stage = {
-        stage.get("stage"): stage.get("sha256")
-        for stage in program.get("shaders") or []
-    }
+    expected_draw = _draw(observed["draw"] or {}, observed["draw"] or {})
+    actual_draw = _draw(descriptor.get("draw") or {}, observed["draw"] or {})
+    checks["draw"] = actual_draw == expected_draw
+    shaders = {stage.get("stage"): stage.get("sha256")
+               for stage in program.get("shaders") or []}
     sources = descriptor.get("sources") or {}
-    checks["vertex_source"] = (
-        sources.get("vertex_sha256") == shader_by_stage.get("vertex")
-    )
-    if not checks["vertex_source"]:
-        problems.append("vertex_source")
-    checks["fragment_source"] = (
-        sources.get("fragment_sha256") == shader_by_stage.get("pixel")
-    )
-    if not checks["fragment_source"]:
-        problems.append("fragment_source")
-
+    checks["vertex_source"] = sources.get("vertex_sha256") == shaders.get("vertex")
+    checks["fragment_source"] = sources.get("fragment_sha256") == shaders.get("pixel")
     captured_uniforms = {}
     for uniform in program.get("uniforms") or []:
         name = uniform.get("name")
@@ -373,271 +283,202 @@ def input_identity(probe: dict, event: dict) -> dict:
         else:
             probe_uniforms[name] = {"sha256": uniform.get("sha256")}
     checks["uniforms"] = captured_uniforms == probe_uniforms
-    if not checks["uniforms"]:
-        problems.append("uniforms")
-
-    captured_attributes = {
-        attribute.get("name"): attribute.get("sha256")
-        for attribute in event.get("attributes") or []
-    }
-    probe_attributes = {
-        attribute.get("name"): attribute.get("sha256")
-        for attribute in descriptor.get("attributes") or []
-    }
-    checks["attributes"] = (
-        captured_attributes == probe_attributes
-        and all(
-            attribute.get("digest_ok", True)
-            for attribute in descriptor.get("attributes") or []
-        )
-    )
-    if not checks["attributes"]:
-        problems.append("attributes")
-
+    captured_attributes = {a.get("name"): a.get("sha256")
+                           for a in event.get("attributes") or []}
+    probe_attributes = {a.get("name"): a.get("sha256")
+                        for a in descriptor.get("attributes") or []}
+    digest_ok = all(a.get("digest_ok", True)
+                    for a in descriptor.get("attributes") or [])
+    checks["attributes"] = captured_attributes == probe_attributes and digest_ok
     indices = event.get("indices") or {}
     probe_indices = descriptor.get("indices") or {}
-    checks["indices"] = (
-        probe_indices.get("sha256") == indices.get("sha256")
-        and probe_indices.get("count") == indices.get("count")
-    )
-    if not checks["indices"]:
-        problems.append("indices")
+    checks["indices"] = (probe_indices.get("sha256") == indices.get("sha256")
+                         and probe_indices.get("count") == indices.get("count"))
+    for name, passed in checks.items():
+        if not passed:
+            problems.append(name)
+    return {"match": not problems, "problems": problems, "checks": checks,
+            "observed": observed}
+
+
+def control_correspondence(control: dict, reference: dict, width: int,
+                           height: int) -> dict:
+    """Exact RGB comparison of the diagnostic control with the authentic output."""
+    left = _image(control["path"], control["sha256"], width, height, "control")
+    right = _image(reference["path"], reference["sha256"], width, height,
+                   "reference")
+    import numpy as np
+
+    delta = np.abs(left[:, :, :3].astype(np.int16) -
+                   right[:, :, :3].astype(np.int16))
+    mismatched = delta.max(axis=2)
+    count = int(np.count_nonzero(mismatched))
+    first = []
+    for y, x in np.argwhere(mismatched)[:16]:
+        first.append({"x": int(x), "y": int(y),
+                      "control_rgb": [int(v) for v in left[y, x, :3]],
+                      "reference_rgb": [int(v) for v in right[y, x, :3]],
+                      "max_channel_error": int(mismatched[y, x])})
     return {
-        "match": not problems,
-        "problems": problems,
-        "checks": checks,
-        "observed": observed,
+        "status": "compared", "match": count == 0, "scope": "RGB",
+        "pixels": width * height, "mismatched_pixels": count,
+        "max_channel_error": int(mismatched.max()) if count else 0,
+        "first_differences": first,
+        "control": {"path": str(control["path"]), "sha256": control["sha256"]},
+        "reference": {"path": str(reference["path"]),
+                      "sha256": reference["sha256"]},
     }
 
 
-def compare(
-    gl: dict,
-    metal: dict,
-    *,
-    gl_identity: dict,
-    metal_identity: dict,
-    control: dict,
-    mask_pixels: list[dict],
-    neighborhood: int,
-) -> dict:
-    width = gl["width"]
-    height = gl["height"]
+def _neighborhood(mask: list[tuple[int, int]], width: int, height: int,
+                  radius: int) -> list[tuple[int, int]]:
+    coordinates = set()
+    for x, y in mask:
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < width and 0 <= ny < height:
+                    coordinates.add((nx, ny))
+    return sorted(coordinates, key=lambda item: (item[1], item[0]))
+
+
+def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
+            mask: list[tuple[int, int]], neighborhood: int) -> dict:
+    width, height = gl["width"], gl["height"]
     if (width, height) != (metal["width"], metal["height"]):
         raise ProbeError("the OpenGL and Metal probe extents differ")
-    if mask_pixels:
-        if any(
-            not 0 <= pixel["x"] < width or not 0 <= pixel["y"] < height
-            for pixel in mask_pixels
-        ):
-            raise ProbeError("a mask pixel is outside the probe extent")
-    coordinates = set()
-    for pixel in mask_pixels:
-        for dy in range(-neighborhood, neighborhood + 1):
-            for dx in range(-neighborhood, neighborhood + 1):
-                x = pixel["x"] + dx
-                y = pixel["y"] + dy
-                if 0 <= x < width and 0 <= y < height:
-                    coordinates.add((x, y))
-    mask_set = {(pixel["x"], pixel["y"]) for pixel in mask_pixels}
+    mask_set = set(mask)
+    components = ["x", "y", "z", "w"]
     entries = []
-    for x, y in sorted(coordinates, key=lambda item: (item[1], item[0])):
+    for x, y in _neighborhood(mask, width, height, neighborhood):
         gl_bits = _sample(gl, x, y)
         metal_bits = _sample(metal, x, y)
         gl_values = [_bits_float(bits) for bits in gl_bits]
         metal_values = [_bits_float(bits) for bits in metal_bits]
-        component_names = ["x", "y", "z", "w"]
-        gl_bits_hex = {name: f"0x{bits:08x}" for name, bits in zip(component_names, gl_bits)}
-        metal_bits_hex = {
-            name: f"0x{bits:08x}" for name, bits in zip(component_names, metal_bits)
-        }
-        signed = {
-            name: metal_values[index] - gl_values[index]
-            for index, name in enumerate(component_names)
-        }
-        ulps = {
-            name: _ulp(gl_bits[index], metal_bits[index])
-            for index, name in enumerate(component_names)
-        }
-        bit_equal = {
-            name: gl_bits[index] == metal_bits[index]
-            for index, name in enumerate(component_names)
-        }
-        entries.append(
-            {
-                "x": x,
-                "y": y,
-                "orientation": "lower_left",
-                "mask_pixel": (x, y) in mask_set,
-                "gl_bits": gl_bits_hex,
-                "metal_bits": metal_bits_hex,
-                "gl_values": {
-                    name: gl_values[index] for index, name in enumerate(component_names)
-                },
-                "metal_values": {
-                    name: metal_values[index]
-                    for index, name in enumerate(component_names)
-                },
-                "signed_differences": signed,
-                "ulp_differences": ulps,
-                "bit_equal": bit_equal,
-                "all_components_bit_equal": all(bit_equal.values()),
-                "covered": {
-                    "gl": gl_bits[3] == 0x3F800000,
-                    "metal": metal_bits[3] == 0x3F800000,
-                },
-            }
-        )
-    mask_entries = [entry for entry in entries if entry["mask_pixel"]]
-    compared = [entry for entry in mask_entries if entry["covered"]["gl"] and entry["covered"]["metal"]]
-    per_component_equal = {
-        name: sum(1 for entry in compared if entry["bit_equal"][name])
-        for name in ["x", "y", "z", "w"]
-    }
-    ulp_values = [
-        entry["ulp_differences"][name] for entry in compared for name in ["x", "y"]
-    ]
-    signed_values = [
-        abs(entry["signed_differences"][name])
-        for entry in compared
-        for name in ["x", "y"]
-    ]
+        bit_equal = {name: gl_bits[i] == metal_bits[i]
+                     for i, name in enumerate(components)}
+        entries.append({
+            "x": x, "y": y, "orientation": "lower_left",
+            "mask_pixel": (x, y) in mask_set,
+            "gl_bits": {name: f"0x{gl_bits[i]:08x}"
+                        for i, name in enumerate(components)},
+            "metal_bits": {name: f"0x{metal_bits[i]:08x}"
+                           for i, name in enumerate(components)},
+            "gl_values": {name: gl_values[i] for i, name in enumerate(components)},
+            "metal_values": {name: metal_values[i]
+                             for i, name in enumerate(components)},
+            "signed_differences": {name: metal_values[i] - gl_values[i]
+                                   for i, name in enumerate(components)},
+            "ulp_differences": {name: _ulp(gl_bits[i], metal_bits[i])
+                                for i, name in enumerate(components)},
+            "bit_equal": bit_equal,
+            "all_components_bit_equal": all(bit_equal.values()),
+            "covered": {"gl": gl_bits[3] == 0x3F800000,
+                        "metal": metal_bits[3] == 0x3F800000},
+        })
+    covered = [e for e in entries if e["mask_pixel"]
+               and e["covered"]["gl"] and e["covered"]["metal"]]
+    conclusive = bool(covered)
+    ulps = [e["ulp_differences"][c] for e in covered for c in ("x", "y")]
+    signed = [abs(e["signed_differences"][c]) for e in covered for c in ("x", "y")]
     summary = {
-        "mask_pixels": len(mask_pixels),
+        "mask_pixels": len(mask),
         "reported_pixels": len(entries),
-        "mask_pixels_covered_by_both": len(compared),
-        "mask_pixels_uncovered": len(mask_entries) - len(compared),
-        "bit_for_bit_equal_xy": all(
-            entry["bit_equal"]["x"] and entry["bit_equal"]["y"] for entry in compared
-        ),
-        "component_bit_equal_counts": per_component_equal,
-        "max_ulp_difference_xy": max(ulp_values) if ulp_values else None,
-        "max_abs_signed_difference_xy": max(signed_values) if signed_values else None,
+        "mask_pixels_covered_by_both": len(covered),
+        "mask_pixels_uncovered": len(mask) - len(covered),
+        "status": "compared" if conclusive else "inconclusive",
+        "conclusive": conclusive,
+        # An empty comparison is unknown, never equal.
+        "bit_for_bit_equal_xy": (
+            all(e["bit_equal"]["x"] and e["bit_equal"]["y"] for e in covered)
+            if conclusive else None),
+        "max_ulp_difference_xy": max(ulps) if conclusive else None,
+        "max_abs_signed_difference_xy": max(signed) if conclusive else None,
     }
     return {
         "schema": COMPARISON_SCHEMA,
         "created_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "inputs": {
-            "gl": {
-                "directory": str(gl["directory"]),
-                "sha256": gl["sha256"],
-                "descriptor": gl["descriptor"],
-            },
-            "metal": {
-                "directory": str(metal["directory"]),
-                "sha256": metal["sha256"],
-                "descriptor": metal["descriptor"],
-            },
+            "gl": {"directory": str(gl["directory"]), "sha256": gl["sha256"],
+                   "descriptor": gl["descriptor"]},
+            "metal": {"directory": str(metal["directory"]),
+                      "sha256": metal["sha256"],
+                      "descriptor": metal["descriptor"]},
         },
-        "identity": {"gl": gl_identity, "metal": metal_identity},
-        "control": control,
-        "summary": summary,
-        "pixels": entries,
+        "identity": identity, "control": control,
+        "mask": {"pixels": [{"x": x, "y": y} for x, y in mask]},
+        "summary": summary, "pixels": entries,
         "conclusion": {
             "kind": "diagnostic_evidence",
-            "input_identity_match": gl_identity["match"] and metal_identity["match"],
+            "input_identity_match": identity["gl"]["match"] and identity["metal"]["match"],
+            "capture_binding_match": identity["capture"]["match"],
             "original_shader_control_match": control.get("match") is True,
+            "conclusive": conclusive,
             "xy_bit_for_bit_equal": summary["bit_for_bit_equal_xy"],
-            "note": (
-                "Diagnostic only. A uv2 difference is evidence about the observed "
-                "draw inputs; it is not a replacement for the sealed reference."
-            ),
         },
-        "limits": [
-            "The OpenGL diagnostic vertex stage is recompiled into a new program; "
-            "the driver may compile it differently from the original program.",
-            "The original-shader control validates the diagnostic pipeline "
-            "(state, inputs, readback), not the probe program's instructions.",
-            "The Metal probe reuses the normal pass's compiled vertex function.",
-        ],
     }
-
-
-def _parse_mask_json(path: Path) -> list[dict]:
-    document = _read_json(path)
-    pixels = document.get("pixels") if isinstance(document, dict) else document
-    if not isinstance(pixels, list):
-        raise ProbeError("mask JSON must contain a pixel list")
-    result = []
-    for item in pixels:
-        if isinstance(item, dict):
-            x, y = item.get("x"), item.get("y")
-        elif isinstance(item, (list, tuple)) and len(item) == 2:
-            x, y = item
-        else:
-            raise ProbeError("mask JSON pixel is not {x,y} or [x,y]")
-        if not isinstance(x, int) or not isinstance(y, int):
-            raise ProbeError("mask JSON pixel coordinates are not integers")
-        result.append({"x": x, "y": y})
-    return result
 
 
 def run(args: argparse.Namespace) -> dict:
     gl = load_probe(Path(args.gl))
     metal = load_probe(Path(args.metal))
-    frame_dir = Path(args.frame)
-    event = gl["descriptor"].get("event")
-    if metal["descriptor"].get("event") != event:
+    event_index = gl["descriptor"].get("event")
+    if metal["descriptor"].get("event") != event_index:
         raise ProbeError("the OpenGL and Metal probes name different events")
+    frame_dir = Path(args.frame)
+    trace, seal, event = frame_context(frame_dir, event_index)
     target = gl["descriptor"].get("target") or {}
     texture = target.get("texture")
     if texture is None:
         texture = (target.get("color_attachment") or {}).get("name")
     if not isinstance(texture, int):
         raise ProbeError("the probe descriptor does not name its colour texture")
-    captured_event = _load_event(frame_dir, event)
-    gl_identity = input_identity(gl, captured_event)
-    metal_identity = input_identity(metal, captured_event)
-
-    if args.mask_json:
-        mask_pixels = _parse_mask_json(Path(args.mask_json))
-        mask_provenance = {"source": "json", "path": str(args.mask_json)}
-    else:
-        if not args.mask_gl or not args.mask_metal:
-            raise ProbeError(
-                "provide --mask-gl and --mask-metal (or --mask-json) naming "
-                "the existing event-1 GL and Metal colour images"
-            )
-        mask_gl = _load_bgra(Path(args.mask_gl), gl["width"], gl["height"], "GL mask")
-        mask_metal = _load_bgra(
-            Path(args.mask_metal), gl["width"], gl["height"], "Metal mask"
-        )
-        mask_pixels = divergent_pixels(mask_gl, mask_metal)
-        mask_provenance = {
-            "source": "images",
-            "gl": {"path": mask_gl["path"], "sha256": mask_gl["sha256"]},
-            "metal": {"path": mask_metal["path"], "sha256": mask_metal["sha256"]},
-            "scope": "RGB",
-            "origin": "lower_left",
-        }
-
-    reference = _reference_color(frame_dir, event, int(texture))
-    if reference is None:
-        control = {
-            "status": "unavailable",
-            "match": False,
-            "reason": (
-                "the capture has no post-event colour observation for this "
-                "event; re-capture with --prefix-end"
-            ),
-        }
-    else:
-        control_body = gl["directory"] / str(
-            (gl["descriptor"].get("control") or {}).get("file") or ""
-        )
-        control_image = _load_bgra(control_body, gl["width"], gl["height"], "control")
-        control = control_correspondence(control_image, reference)
-
-    report = compare(
-        gl,
-        metal,
-        gl_identity=gl_identity,
-        metal_identity=metal_identity,
-        control=control,
-        mask_pixels=mask_pixels,
-        neighborhood=int(args.neighborhood),
-    )
-    report["inputs"]["frame"] = {"path": str(frame_dir), "event": event}
-    report["inputs"]["mask"] = mask_provenance
+    resource = f"tex:{texture}"
+    reference = observation_image(
+        frame_dir, post_observation(trace, event_index, resource))
+    if (reference["width"], reference["height"]) != (gl["width"], gl["height"]):
+        raise ProbeError("the sealed observation and probe extents differ")
+    normal_target = metal["descriptor"].get("normal_target") or {}
+    color_path = Path(normal_target["path"]) if normal_target.get("path") else (
+        Path(args.metal).parent / str(normal_target.get("file") or ""))
+    if not normal_target.get("file") or not color_path.is_file():
+        raise ProbeError("the Metal probe has no event-boundary target readback")
+    metal_mask = {
+        "path": color_path, "sha256": normal_target.get("sha256") or "",
+        "width": normal_target.get("width"), "height": normal_target.get("height")}
+    if (metal_mask["width"], metal_mask["height"]) != (gl["width"], gl["height"]):
+        raise ProbeError("the Metal event-target readback extent differs")
+    left = _image(reference["path"], reference["sha256"], gl["width"],
+                  gl["height"], "sealed observation")
+    right = _image(metal_mask["path"], metal_mask["sha256"], gl["width"],
+                   gl["height"], "Metal event target")
+    mask = _differences(left, right)
+    control_file = (gl["descriptor"].get("control") or {}).get("file")
+    if not control_file:
+        raise ProbeError("the OpenGL probe has no original-shader control")
+    control = control_correspondence(
+        {"path": Path(args.gl) / str(control_file),
+         "sha256": (gl["descriptor"].get("control") or {}).get("sha256") or ""},
+        reference, gl["width"], gl["height"])
+    identity = {
+        "gl": input_identity(gl, event),
+        "metal": input_identity(metal, event),
+        "capture": capture_binding(gl, metal, seal),
+    }
+    report = compare(gl, metal, identity=identity, control=control, mask=mask,
+                     neighborhood=int(args.neighborhood))
+    report["inputs"]["frame"] = {
+        "path": str(frame_dir), "event": event_index,
+        "session_id": seal.get("session_id"),
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "manifest_sha256": seal.get("manifest_sha256"),
+        "reference_sha256": seal.get("reference_sha256")}
+    report["mask"]["observation"] = {
+        "path": str(reference["path"]), "sha256": reference["sha256"],
+        "event": reference["event"], "timing": reference["timing"],
+        "resource": reference["resource"]}
+    report["mask"]["metal_event_target"] = {
+        "path": str(color_path), "sha256": metal_mask["sha256"]}
     out = Path(args.out) if args.out else gl["directory"]
     out.mkdir(parents=True, exist_ok=True)
     (out / "comparison.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -652,32 +493,20 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--gl", required=True)
     command.add_argument("--metal", required=True)
     command.add_argument("--frame", required=True)
-    command.add_argument("--mask-gl", default=None)
-    command.add_argument("--mask-metal", default=None)
-    command.add_argument("--mask-json", default=None)
     command.add_argument("--neighborhood", type=int, default=1)
     command.add_argument("--out", default=None)
     args = parser.parse_args(argv)
-    if args.neighborhood < 0 or args.neighborhood > 4:
-        parser.error("--neighborhood must be between 0 and 4")
+    if not 0 <= args.neighborhood <= NEIGHBORHOOD_MAX:
+        parser.error("--neighborhood is out of range")
     try:
         report = run(args)
     except ProbeError as exc:
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
-    print(
-        json.dumps(
-            {
-                "status": "ok",
-                "summary": report["summary"],
-                "conclusion": report["conclusion"],
-                "out": str(
-                    Path(args.out or args.gl) / "comparison.json"
-                ),
-            },
-            indent=2,
-        )
-    )
+    print(json.dumps({"status": "ok", "summary": report["summary"],
+                      "conclusion": report["conclusion"],
+                      "out": str(Path(args.out or args.gl) / "comparison.json")},
+                     indent=2))
     return 0
 
 

@@ -1346,7 +1346,7 @@ The sections below record earlier evidence and remain as history; they do not ov
 
 - **R-mode** segments and structural evidence from the Phase C capsule support baseline and contract interpretation.
 - **C-mode** absolute timings are **not** quantitatively qualified for production claims (same tier as post-WP11 / Tier-1 admission failure).
-- **Tier-1 / WP11** (`33339073`, failed v4 admission): profiler absolute timings are not production-qualified. See [live diagnostic measurement contract](live-diagnostic-measurement-contract.md) and [post-WP11 diagnostic roadmap](eu4-live-diagnostic-roadmap.md).
+- **Tier-1 / WP11** (`33339073`, failed v4 admission): profiler absolute timings are not production-qualified. The superseded post-WP11 live-diagnostic contract and roadmap remain in git history.
 
 Future **targeted** measurements (including further R0-M work) remain possible when separately justified; this does not reopen the Phase C investigation.
 

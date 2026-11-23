@@ -2265,6 +2265,7 @@ static int g_uv2_probe_status; /* 0 skipped, 1 ok, 2 error */
 static char g_uv2_probe_error[512];
 static NSMutableArray *g_uv2_probe_records;
 static NSMutableDictionary *g_uv2_probe_failure;
+static NSDictionary *g_uv2_probe_capture_identity;
 static id<MTLFunction> g_uv2_probe_fragment_function;
 
 static void uv2_probe_reset(void) {
@@ -2280,6 +2281,7 @@ static void uv2_probe_reset(void) {
     g_uv2_probe_error[0] = 0;
     g_uv2_probe_records = [NSMutableArray array];
     g_uv2_probe_failure = nil;
+    g_uv2_probe_capture_identity = nil;
     g_uv2_probe_fragment_function = nil;
 }
 
@@ -2524,6 +2526,37 @@ static void uv2_probe_record_failure(NSString *reason, NSDictionary *event,
              safe_utf8(reason ?: @"unknown", ""));
 }
 
+static BOOL capture_target_to_file(NSDictionary *target_info, NSString *path,
+                                   NSError **error,
+                                   NSInteger *command_status);
+
+/* Binds the diagnostic descriptor to the authenticated sealed frame.  A frame
+ * without a seal is recorded as unbound; the offline comparator then refuses
+ * to relate the probe to captured evidence. */
+static NSDictionary *uv2_probe_read_capture_identity(NSString *frame_path) {
+    NSString *path = [frame_path stringByAppendingPathComponent:
+                                      @"frame-seal.json"];
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (data == nil) {
+        return @{@"sealed": @NO, @"reason": @"frame-seal.json is absent"};
+    }
+    NSDictionary *seal = [NSJSONSerialization JSONObjectWithData:data
+                                                        options:0
+                                                          error:NULL];
+    if (![seal isKindOfClass:[NSDictionary class]] ||
+        number(seal[@"sealed"], 0) != 1) {
+        return @{@"sealed": @NO, @"reason": @"frame seal is not valid"};
+    }
+    NSMutableDictionary *identity = [@{
+        @"sealed": @YES,
+        @"session_id": seal[@"session_id"] ?: @"",
+        @"capture_frame_id": seal[@"capture_frame_id"] ?: @0,
+        @"manifest_sha256": seal[@"manifest_sha256"] ?: @"",
+        @"reference_sha256": seal[@"reference_sha256"] ?: @"",
+    } mutableCopy];
+    return identity;
+}
+
 /* Reads every recorded probe target back after the frame command buffer has
  * completed and writes the raw float payload plus its descriptor. */
 static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
@@ -2596,23 +2629,51 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
     if (![data writeToFile:raw_path atomically:YES]) {
         return @{@"status": @"error", @"reason": @"probe_raw_write"};
     }
+    /* The normal event target is read at the event boundary by the existing
+       checkpoint path, so its contents are not the end-of-frame state. */
+    NSString *color_name = @"uv2-color.bgra";
+    NSDictionary *checkpoint = nil;
+    for (NSDictionary *item in g_checkpoint_results) {
+        if ([item[@"event"] isEqual:record[@"event"]] &&
+            [item[@"file"] isEqual:color_name] &&
+            number(item[@"ok"], 0) == 1) {
+            checkpoint = item;
+            break;
+        }
+    }
+    NSString *color_path = [output_path stringByAppendingPathComponent:
+                                         color_name];
+    NSData *color_data = checkpoint != nil
+        ? [NSData dataWithContentsOfFile:color_path] : nil;
+    if (color_data == nil) {
+        NSString *reason = @"the event-boundary normal target was not read";
+        uv2_probe_record_failure(reason, record[@"event"] ?: @{},
+                                 record[@"observed"] ?: @{});
+        uv2_probe_write_descriptor(directory, g_uv2_probe_failure);
+        return @{@"status": @"error", @"reason": reason};
+    }
     NSMutableDictionary *document = [record mutableCopy];
     [document removeObjectForKey:@"texture"];
     document[@"status"] = @"ok";
+    document[@"normal_target"] = @{
+        @"file": color_name,
+        @"path": color_path,
+        @"pixel_format": @"BGRA8",
+        @"origin": @"lower_left",
+        @"width": checkpoint[@"width"] ?: @0,
+        @"height": checkpoint[@"height"] ?: @0,
+        @"sha256": uv2_probe_sha256(color_data),
+        @"reference_sha256": checkpoint[@"reference_sha256"] ?: @"",
+    };
     document[@"origin"] = @"lower_left";
     document[@"pixel_format"] = @"RGBA32F";
     document[@"width"] = @(width);
     document[@"height"] = @(height);
     document[@"row_stride"] = @(stride);
-    document[@"component_order"] = @[@"uv2.x", @"uv2.y", @0, @1];
     document[@"raw_file"] = raw_name;
     document[@"raw_bytes"] = @(data.length);
     document[@"raw_sha256"] = uv2_probe_sha256(data);
     document[@"readback_command_status"] = @(blit.status);
-    document[@"notes"] = @[
-        @"diagnostic evidence only; the normal Metal pass is unchanged",
-        @"the probe reuses the normal pass's compiled vertex function"
-    ];
     uv2_probe_write_descriptor(directory, document);
     g_uv2_probe_status = 1;
     return @{
@@ -3891,12 +3952,10 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                                         @"function_identity_order":
                                             vertex_identity ?: @"",
                                     },
-                                    @"draw": @{
-                                        @"mode": @(primitive_mode),
-                                        @"count": @(count),
-                                        @"instances": @(instances),
-                                        @"indexed": @YES,
-                                    },
+                                    @"draw": draw_event,
+                                    @"capture":
+                                        g_uv2_probe_capture_identity
+                                            ?: @{@"sealed": @NO},
                                     @"attributes": attribute_records,
                                     @"uniforms": uniform_records,
                                     @"indices": @{
@@ -5219,6 +5278,8 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
     g_encoded_count = 0;
     g_failed_count = 0;
     uv2_probe_configure_from_env();
+    g_uv2_probe_capture_identity =
+        uv2_probe_read_capture_identity(frame_path);
     uint64_t started_ns = replay_now_ns();
     g_started_ns = started_ns;
     state.current_result_json = NO;

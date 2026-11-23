@@ -2686,6 +2686,33 @@ def _replay_command_body(args: argparse.Namespace,
         command.append("--capture-post")
     if args.depth_from_prefix:
         command.append("--depth-from-prefix")
+    checkpoint_path = (
+        Path(args.checkpoint_request).expanduser().resolve()
+        if getattr(args, "checkpoint_request", None) else None)
+    if checkpoint_path is not None and not checkpoint_path.is_file():
+        print(f"replay refused: checkpoint request is absent: {checkpoint_path}",
+              file=sys.stderr)
+        return 2
+    if getattr(args, "uv2_probe", False):
+        if args.only_event is not None:
+            print("replay refused: --uv2-probe is incompatible with "
+                  "--only-event (checkpoint and isolation flags conflict)",
+                  file=sys.stderr)
+            return 2
+        if checkpoint_path is None:
+            checkpoint_path = out / "uv2-checkpoint-request.json"
+            checkpoint_path.write_text(json.dumps({
+                "schema": "gfx-frame-checkpoint-request/v1",
+                "checkpoints": [{
+                    "event": int(args.uv2_probe_event),
+                    "target": str(args.uv2_probe_texture),
+                    "resource": f"tex:{args.uv2_probe_texture}",
+                    "file": "uv2-color.bgra",
+                    "timing": "post_event",
+                }],
+            }, indent=2) + "\n")
+    if checkpoint_path is not None:
+        command += ["--checkpoints", str(checkpoint_path)]
     child_env = uv2_probe_replay_env(out, args)
     if child_env is None:
         print("replay refused: --uv2-probe-event is negative", file=sys.stderr)
@@ -4226,6 +4253,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     rep.add_argument("--seed-marked", action="store_true")
     rep.add_argument("--capture-post", action="store_true")
+    rep.add_argument(
+        "--checkpoint-request",
+        default=None,
+        help="existing gfx-frame-checkpoint-request JSON for pre/post-event "
+             "target readbacks",
+    )
     rep.add_argument(
         "--only-event",
         type=int,

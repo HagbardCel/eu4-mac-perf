@@ -107,6 +107,7 @@ static void load_sampler_queries(void) {
 #define GL_TEXTURE_BINDING_CUBE_MAP_VALUE 0x8514
 #define GL_TEXTURE_BINDING_3D_VALUE 0x806A
 #define GL_VERTEX_ATTRIB_ARRAY_DIVISOR 0x88FE
+#define GL_VERTEX_ATTRIB_ARRAY_INTEGER_VALUE 0x88FD
 #define GL_COMPRESSED_DXT1 0x83F0
 #ifndef GL_FRAMEBUFFER_SRGB
 #define GL_FRAMEBUFFER_SRGB 0x8DB9
@@ -400,6 +401,7 @@ typedef struct {
     int instances;
     int base_vertex;
     uintptr_t master;
+    uint64_t caller_rva;
     int program;
     int framebuffer;
     int texture;
@@ -408,8 +410,6 @@ typedef struct {
     int depth_bits;
     uint8_t *color;
     uint8_t *depth;
-    char color_sha[65];
-    char depth_sha[65];
 } uv2_probe_pending;
 
 static uv2_probe_pending g_uv2_probe_pending;
@@ -7240,6 +7240,10 @@ typedef struct {
     int active;
     int location;
     int enabled;
+    int offset_known;
+    int integer;
+    int client_array;
+    uintptr_t client_pointer;
     GLint buffer;
     GLint size;
     GLint type;
@@ -7643,17 +7647,32 @@ static void uv2_probe_save_state(uv2_state_guard *guard, GLuint program,
         GLvoid *pointer = NULL;
         glGetVertexAttribPointerv((GLuint)location,
                                   GL_VERTEX_ATTRIB_ARRAY_POINTER, &pointer);
-        attribute->offset = (GLint)(intptr_t)pointer;
+        attribute->client_array = attribute->buffer == 0;
+        attribute->client_pointer = (uintptr_t)pointer;
+        attribute->offset = attribute->client_array
+            ? 0 : (GLint)(intptr_t)pointer;
+        /* A client array carries its base address in the attribute state; a
+           VBO-backed array needs the engine element table because Apple's
+           legacy GL reports a zero pointer for it. */
+        attribute->offset_known =
+            attribute->client_array ? attribute->client_pointer != 0 : 0;
         uint32_t engine_offset = 0;
         int engine_divisor = 0;
         int engine_normalized = 0;
-        if (engine_attribute_layout(master, location, &engine_offset,
+        if (!attribute->client_array &&
+            engine_attribute_layout(master, location, &engine_offset,
                                     &engine_divisor,
                                     &engine_normalized) == 0) {
             attribute->offset = (GLint)engine_offset;
             attribute->divisor = engine_divisor;
             attribute->normalized = engine_normalized;
+            attribute->offset_known = 1;
         }
+        GLint integer_attribute = 0;
+        glGetVertexAttribiv((GLuint)location,
+                            GL_VERTEX_ATTRIB_ARRAY_INTEGER_VALUE,
+                            &integer_attribute);
+        attribute->integer = integer_attribute != 0;
         guard->attribute_count++;
     }
 }
@@ -7743,7 +7762,9 @@ static void uv2_probe_restore_state(const uv2_state_guard *guard) {
         glVertexAttribPointer((GLuint)attribute->location,
                               attribute->size, (GLenum)attribute->type,
                               attribute->normalized, attribute->stride,
-                              (const GLvoid *)(intptr_t)attribute->offset);
+                              attribute->client_array
+                                  ? (const GLvoid *)attribute->client_pointer
+                                  : (const GLvoid *)(intptr_t)attribute->offset);
         glEnableVertexAttribArray((GLuint)attribute->location);
     }
     glBindBuffer(GL_ARRAY_BUFFER, (GLuint)guard->array_buffer);
@@ -7770,6 +7791,52 @@ static void uv2_probe_delete_target(uv2_target *target) {
 
 /* Creates one isolated diagnostic target and seeds it with the exact pre-draw
  * colour (control only) and depth (both passes) read from the engine target. */
+typedef struct {
+    GLint alignment;
+    GLint row_length;
+    GLint skip_rows;
+    GLint skip_pixels;
+    GLint unpack_buffer;
+    GLboolean swap_bytes;
+    GLboolean lsb_first;
+} uv2_unpack_guard;
+
+static void uv2_unpack_guard_begin(uv2_unpack_guard *guard) {
+    memset(guard, 0, sizeof(*guard));
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &guard->alignment);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &guard->row_length);
+    glGetIntegerv(GL_UNPACK_SKIP_ROWS, &guard->skip_rows);
+    glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &guard->skip_pixels);
+    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &guard->unpack_buffer);
+    glGetBooleanv(GL_UNPACK_SWAP_BYTES, &guard->swap_bytes);
+    glGetBooleanv(GL_UNPACK_LSB_FIRST, &guard->lsb_first);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
+    glPixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
+    if (guard->unpack_buffer != 0) {
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    }
+}
+
+static void uv2_unpack_guard_end(const uv2_unpack_guard *guard) {
+    glPixelStorei(GL_UNPACK_ALIGNMENT, guard->alignment);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, guard->row_length);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, guard->skip_rows);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, guard->skip_pixels);
+    glPixelStorei(GL_UNPACK_SWAP_BYTES, guard->swap_bytes);
+    glPixelStorei(GL_UNPACK_LSB_FIRST, guard->lsb_first);
+    if (guard->unpack_buffer != 0) {
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, (GLuint)guard->unpack_buffer);
+    }
+}
+
+/* Creates one isolated diagnostic target and seeds it with the exact pre-draw
+ * colour (control only) and depth (both passes) read from the engine target.
+ * Uploads use a tight pixel-unpack state so a bound unpack buffer or a
+ * non-default row/skip state cannot silently change the seed. */
 static int uv2_probe_make_target(uv2_target *target, GLint color_internal,
                                  GLenum color_format, GLenum color_type,
                                  uint32_t width, uint32_t height,
@@ -7780,10 +7847,13 @@ static int uv2_probe_make_target(uv2_target *target, GLint color_internal,
     memset(target, 0, sizeof(*target));
     GLint previous_texture = 0;
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+    uv2_unpack_guard unpack;
+    uv2_unpack_guard_begin(&unpack);
+    int result = -1;
     glGenTextures(1, &target->color);
     if (target->color == 0) {
         snprintf(reason, reason_size, "color_texture");
-        return -1;
+        goto done;
     }
     glBindTexture(GL_TEXTURE_2D, target->color);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -7807,9 +7877,8 @@ static int uv2_probe_make_target(uv2_target *target, GLint color_internal,
         }
         glGenTextures(1, &target->depth);
         if (target->depth == 0) {
-            glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
             snprintf(reason, reason_size, "depth_texture");
-            return -1;
+            goto done;
         }
         glBindTexture(GL_TEXTURE_2D, target->depth);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -7828,7 +7897,7 @@ static int uv2_probe_make_target(uv2_target *target, GLint color_internal,
     glGenFramebuffers(1, &target->framebuffer);
     if (target->framebuffer == 0) {
         snprintf(reason, reason_size, "framebuffer");
-        return -1;
+        goto done;
     }
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target->framebuffer);
     glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
@@ -7842,9 +7911,13 @@ static int uv2_probe_make_target(uv2_target *target, GLint color_internal,
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         snprintf(reason, reason_size, "framebuffer_incomplete_0x%x",
                  (unsigned)status);
-        return -1;
+        goto done;
     }
-    return 0;
+    result = 0;
+done:
+    glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
+    uv2_unpack_guard_end(&unpack);
+    return result;
 }
 
 /* Reads and hashes one live vertex attribute range exactly as the capture
@@ -7885,11 +7958,28 @@ static int uv2_probe_attribute_digest(const uv2_attribute *attribute,
     uint64_t attribute_width =
         (uint64_t)(attribute->size > 0 ? attribute->size : 0) *
         (uint64_t)element_size;
+    uint64_t stride64 = (uint64_t)stride;
+    if (vertex_first < 0 || vertex_last < vertex_first) {
+        return -1;
+    }
+    uint64_t span = (uint64_t)((int64_t)vertex_last - vertex_first) *
+                        stride64 + attribute_width;
+    if (attribute->client_array) {
+        const uint8_t *base =
+            (const uint8_t *)attribute->client_pointer;
+        uint64_t begin = (uint64_t)vertex_first * stride64;
+        if (base == NULL || span == 0) {
+            return -1;
+        }
+        sha256_hex(base + begin, (size_t)span, sha);
+        *range_begin = begin;
+        *range_bytes = span;
+        return 0;
+    }
+    uint64_t offset = (uint64_t)(int64_t)attribute->offset;
     uint64_t begin = 0;
     uint64_t end = 0;
-    uint64_t offset = (uint64_t)(int64_t)attribute->offset;
-    uint64_t stride64 = (uint64_t)stride;
-    if (vertex_first < 0 ||
+    if (attribute->buffer == 0 ||
         (uint64_t)vertex_first > (UINT64_MAX - offset) / stride64) {
         return -1;
     }
@@ -7901,7 +7991,7 @@ static int uv2_probe_attribute_digest(const uv2_attribute *attribute,
         return -1;
     }
     uint64_t bytes = end - begin;
-    if (bytes == 0 || attribute->buffer == 0) {
+    if (bytes == 0) {
         return -1;
     }
     uint8_t *data = malloc((size_t)bytes);
@@ -8093,11 +8183,48 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         g_uv2_probe_done = 1;
         return 0;
     }
+    if (guard.element_buffer == 0) {
+        uv2_probe_write_failure("unsupported_index_buffer",
+                                "no element array buffer is bound",
+                                (int)program, (int)draw_framebuffer,
+                                (int)texture_name);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    {
+        GLint index_bytes = 0;
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)guard.element_buffer);
+        glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE,
+                               &index_bytes);
+        if (index_bytes <= 0 || (int64_t)count * 2 > (int64_t)index_bytes) {
+            uv2_probe_write_failure("unsupported_index_buffer",
+                                    "the index range exceeds the bound "
+                                    "unsigned-short buffer",
+                                    (int)program, (int)draw_framebuffer,
+                                    (int)texture_name);
+            g_uv2_probe_done = 1;
+            return 0;
+        }
+    }
     for (int i = 0; i < guard.attribute_count; i++) {
-        if (guard.attributes[i].active && guard.attributes[i].enabled &&
-            guard.attributes[i].divisor != 0) {
-            uv2_probe_write_failure("unsupported_instancing",
-                                    "instanced attributes are not supported",
+        const uv2_attribute *attribute = &guard.attributes[i];
+        if (!attribute->active || !attribute->enabled) {
+            continue;
+        }
+        const char *reason_name = NULL;
+        if (attribute->divisor != 0) {
+            reason_name = "instanced attributes are not supported";
+        } else if (!attribute->offset_known) {
+            reason_name = "the attribute offset is not established";
+        } else if (attribute->integer) {
+            reason_name = "integer vertex attributes are not supported";
+        } else if (attribute->size <= 0 || attribute->size > 4 ||
+                   attribute->stride < 0 ||
+                   eu4_gfx_gl_type_size((uint32_t)attribute->type) == 0) {
+            reason_name = "the attribute layout is unsupported";
+        }
+        if (reason_name != NULL) {
+            uv2_probe_write_failure("unsupported_attribute_state", reason_name,
                                     (int)program, (int)draw_framebuffer,
                                     (int)texture_name);
             g_uv2_probe_done = 1;
@@ -8192,9 +8319,6 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
        hook; the control is seeded with both and the float probe target with
        the depth only.  A direct test invocation may fall back to reading the
        current state when no pending entry capture exists. */
-    char pre_color_sha[65] = "";
-    char pre_depth_sha[65] = "";
-    const char *depth_status = "not_used";
     int owns_pre = 0;
     if (!g_uv2_probe_pending.ready && g_uv2_probe_require_pre) {
         snprintf(reason, sizeof(reason), "pre_state_unavailable");
@@ -8218,13 +8342,8 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         pre_color = g_uv2_probe_pending.color;
         pre_depth_raw = g_uv2_probe_pending.depth;
         depth_bits = g_uv2_probe_pending.depth_bits;
-        memcpy(pre_color_sha, g_uv2_probe_pending.color_sha,
-               sizeof(pre_color_sha));
         if (pre_depth_raw != NULL) {
             pre_depth = (const float *)pre_depth_raw;
-            memcpy(pre_depth_sha, g_uv2_probe_pending.depth_sha,
-                   sizeof(pre_depth_sha));
-            depth_status = "captured";
         }
     } else {
         owns_pre = 1;
@@ -8238,8 +8357,6 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                                     (int)draw_framebuffer, (int)texture_name);
             goto done;
         }
-        sha256_hex(pre_color, (size_t)width * (size_t)height * 4u,
-                   pre_color_sha);
         if (depth_bits > 0) {
             if (read_observation_pixels((uint32_t)draw_framebuffer,
                                         GL_COLOR_ATTACHMENT0, 0,
@@ -8254,9 +8371,6 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                 goto done;
             }
             pre_depth = (const float *)pre_depth_raw;
-            sha256_hex(pre_depth, (size_t)width * (size_t)height * 4u,
-                       pre_depth_sha);
-            depth_status = "captured";
         }
     }
     if (uv2_probe_make_target(&control, GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE,
@@ -8356,10 +8470,13 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                 continue;
             }
             glBindBuffer(GL_ARRAY_BUFFER, (GLuint)attribute->buffer);
-            glVertexAttribPointer((GLuint)attribute->location,
-                                  attribute->size, (GLenum)attribute->type,
-                                  attribute->normalized, attribute->stride,
-                                  (const GLvoid *)(intptr_t)attribute->offset);
+            glVertexAttribPointer(
+                (GLuint)attribute->location, attribute->size,
+                (GLenum)attribute->type, attribute->normalized,
+                attribute->stride,
+                attribute->client_array
+                    ? (const GLvoid *)attribute->client_pointer
+                    : (const GLvoid *)(intptr_t)attribute->offset);
             glEnableVertexAttribArray((GLuint)attribute->location);
         }
     }
@@ -8499,19 +8616,20 @@ done:
                 jprintf(&out,
                         "{\"schema\":\"gfx-uv2-probe/v1\","
                         "\"side\":\"opengl\",\"status\":\"ok\","
+                        "\"sealed\":%s,"
                         "\"session_id\":\"%s\",\"capture_frame_id\":%llu,"
                         "\"pid\":%d,\"event\":%d,\"program\":%d,"
                         "\"target\":{\"framebuffer\":%d,\"texture\":%d,"
                         "\"internal_format\":%d,\"width\":%d,\"height\":%d,"
                         "\"viewport\":[%d,%d,%d,%d]},"
                         "\"varying\":\"%s\","
-                        "\"draw\":{\"mode\":%u,\"count\":%d,"
-                        "\"first\":%d,\"instances\":%d,\"base_vertex\":%d,"
-                        "\"indexed\":true},"
+                        "\"draw\":{\"entry\":\"%s\",\"mode\":%u,"
+                        "\"count\":%d,\"first\":%d,\"instances\":%d,"
+                        "\"base_vertex\":%d,\"indexed\":%s,"
+                        "\"caller_rva\":\"0x%llx\"},"
                         "\"origin\":\"lower_left\","
                         "\"pixel_format\":\"RGBA32F\","
                         "\"width\":%d,\"height\":%d,\"row_stride\":%d,"
-                        "\"component_order\":[\"uv2.x\",\"uv2.y\",0,1],"
                         "\"raw_file\":\"%s\",\"raw_bytes\":%zu,"
                         "\"raw_sha256\":\"%s\","
                         "\"control\":{\"file\":\"%s\","
@@ -8519,36 +8637,28 @@ done:
                         "\"width\":%d,\"height\":%d,\"row_stride\":%d,"
                         "\"origin\":\"lower_left\",\"bytes\":%zu,"
                         "\"sha256\":\"%s\"},"
-                        "\"pre_state\":{\"color_sha256\":\"%s\","
-                        "\"depth_status\":\"%s\",\"depth_sha256\":\"%s\","
-                        "\"depth_bits\":%d},"
                         "\"sources\":{\"vertex_sha256\":\"%s\","
                         "\"fragment_sha256\":\"%s\","
-                        "\"probe_fragment_sha256\":\"%s\","
-                        "\"probe_fragment_source\":\"#version 120\\nvarying "
-                        "vec2 %s;\\nvoid main() { gl_FragColor = vec4(%s, 0.0, "
-                        "1.0); }\\n\"},"
+                        "\"probe_fragment_sha256\":\"%s\"},"
                         "\"indices\":{\"buffer\":%d,\"count\":%d,"
-                        "\"sha256\":\"%s\"},"
-                        "\"state_restored\":true,"
-                        "\"notes\":[\"diagnostic evidence only; the sealed "
-                        "reference is unchanged\","
-                        "\"the diagnostic shaders are recompiled and may not "
-                        "match the original program's instructions\"]}",
-                        g.session_id, (unsigned long long)g.capture_id,
+                        "\"sha256\":\"%s\"}",
+                        bool_text(g.seal_enabled != 0), g.session_id,
+                        (unsigned long long)g.capture_id,
                         (int)getpid(), event, (int)program,
                         (int)draw_framebuffer, (int)texture_name,
                         (int)internal_format, width, height,
                         guard.viewport[0], guard.viewport[1], guard.viewport[2],
-                        guard.viewport[3], g_uv2_probe.varying, mode, count,
-                        first, instances, base_vertex, width, height,
+                        guard.viewport[3], g_uv2_probe.varying,
+                        indexed ? "_GfxDrawIndexed" : "_GfxDraw", mode, count,
+                        first, instances, base_vertex,
+                        bool_text(indexed),
+                        (unsigned long long)g_uv2_probe_pending.caller_rva,
+                        width, height,
                         width * 16, probe_file, probe_bytes, probe_sha,
                         control_file, width, height, width * 4, control_bytes,
-                        control_sha, pre_color_sha, depth_status,
-                        pre_depth_sha, (int)depth_bits, vertex_sha,
-                        fragment_sha, probe_fragment_sha,
-                        g_uv2_probe.varying, g_uv2_probe.varying,
-                        (int)element_buffer, count, index_sha);
+                        control_sha, vertex_sha, fragment_sha,
+                        probe_fragment_sha, (int)element_buffer, count,
+                        index_sha);
                 /* Attribute and uniform input digests, computed from the live
                    driver state and compared offline with the sealed capture. */
                 jprintf(&out, ",\"attributes\":[");
@@ -8707,7 +8817,7 @@ done:
  * selected event.  Nothing engine-visible changes. */
 static void uv2_probe_prepare(int event, int indexed, unsigned mode, int count,
                               int first, int instances, int base_vertex,
-                              uintptr_t master) {
+                              uintptr_t master, uint64_t caller_rva) {
     uv2_probe_clear_pending();
     if (!g_uv2_probe.enabled || g_uv2_probe_done) {
         return;
@@ -8724,6 +8834,7 @@ static void uv2_probe_prepare(int event, int indexed, unsigned mode, int count,
     g_uv2_probe_pending.instances = instances;
     g_uv2_probe_pending.base_vertex = base_vertex;
     g_uv2_probe_pending.master = master;
+    g_uv2_probe_pending.caller_rva = caller_rva;
     if (!indexed || count <= 0 || mode == 0 || instances != 1 ||
         base_vertex != 0) {
         return;
@@ -8807,12 +8918,6 @@ static void uv2_probe_prepare(int event, int indexed, unsigned mode, int count,
     g_uv2_probe_pending.depth_bits = depth_bits;
     g_uv2_probe_pending.color = color;
     g_uv2_probe_pending.depth = depth;
-    sha256_hex(color, (size_t)width * (size_t)height * 4u,
-               g_uv2_probe_pending.color_sha);
-    if (depth != NULL) {
-        sha256_hex(depth, (size_t)width * (size_t)height * 4u,
-                   g_uv2_probe_pending.depth_sha);
-    }
     g_uv2_probe_pending.ready = 1;
 }
 
@@ -8861,7 +8966,7 @@ int eu4_gfx_uv2_probe_test_run(int event, int indexed, unsigned mode, int count,
                                int first, int instances, int base_vertex,
                                uintptr_t master) {
     uv2_probe_prepare(event, indexed, mode, count, first, instances,
-                      base_vertex, master);
+                      base_vertex, master, 0);
     if (!g_uv2_probe_pending.attempted) {
         return 0;
     }
@@ -9033,7 +9138,8 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         uv2_probe_prepare(g.event_count, g_pending.indexed,
                           (unsigned)g_pending.mode, g_pending.count,
                           g_pending.first, g_pending.instances,
-                          g_pending.base_vertex, g_pending.master);
+                          g_pending.base_vertex, g_pending.master,
+                          call->caller_rva);
     }
     pthread_mutex_unlock(&g_lock);
     eu4_gfx_frame_sealed_dispatch();
