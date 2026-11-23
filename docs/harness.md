@@ -113,30 +113,44 @@ one reservation. GPU service time is not inferred from wall clock.
 ## Event-1 UV2 diagnostic probe
 
 Opt-in diagnostic for event 1, program 310, framebuffer 6, output texture 433;
-disabled by default. The capture requires a separate one-use launch
-authorization; agents must not launch EU4.
+disabled by default. The capture is an operator action with a one-use
+authorization; agents must not launch EU4. Full campaign procedure:
+[operator runbook](../analysis/m7/m7-operator-runbook.md).
 
 ```fish
-set -l OUT <capture-root>
-env EU4_CAMPAIGN_STATE=<state> EU4_CAMPAIGN_AUTHORIZATION=<id>   python3.14 -m automation.m6_frame capture --output $OUT --prefix-end 1     --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310     --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --seal
-python3.14 -m automation.m6_frame translate --frame $OUT/frame --out $OUT/translated
-python3.14 -m automation.m6_frame replay --frame $OUT/frame --shaders $OUT/translated   --out $OUT/metal --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310   --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --rationale 'event-1 uv2'
-python3.14 -m automation.gfx_uv2_probe compare --gl $OUT/uv2-probe   --metal $OUT/metal/uv2-probe --frame $OUT/frame --out $OUT/uv2-probe
+set -l OUT "$HOME/eu4-uv2-capture"
+set -l STATE "$HOME/eu4-uv2-state.json"
+set -l TOKEN (cat "$HOME/.local/share/eu4-dsh/operator-token")
+env EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard ensure \
+  --state "$STATE" --mode controlled_capture --deadline-seconds 3600
+env EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard authorize-launch \
+  --state "$STATE"
+# export the printed id as EU4_CAMPAIGN_AUTHORIZATION
+set -lx EU4_CAMPAIGN_STATE "$STATE"
+set -lx EU4_CAMPAIGN_AUTHORIZATION (read -l)
+python3.14 -m automation.m6_frame capture --output "$OUT" --prefix-end 1 \
+  --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310 \
+  --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --seal
+python3.14 -m automation.m6_frame translate --frame "$OUT/frame" --out "$OUT/translated"
+python3.14 -m automation.m6_frame replay --frame "$OUT/frame" --shaders "$OUT/translated" \
+  --out "$OUT/metal" --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310 \
+  --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --rationale 'event-1 uv2'
+python3.14 -m automation.gfx_uv2_probe compare --gl "$OUT/uv2-probe" \
+  --metal "$OUT/metal/uv2-probe" --frame "$OUT/frame" --out "$OUT/uv2-probe"
 ```
 
 Outputs: `$OUT/uv2-probe/{uv2-probe.json,uv2-probe.rgba32f,uv2-control.bgra}`,
 `$OUT/metal/uv2-probe/uv2-probe.rgba32f`, `$OUT/metal/uv2-color.bgra` and
 `$OUT/uv2-probe/comparison.json`.
 
-`comparison.json` separates **numerical comparison** (`conditional_numerical_comparison`
-only when the frame is authentic, both sidecars bind the same sealed capture,
-draw inputs match, the control reproduces the target and every selected pixel
-is covered; otherwise `unverified_diagnostic_observation`, retaining partial
-measurements without an equality claim) from **sidecar provenance**. The
-OpenGL sidecar is not independently authenticated: the seal attests the frame,
-not the sidecar bytes, so `authenticated_original_gl_observation` is false until
-a capture mechanism binds those bytes to the original process. A conditional
-comparison is not an authentic original-GL observation.
+`comparison.json` separates the isolated numerical result
+(`numerical_comparison_conclusive`, classified `conditional_numerical_comparison`)
+from the always-false authenticated original-GL claim and from
+`fragment_attribution_verified`. That field is true only when the captured draw
+has no blend/depth/alpha/stencil test, so the unrestricted probes select the
+same fragment; event 1 uses depth test, so it is **unverified** — control RGB
+equality and coverage alpha are not sufficient. Any failed check falls back to
+`unverified_diagnostic_observation`.
 
 Refused: non-RGB8, multisample, stencil/alpha, non-zero indexed `first` or
 `base_vertex`, instancing, integer attributes, >16 active attributes, unknown

@@ -352,9 +352,31 @@ def _json_number(value: float):
     return value if math.isfinite(value) else None
 
 
+def fragment_attribution(state: dict | None) -> dict:
+    """The isolated probes disable depth/blend, so depth/blend/alpha/stencil
+    can select a different fragment; control RGB and coverage alpha are not
+    proof of fragment identity."""
+    state = state or {}
+    problems = [reason for key, field, reason in (
+        ("blend", "enabled", "blending can select a different visible fragment"),
+        ("depth", "test", "depth test can reject or supersede a fragment"),
+        ("alpha_test", "enabled", "alpha test can discard a fragment"),
+        ("stencil", "test", "stencil test can reject a fragment"))
+        if (state.get(key) or {}).get(field)]
+    if not state:
+        problems.append("no captured draw state")
+    return {
+        "verified": not problems,
+        "status": "verified" if not problems else "unverified",
+        "problems": problems,
+        "probe_fragment_selection": "isolated pass disables depth and blending",
+        "not_sufficient": ["original-shader RGB equality", "uv2 coverage alpha"],
+    }
+
+
 def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
             mask: list[tuple[int, int]], neighborhood: int,
-            authority: str) -> dict:
+            authority: str, state: dict | None = None) -> dict:
     width, height = gl["width"], gl["height"]
     if (width, height) != (metal["width"], metal["height"]):
         raise ProbeError("the OpenGL and Metal probe extents differ")
@@ -409,6 +431,7 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
         "original_shader_control": control.get("match") is True,
         "coverage_complete": complete,
     }
+    attribution = fragment_attribution(state)
     evidence_ok = all(evidence_checks.values())
     conclusive = evidence_ok and complete
     if conclusive:
@@ -447,6 +470,7 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
                       "sha256": metal["sha256"]},
         },
         "identity": identity, "control": control,
+        "fragment_attribution": attribution,
         "mask": {},
         "summary": summary, "pixels": entries,
         "conclusion": {
@@ -454,6 +478,7 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
             "evidence_checks": evidence_checks,
             "numerical_comparison_conclusive": conclusive,
             "authenticated_original_gl_observation": False,
+            "fragment_attribution_verified": attribution["verified"],
             "classification": ("conditional_numerical_comparison"
                                if conclusive
                                else "unverified_diagnostic_observation"),
@@ -511,7 +536,8 @@ def run(args: argparse.Namespace) -> dict:
         "capture": capture_binding(gl, metal, seal),
     }
     report = compare(gl, metal, identity=identity, control=control, mask=mask,
-                     neighborhood=int(args.neighborhood), authority=authority)
+                     neighborhood=int(args.neighborhood), authority=authority,
+                     state=event.get("state"))
     sidecar_checks = {
         "capture": identity["capture"]["match"],
         "pid": gl["descriptor"].get("pid") == seal.get("pid"),

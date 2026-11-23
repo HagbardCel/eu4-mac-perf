@@ -8033,13 +8033,7 @@ static int uv2_probe_attribute_digest(const uv2_attribute *attribute,
 
 /* Writes one descriptor-only failure so the operator and the offline
  * comparator see exactly why the probe did not produce numbers. */
-static void uv2_probe_write_failure(const char *status, const char *reason,
-                                    int observed_program,
-                                    int observed_framebuffer,
-                                    int observed_texture) {
-    (void)observed_program;
-    (void)observed_framebuffer;
-    (void)observed_texture;
+static void uv2_probe_write_failure(const char *status, const char *reason) {
     char *buffer = NULL;
     size_t size = 0;
     FILE *memory = open_memstream(&buffer, &size);
@@ -8081,16 +8075,14 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         g_uv2_probe_done = 1;
         uv2_probe_write_failure("selection_unsupported",
                                 "the probe supports single-instance indexed "
-                                "draws with base_vertex and first zero only",
-                                -1, -1, -1);
+                                "draws with base_vertex and first zero only");
         return 0;
     }
     if (mkdir_p(g_uv2_probe.dir) != 0) {
-        uv2_probe_write_failure("error", "probe_directory", -1, -1, -1);
+        uv2_probe_write_failure("error", "probe_directory");
         g_uv2_probe_done = 1;
         return -1;
     }
-    uint64_t started = now_ns();
     GLint program = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &program);
     GLint draw_framebuffer = 0;
@@ -8107,17 +8099,13 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
     if (draw_buffer != GL_COLOR_ATTACHMENT0) {
         uv2_probe_write_failure("unsupported_draw_buffer",
-                                "the colour draw buffer is not attachment 0",
-                                (int)program, (int)draw_framebuffer,
-                                (int)texture_name);
+                                "the colour draw buffer is not attachment 0");
         g_uv2_probe_done = 1;
         return 0;
     }
     if (program <= 0 || object_type != GL_TEXTURE) {
         uv2_probe_write_failure("identity_mismatch",
-                                "no colour texture draw target",
-                                (int)program, (int)draw_framebuffer,
-                                (int)texture_name);
+                                "no colour texture draw target");
         g_uv2_probe_done = 1;
         return 0;
     }
@@ -8125,9 +8113,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         ((int)program != g_uv2_probe.program ||
          (int)draw_framebuffer != g_uv2_probe.framebuffer ||
          (int)texture_name != g_uv2_probe.texture)) {
-        uv2_probe_write_failure("identity_mismatch", "event_draw_identity",
-                                (int)program, (int)draw_framebuffer,
-                                (int)texture_name);
+        uv2_probe_write_failure("identity_mismatch", "event_draw_identity");
         g_uv2_probe_done = 1;
         return 0;
     }
@@ -8145,8 +8131,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                              GL_TEXTURE_INTERNAL_FORMAT, &internal_format);
     glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
     if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
-        uv2_probe_write_failure("error", "target_extent", (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+        uv2_probe_write_failure("error", "target_extent");
         g_uv2_probe_done = 1;
         return -1;
     }
@@ -8154,8 +8139,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         /* The control must be compared with the authentic RGB8 output.  An
            unknown target format is refused rather than normalized. */
         uv2_probe_write_failure("unsupported_target_format",
-                                "control target is not RGB8", (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+                                "control target is not RGB8");
         g_uv2_probe_done = 1;
         return 0;
     }
@@ -8163,9 +8147,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     glGetIntegerv(GL_SAMPLES, &samples);
     if (samples > 0) {
         uv2_probe_write_failure("unsupported_multisample",
-                                "multisampled targets are not reproducible",
-                                (int)program, (int)draw_framebuffer,
-                                (int)texture_name);
+                                "multisampled targets are not reproducible");
         g_uv2_probe_done = 1;
         return 0;
     }
@@ -8178,8 +8160,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     if (stencil_test) {
         uv2_probe_write_failure("unsupported_stencil",
                                 "an enabled stencil test needs its exact "
-                                "contents", (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+                                "contents");
         g_uv2_probe_done = 1;
         return 0;
     }
@@ -8187,9 +8168,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     glGetIntegerv(GL_ALPHA_TEST, &alpha_test);
     if (alpha_test) {
         uv2_probe_write_failure("unsupported_alpha_test",
-                                "the probe fragment has no authentic alpha",
-                                (int)program, (int)draw_framebuffer,
-                                (int)texture_name);
+                                "the probe fragment has no authentic alpha");
         g_uv2_probe_done = 1;
         return 0;
     }
@@ -8199,26 +8178,21 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         uv2_probe_write_failure(
             "unsupported_attribute_count",
             "the original program declares more active attributes than the "
-            "diagnostic state guard supports", (int)program,
-            (int)draw_framebuffer, (int)texture_name);
+            "diagnostic state guard supports");
         g_uv2_probe_done = 1;
         return 0;
     }
     uv2_state_guard guard;
     uv2_probe_save_state(&guard, (GLuint)program, master);
     if (guard.attribute_count == 0) {
-        uv2_probe_write_failure("error", "attribute_state_unavailable",
-                                (int)program, (int)draw_framebuffer,
-                                (int)texture_name);
+        uv2_probe_write_failure("error", "attribute_state_unavailable");
         uv2_probe_restore_state(&guard);
         g_uv2_probe_done = 1;
         return 0;
     }
     if (guard.element_buffer == 0) {
         uv2_probe_write_failure("unsupported_index_buffer",
-                                "no element array buffer is bound",
-                                (int)program, (int)draw_framebuffer,
-                                (int)texture_name);
+                                "no element array buffer is bound");
         g_uv2_probe_done = 1;
         return 0;
     }
@@ -8230,9 +8204,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         if (index_bytes <= 0 || (int64_t)count * 2 > (int64_t)index_bytes) {
             uv2_probe_write_failure("unsupported_index_buffer",
                                     "the index range exceeds the bound "
-                                    "unsigned-short buffer",
-                                    (int)program, (int)draw_framebuffer,
-                                    (int)texture_name);
+                                    "unsigned-short buffer");
             g_uv2_probe_done = 1;
             return 0;
         }
@@ -8255,9 +8227,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
             reason_name = "the attribute layout is unsupported";
         }
         if (reason_name != NULL) {
-            uv2_probe_write_failure("unsupported_attribute_state", reason_name,
-                                    (int)program, (int)draw_framebuffer,
-                                    (int)texture_name);
+            uv2_probe_write_failure("unsupported_attribute_state", reason_name);
             g_uv2_probe_done = 1;
             return 0;
         }
@@ -8289,30 +8259,26 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     if (uv2_probe_program_sources((GLuint)program, &vertex_source,
                                   &fragment_source, vertex_sha, fragment_sha,
                                   reason, sizeof(reason)) != 0) {
-        uv2_probe_write_failure("error", reason, (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+        uv2_probe_write_failure("error", reason);
         goto done;
     }
     if (strstr(vertex_source, g_uv2_probe.varying) == NULL) {
         uv2_probe_write_failure("varying_missing",
                                 "the original vertex stage does not declare "
-                                "the uv2 varying", (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+                                "the uv2 varying");
         goto done;
     }
     GLuint control_vertex_shader = uv2_probe_compile_shader(
         GL_VERTEX_SHADER, vertex_source, log, sizeof(log));
     if (control_vertex_shader == 0) {
-        uv2_probe_write_failure("shader_compile", log, (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+        uv2_probe_write_failure("shader_compile", log);
         goto done;
     }
     GLuint control_fragment_shader = uv2_probe_compile_shader(
         GL_FRAGMENT_SHADER, fragment_source, log, sizeof(log));
     if (control_fragment_shader == 0) {
         glDeleteShader(control_vertex_shader);
-        uv2_probe_write_failure("shader_compile", log, (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+        uv2_probe_write_failure("shader_compile", log);
         goto done;
     }
     control_program = uv2_probe_link_program(
@@ -8339,8 +8305,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         glDeleteShader(probe_fragment_shader);
     }
     if (control_program == 0 || probe_program == 0) {
-        uv2_probe_write_failure("shader_link", log, (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+        uv2_probe_write_failure("shader_link", log);
         goto done;
     }
     /* The exact pre-draw colour and depth are captured at the draw's entry
@@ -8350,8 +8315,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     int owns_pre = 0;
     if (!g_uv2_probe_pending.ready && g_uv2_probe_require_pre) {
         snprintf(reason, sizeof(reason), "pre_state_unavailable");
-        uv2_probe_write_failure("error", reason, (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+        uv2_probe_write_failure("error", reason);
         goto done;
     }
     if (g_uv2_probe_pending.ready) {
@@ -8363,8 +8327,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
             g_uv2_probe_pending.texture != (int)texture_name ||
             g_uv2_probe_pending.color == NULL) {
             snprintf(reason, sizeof(reason), "pending_state_mismatch");
-            uv2_probe_write_failure("error", reason, (int)program,
-                                    (int)draw_framebuffer, (int)texture_name);
+            uv2_probe_write_failure("error", reason);
             goto done;
         }
         pre_color = g_uv2_probe_pending.color;
@@ -8381,8 +8344,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                                     GL_UNSIGNED_BYTE, 4, &pre_color) != 0 ||
             pre_color == NULL) {
             snprintf(reason, sizeof(reason), "pre_color_readback");
-            uv2_probe_write_failure("error", reason, (int)program,
-                                    (int)draw_framebuffer, (int)texture_name);
+            uv2_probe_write_failure("error", reason);
             goto done;
         }
         if (depth_bits > 0) {
@@ -8393,9 +8355,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                                         &pre_depth_raw) != 0 ||
                 pre_depth_raw == NULL) {
                 snprintf(reason, sizeof(reason), "pre_depth_readback");
-                uv2_probe_write_failure("error", reason, (int)program,
-                                        (int)draw_framebuffer,
-                                        (int)texture_name);
+                uv2_probe_write_failure("error", reason);
                 goto done;
             }
             pre_depth = (const float *)pre_depth_raw;
@@ -8408,8 +8368,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         uv2_probe_make_target(&probe, GL_RGBA32F_VALUE, GL_RGBA, GL_FLOAT,
                               (uint32_t)width, (uint32_t)height, depth_bits,
                               NULL, pre_depth, reason, sizeof(reason)) != 0) {
-        uv2_probe_write_failure("error", reason, (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+        uv2_probe_write_failure("error", reason);
         goto done;
     }
     /* Index range identity and the per-attribute digests the engine draw will
@@ -8481,8 +8440,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                                 GL_UNSIGNED_BYTE, 4,
                                 &control_pixels) != 0 ||
         control_pixels == NULL) {
-        uv2_probe_write_failure("error", "control_readback", (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+        uv2_probe_write_failure("error", "control_readback");
         goto done;
     }
     /* ---- uv2 probe pass with the original vertex stage ---- */
@@ -8509,8 +8467,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                                 (uint32_t)height, GL_RGBA, GL_FLOAT, 16,
                                 &probe_pixels) != 0 ||
         probe_pixels == NULL) {
-        uv2_probe_write_failure("error", "probe_readback", (int)program,
-                                (int)draw_framebuffer, (int)texture_name);
+        uv2_probe_write_failure("error", "probe_readback");
         goto done;
     }
     result = 1;
@@ -8543,9 +8500,7 @@ done:
                 }
             }
             if (!writes_ok) {
-                uv2_probe_write_failure("error", "diagnostic_write",
-                                        (int)program, (int)draw_framebuffer,
-                                        (int)texture_name);
+                uv2_probe_write_failure("error", "diagnostic_write");
             }
         }
         if (writes_ok) {
@@ -8606,17 +8561,11 @@ done:
                         : 0;
                     jprintf(&out,
                             "%s{\"name\":\"%s\",\"location\":%d,"
-                            "\"enabled\":%s,\"components\":%d,"
-                            "\"gl_type\":\"0x%x\",\"normalized\":%s,"
-                            "\"stride\":%d,\"offset\":%d,\"divisor\":%d,"
-                            "\"sha256\":\"%s\",\"digest_ok\":%s}",
+                            "\"enabled\":%s,\"sha256\":\"%s\","
+                            "\"digest_ok\":%s}",
                             emitted > 0 ? "," : "", attribute->name,
                             attribute->location,
-                            bool_text(attribute->enabled),
-                            (int)attribute->size, (unsigned)attribute->type,
-                            bool_text(attribute->normalized),
-                            (int)attribute->stride, (int)attribute->offset,
-                            (int)attribute->divisor, digest,
+                            bool_text(attribute->enabled), digest,
                             bool_text(digest_ok == 0 && attribute->enabled));
                     emitted++;
                 }
@@ -8692,16 +8641,12 @@ done:
                         sha256_hex(raw, used, digest);
                     }
                     jprintf(&out,
-                            "%s{\"name\":\"%s\",\"type\":\"0x%x\","
-                            "\"components\":%d,\"elements\":%d,"
-                            "\"bytes\":%zu,\"sha256\":\"%s\"}",
-                            emitted > 0 ? "," : "", name, (unsigned)type,
-                            shape.components, elements, used, digest);
+                            "%s{\"name\":\"%s\",\"sha256\":\"%s\"}",
+                            emitted > 0 ? "," : "", name, digest);
                     emitted++;
                     free(raw);
                 }
-                jprintf(&out, "],\"probe_ns\":%llu}",
-                        (unsigned long long)(now_ns() - started));
+                jprintf(&out, "]}");
                 fclose(memory);
                 if (!out.failed && buffer != NULL) {
                     char path[FTRACE_PATH];

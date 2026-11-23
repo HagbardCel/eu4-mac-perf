@@ -574,9 +574,8 @@ subtraction was never validated for that archive. Report R↔C perturbation plus
 category/path shares and rank stability, not bias-adjusted absolute
 microseconds. **Phase C structural workload (2026-10-03, intrusive):** ~86k GL state calls
 and ~5.9k draws per instrumented frame; ~98% of update-wall time was outside
-measured update-thread execution (blocking/scheduling/driver-pacing are
-candidates, not attributed). Structural only; C-phase absolute timings remain
-quantitatively unqualified.
+measured update-thread execution (causes not attributed). Structural only;
+C-phase absolute timings remain quantitatively unqualified.
 
 Verify the capsule with
 `eu4_frame_model.py verify-evidence <dir>`; the canonical outcome remains

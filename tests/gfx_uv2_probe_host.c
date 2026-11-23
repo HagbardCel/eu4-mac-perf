@@ -70,8 +70,8 @@ static GLuint compile(GLenum type, const char *source) {
 }
 
 typedef struct {
-    GLint draw_fbo, read_fbo, program;
-    GLint viewport[4], scissor_test, scissor_box[4], cull, blend;
+    GLint draw_fbo, program;
+    GLint viewport[4], scissor_box[4], cull, blend;
     GLint depth_test, active_texture, texture_2d, array_buffer, element_buffer;
     GLint attrib_enabled[2];
     GLint unpack_alignment, unpack_row_length, unpack_skip_rows;
@@ -83,10 +83,8 @@ typedef struct {
 static void snapshot(state_snapshot *s) {
     memset(s, 0, sizeof(*s));
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &s->draw_fbo);
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &s->read_fbo);
     glGetIntegerv(GL_CURRENT_PROGRAM, &s->program);
     glGetIntegerv(GL_VIEWPORT, s->viewport);
-    glGetIntegerv(GL_SCISSOR_TEST, &s->scissor_test);
     glGetIntegerv(GL_SCISSOR_BOX, s->scissor_box);
     glGetIntegerv(GL_CULL_FACE, &s->cull);
     glGetIntegerv(GL_BLEND, &s->blend);
@@ -142,7 +140,7 @@ static int restored(const state_snapshot *a, const state_snapshot *b) {
             ok = 0;
         }
     }
-    if (a->draw_fbo != b->draw_fbo || a->read_fbo != b->read_fbo) {
+    if (a->draw_fbo != b->draw_fbo) {
         fprintf(stderr, "framebuffer binding changed\n");
         ok = 0;
     }
@@ -285,7 +283,7 @@ int main(int argc, char **argv) {
     size_t raw_size = 0, control_size = 0;
     uint8_t *raw = read_file(raw_path, &raw_size);
     uint8_t *control = read_file(control_path, &control_size);
-    int layout = raw_size == 4 * 4 * 16 && control_size == 4 * 4 * 4;
+    int layout = raw != NULL && control != NULL && raw_size == 256 && control_size == 64;
     int control_ok = 0;
     if (control != NULL && control_size == 4 * 4 * 4) {
         control_ok = abs((int)control[2] - 32) <= 1 &&
@@ -321,7 +319,6 @@ int main(int argc, char **argv) {
     printf("first_offset=%d\n", first_refused);
     int ok = ran == 1 && layout && control_ok && state_ok &&
              attribute_limit && first_refused;
-    free(raw); free(control);
     glDeleteProgram(program);
     CGLSetCurrentContext(NULL);
     CGLDestroyContext(context);

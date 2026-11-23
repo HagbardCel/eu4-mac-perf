@@ -219,13 +219,13 @@ class ComparisonTests(unittest.TestCase):
 
     def _compare(self, tmp, gl_values, metal_values, mask, *,
                  authority="authentic", capture=True, control=True,
-                 neighborhood=0):
+                 neighborhood=0, state=None):
         return gfx_uv2_probe.compare(
             self._probe(Path(tmp) / "gl", "opengl", gl_values),
             self._probe(Path(tmp) / "metal", "metal", metal_values),
             identity=self._identity(capture=capture),
             control={"match": control}, mask=mask, neighborhood=neighborhood,
-            authority=authority)
+            authority=authority, state=state)
 
     def testRawBitsValuesUlpsAndBitEquality(self):
         metal = _values()
@@ -332,6 +332,25 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(report["summary"]["status"], "conclusive_unequal")
         self.assertTrue(report["summary"]["observed_mismatch"])
         self.assertFalse(report["summary"]["all_selected_pixels_equal"])
+
+    def testFragmentAttributionRequiresNoDepthOrBlend(self):
+        ambiguous = {"blend": {"enabled": False}, "depth": {"test": True},
+                     "alpha_test": {"enabled": False},
+                     "stencil": {"test": False}}
+        safe = {"blend": {"enabled": False}, "depth": {"test": False},
+                "alpha_test": {"enabled": False}, "stencil": {"test": False}}
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = self._compare(tmp, _values(), _values(), [(0, 0)],
+                                state=ambiguous)
+            good = self._compare(tmp, _values(), _values(), [(0, 0)],
+                                 state=safe)
+        self.assertTrue(bad["summary"]["numerical_comparison_conclusive"])
+        self.assertFalse(bad["fragment_attribution"]["verified"])
+        self.assertEqual(bad["fragment_attribution"]["status"], "unverified")
+        self.assertIn("depth test", " ".join(bad["fragment_attribution"]["problems"]))
+        self.assertFalse(bad["conclusion"]["fragment_attribution_verified"])
+        self.assertTrue(good["fragment_attribution"]["verified"])
+        self.assertTrue(good["conclusion"]["fragment_attribution_verified"])
 
     def testEvidenceFailureCannotBeConclusive(self):
         for overrides in ({"authority": "synthetic"}, {"capture": False},
@@ -645,6 +664,9 @@ class SealComparisonTests(unittest.TestCase):
         self.assertTrue(sidecar["identity_checks"]["pid"])
         self.assertFalse(
             report["conclusion"]["authenticated_original_gl_observation"])
+        self.assertFalse(report["fragment_attribution"]["verified"])
+        self.assertFalse(
+            report["conclusion"]["fragment_attribution_verified"])
         self.assertEqual(report["conclusion"]["classification"],
                          "conditional_numerical_comparison")
 
