@@ -280,7 +280,7 @@ class TrustedReferenceTests(unittest.TestCase):
                 with mock.patch.object(gfx_independent_replay.m6_frame,
                                        "build_replay_host") as build_host:
                     replay = gfx_independent_replay.replay(
-                        self.frame, self.root / scenario, shaders=self.fixture.shaders)
+                        self.frame, self.root / scenario)
                 build_host.assert_not_called()
                 self.assertEqual(replay["classification"], diagnosis["classification"])
                 self.assertFalse(replay["qualification"]["qualified"])
@@ -379,3 +379,7 @@ class R32FComparisonTests(unittest.TestCase):
         self.assertGreater(different["max_ulp_error"], 0)
         self.assertEqual(different["max_channel_error"], 0)
         self.assertEqual(different["alpha_different_pixels"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
