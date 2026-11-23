@@ -241,9 +241,12 @@ def _classify_failure(status: str, reason: str, diagnostic: str,
                     "detail": reason or "a required dependency is unavailable"}
         return {"kind": "unavailable", "class": "blocker",
                 "detail": reason or "the operation is unavailable"}
-    if nested == "incomplete" or diagnostic in ("incomplete", "unverified"):
+    if status == "incomplete" and diagnostic in ("incomplete", "unverified"):
         return {"kind": "evidence_missing", "class": "blocker",
                 "detail": reason or "required evidence is unverified or missing"}
+    if nested == "incomplete" or diagnostic in ("incomplete", "unverified"):
+        return {"kind": "evidence_invalid", "class": "failure",
+                "detail": reason or "evidence did not qualify"}
     if status == "partial" and verdict is None:
         return {"kind": "evidence_invalid", "class": "failure",
                 "detail": reason or "evidence did not qualify"}
