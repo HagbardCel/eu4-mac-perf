@@ -960,7 +960,10 @@ class NativeHostTests(unittest.TestCase):
             self.assertTrue(all(a["digest_ok"]
                                 for a in descriptor["attributes"]))
             observed = dict(line.split("=", 1) for line in ran.stdout.splitlines())
-            for scenario in ("sparse-0x81a6", "sparse-0x81a5"):
+            scenarios = {key.removesuffix("_bits") for key in observed
+                         if key.startswith("sparse-") and key.endswith("_bits")}
+            self.assertTrue({"sparse-0x81a6", "sparse-0x81a5"} <= scenarios)
+            for scenario in sorted(scenarios):
                 with self.subTest(scenario=scenario):
                     bits = int(observed[f"{scenario}_bits"])
                     failure = json.loads(
@@ -972,6 +975,7 @@ class NativeHostTests(unittest.TestCase):
                         self.assertEqual(failure["reason"], "program")
                         self.assertEqual(failure["observed"], int(observed["program_name"]))
                         self.assertEqual(failure["required"], 310)
+                        self.assertNotIn("depth_attachment", failure)
                     else:
                         self.assertEqual(failure["reason"], "depth_bits")
                         self.assertEqual((failure["observed"], failure["required"]), (bits, 24))

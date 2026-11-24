@@ -14,6 +14,7 @@
 #include <OpenGL/gl.h>
 #include <OpenGL/glext.h>
 
+#include <dlfcn.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -21,6 +22,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+
+static unsigned depth_storage_queries;
+
+/* Count storage-depth calls from the linked observer while forwarding to GL. */
+void glGetRenderbufferParameteriv(GLenum target, GLenum pname, GLint *value) {
+    static void (*query)(GLenum, GLenum, GLint *);
+    if (query == NULL) {
+        query = dlsym(RTLD_NEXT, "glGetRenderbufferParameteriv");
+        if (query == NULL) {
+            fprintf(stderr, "could not resolve the real renderbuffer query\n");
+            exit(2);
+        }
+    }
+    if (pname == GL_RENDERBUFFER_DEPTH_SIZE)
+        depth_storage_queries++;
+    query(target, pname, value);
+}
 
 bool eu4_gfx_observe_read(const void *src, void *dest, size_t n) {
     (void)src; (void)dest; (void)n; return false;
@@ -70,7 +88,7 @@ static GLuint compile(GLenum type, const char *source) {
 }
 
 typedef struct {
-    GLint draw_fbo, program;
+    GLint draw_fbo, read_fbo, renderbuffer, program;
     GLint viewport[4], cull, blend;
     GLint depth_test, active_texture, texture_2d, array_buffer, element_buffer;
     GLint attrib_enabled[2];
@@ -83,6 +101,8 @@ typedef struct {
 static void snapshot(state_snapshot *s) {
     memset(s, 0, sizeof(*s));
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &s->draw_fbo);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &s->read_fbo);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &s->renderbuffer);
     glGetIntegerv(GL_CURRENT_PROGRAM, &s->program);
     glGetIntegerv(GL_VIEWPORT, s->viewport);
     glGetIntegerv(GL_CULL_FACE, &s->cull);
@@ -113,6 +133,9 @@ static int restored(const state_snapshot *a, const state_snapshot *b) {
         ok = 0;                                                               \
     }
     CHECK(program);
+    CHECK(draw_fbo);
+    CHECK(read_fbo);
+    CHECK(renderbuffer);
     CHECK(blend);
     CHECK(depth_test);
     CHECK(cull);
@@ -138,10 +161,6 @@ static int restored(const state_snapshot *a, const state_snapshot *b) {
             ok = 0;
         }
     }
-    if (a->draw_fbo != b->draw_fbo) {
-        fprintf(stderr, "framebuffer binding changed\n");
-        ok = 0;
-    }
 #undef CHECK
     return ok;
 }
@@ -162,13 +181,25 @@ static uint8_t *read_file(const char *path, size_t *size) {
 }
 
 static int sparse_refused(const char *out_dir, const char *scenario,
-                         GLuint program, GLuint fbo, GLuint texture) {
+                         GLuint program, GLuint fbo, GLuint texture,
+                         unsigned expected_storage_queries) {
     char directory[1200];
     snprintf(directory, sizeof(directory), "%s/%s", out_dir, scenario);
-    return eu4_gfx_uv2_probe_test_configure(directory, 1, (int)program, (int)fbo,
-                                           (int)texture, "0,0") == 0 &&
-           eu4_gfx_uv2_probe_test_run(1, 1, GL_TRIANGLES, 6, 0, 1, 0, 0) == 0 &&
-           glGetError() == GL_NO_ERROR;
+    state_snapshot before, after;
+    snapshot(&before);
+    unsigned queries_before = depth_storage_queries;
+    if (eu4_gfx_uv2_probe_test_configure(directory, 1, (int)program, (int)fbo,
+                                        (int)texture, "0,0") != 0 ||
+        eu4_gfx_uv2_probe_test_run(1, 1, GL_TRIANGLES, 6, 0, 1, 0, 0) != 0)
+        return 0;
+    snapshot(&after);
+    unsigned queries = depth_storage_queries - queries_before;
+    if (queries != expected_storage_queries) {
+        fprintf(stderr, "%s queried storage depth %u times, expected %u\n",
+                scenario, queries, expected_storage_queries);
+        return 0;
+    }
+    return restored(&before, &after) && glGetError() == GL_NO_ERROR;
 }
 
 int main(int argc, char **argv) {
@@ -267,6 +298,13 @@ int main(int argc, char **argv) {
     glDisable(GL_DITHER);
     glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    unsigned queries_before = depth_storage_queries;
+    if (eu4_gfx_frame_trace_test_observe(out_dir, 0, "post_event", "draw",
+                                         -1, NULL, 0) != 0 ||
+        depth_storage_queries != queries_before) {
+        fprintf(stderr, "ordinary offscreen observation failed or queried storage depth\n");
+        return 1;
+    }
     GLuint unpack_buffer = 0;
     glGenBuffers(1, &unpack_buffer);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack_buffer);
@@ -321,11 +359,22 @@ int main(int argc, char **argv) {
         free(first_json);
     }
     GLint attachment_bits = -1, storage_bits = -1, storage_format = 0;
-    const GLenum depth_formats[] = {GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT16};
+    const GLenum depth_formats[] = {GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT16,
+                                    GL_DEPTH_COMPONENT32, GL_DEPTH24_STENCIL8};
     printf("gl_version=%s\n", glGetString(GL_VERSION));
     printf("program_name=%u\nrenderbuffer_name=%u\n", program, depth_buffer);
     for (size_t i = 0; i < sizeof(depth_formats) / sizeof(depth_formats[0]); i++) {
+        glBindRenderbuffer(GL_RENDERBUFFER, depth_buffer);
         glRenderbufferStorage(GL_RENDERBUFFER, depth_formats[i], 4, 4);
+        const GLenum error = glGetError();
+        if (error != GL_NO_ERROR ||
+            glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            if (depth_formats[i] == GL_DEPTH_COMPONENT32 ||
+                depth_formats[i] == GL_DEPTH24_STENCIL8)
+                continue;
+            fprintf(stderr, "could not allocate depth format 0x%x\n", depth_formats[i]);
+            return 1;
+        }
         glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
             GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &attachment_bits);
         GLint component_type = 0;
@@ -345,12 +394,14 @@ int main(int argc, char **argv) {
         snprintf(scenario, sizeof(scenario), "sparse-0x%x", depth_formats[i]);
         printf("%s_bits=%d\n%s_format=%d\n%s_component=%d\n", scenario, storage_bits,
                scenario, storage_format, scenario, component_type);
-        if (!sparse_refused(out_dir, scenario, program, target_fbo, target_texture))
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+        if (!sparse_refused(out_dir, scenario, program, target_fbo, target_texture,
+                            attachment_bits != 24 ? 1 : 0))
             return 1;
     }
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                               GL_RENDERBUFFER, 0);
-    if (!sparse_refused(out_dir, "sparse-no-depth", program, target_fbo, target_texture))
+    if (!sparse_refused(out_dir, "sparse-no-depth", program, target_fbo, target_texture, 0))
         return 1;
     printf("probe=%d\n", ran == 1 ? 1 : 0);
     printf("layout=%d\n", layout);

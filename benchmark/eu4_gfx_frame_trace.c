@@ -3279,10 +3279,12 @@ typedef struct {
     GLint depth_component_type;
 } observation_attachment;
 
-/* Query one framebuffer attachment's effective identity.  Texture and
-   renderbuffer bindings are restored before returning; no GL error is read. */
+/* Query one framebuffer attachment's effective identity. Only the sparse
+   depth refusal requests the independent renderbuffer storage size.
+   Bindings are restored before returning; no GL error is read. */
 static void query_attachment_identity(GLenum attachment,
-                                      observation_attachment *out) {
+                                      observation_attachment *out,
+                                      bool measure_storage_depth) {
     memset(out, 0, sizeof(*out));
     GLint type = 0, name = 0, level = 0;
     glGetFramebufferAttachmentParameteriv(
@@ -3342,7 +3344,7 @@ static void query_attachment_identity(GLenum attachment,
         glGetRenderbufferParameteriv(GL_RENDERBUFFER,
                                      GL_RENDERBUFFER_INTERNAL_FORMAT,
                                      &internal);
-        if (attachment == GL_DEPTH_ATTACHMENT) {
+        if (measure_storage_depth) {
             GLint bits = -1;
             glGetRenderbufferParameteriv(GL_RENDERBUFFER,
                                          GL_RENDERBUFFER_DEPTH_SIZE, &bits);
@@ -3493,7 +3495,7 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
                 return -1;
             }
             observation_attachment colour;
-            query_attachment_identity(GL_COLOR_ATTACHMENT0, &colour);
+            query_attachment_identity(GL_COLOR_ATTACHMENT0, &colour, false);
             if (!colour.present ||
                 (colour.type != GL_TEXTURE && colour.type != GL_RENDERBUFFER)) {
                 fail_capture_locked("prefix_unsupported_target");
@@ -3548,9 +3550,10 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
             alpha = colour.alpha_bits;
             observation_attachment depth_attachment;
             observation_attachment stencil_attachment;
-            query_attachment_identity(GL_DEPTH_ATTACHMENT, &depth_attachment);
+            query_attachment_identity(GL_DEPTH_ATTACHMENT, &depth_attachment,
+                                      false);
             query_attachment_identity(GL_STENCIL_ATTACHMENT,
-                                      &stencil_attachment);
+                                      &stencil_attachment, false);
             int depth_bits = 0, stencil_bits = 0;
             if (depth_attachment.present &&
                 depth_stencil_bits_for(depth_attachment.internal_format,
@@ -5779,12 +5782,19 @@ static uint64_t stream_caller_signature(void) {
    that lacks it those enums raise a GL error, so they are never queried: the
    observer must not alter the engine's error queue. */
 static int framebuffer_attachment_identity_supported(void) {
-    const char *version = (const char *)glGetString(GL_VERSION);
-    if (version != NULL && atoi(version) >= 3)
-        return 1;
-    const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
-    return extensions != NULL &&
-           strstr(extensions, "GL_ARB_framebuffer_object") != NULL;
+    static int cached = -1;
+    if (cached < 0) {
+        const char *version = (const char *)glGetString(GL_VERSION);
+        const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+        cached = 0;
+        if (version != NULL && atoi(version) >= 3) {
+            cached = 1;
+        } else if (extensions != NULL &&
+                   strstr(extensions, "GL_ARB_framebuffer_object") != NULL) {
+            cached = 1;
+        }
+    }
+    return cached;
 }
 
 static int srgb_extension_supported(void) {
@@ -8479,7 +8489,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         const uv2_numeric_mismatch mismatch = {depth_bits, 24, depth_bits < 0};
         observation_attachment depth = {0};
         if (depth_type == GL_RENDERBUFFER) {
-            query_attachment_identity(GL_DEPTH_ATTACHMENT, &depth);
+            query_attachment_identity(GL_DEPTH_ATTACHMENT, &depth, true);
             if (depth_bits >= 0)
                 glGetFramebufferAttachmentParameteriv(
                     GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
