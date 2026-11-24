@@ -1,3 +1,9 @@
+## M7 event-1 investigation
+
+The verified exact prefix stops at event 0. Event 1 differs at 20 RGB pixels
+(max channel error 1) on the retained precise-math candidate. The cause
+remains unresolved. [Current evidence and next discriminator](analysis/m7/event1-investigation.md).
+
 # L3.2b infrastructure bootstrap — current progress
 
 ## Objective

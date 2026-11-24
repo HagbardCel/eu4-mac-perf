@@ -108,6 +108,9 @@ class CorrectionFixture:
         replay = json.loads(replay_path.read_text())
         # A complete full-frame execution record needs an explicit stage.
         replay.setdefault("stage", "complete")
+        replay["shader_compile_options"] = {
+            "default_fast_math": True, "fast_math": True,
+        }
         replay_path.write_text(json.dumps(replay))
         gfx_independent_replay.write_producer_receipt(
             directory, self.frame, self.producer, replay_path,
@@ -172,6 +175,9 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         base.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=base)
         self.root = Path(self.temporary.name)
+        self.enterContext(mock.patch.object(
+            campaign_guard, "_marker_path",
+            return_value=self.root / campaign_guard.MARKER_NAME))
         for name, value in (
                 ("_current_producer", producer_identity()),
                 ("current_producer", producer_identity())):
@@ -264,6 +270,27 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertEqual(accepted["result"], "accepted", accepted)
         self.assertTrue(accepted["improved"])
         self.assertIn("explicitly approved", " ".join(accepted["limitations"]))
+
+    def test_recipe_must_bind_native_compile_options(self):
+        after = self.model.replay_dir("after-shader-math", self.model.reference)
+        path = after / "producer-receipt.json"
+        receipt = json.loads(path.read_text())
+        claims = self.model.claims(
+            {"mismatched_pixels": 1, "max_channel_error": 7},
+            {"mismatched_pixels": 0, "max_channel_error": 0})
+        for missing in (False, True):
+            with self.subTest(missing=missing):
+                altered = json.loads(json.dumps(receipt))
+                if missing:
+                    altered.pop("recipe")
+                else:
+                    recipe = altered["recipe"]
+                    recipe["shader_compile_options"]["fast_math"] = False
+                    recipe["sha256"] = gfx_independent_replay.recipe_digest(recipe)
+                path.write_text(json.dumps(altered))
+                report = self.acceptance(after=after, claims=claims)
+                self.assertEqual(report["result"], "invalid_evidence")
+                self.assertIn("invalid_recipe", json.dumps(report["problems"]))
 
     def test_corrupted_intermediate_cannot_earn_exactness(self):
         # Reproducer from the review: exact final pixels must not cover damage

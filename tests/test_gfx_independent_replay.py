@@ -38,7 +38,7 @@ class ReplayEnvironmentTests(unittest.TestCase):
         ambient = {
             "EU4_FRAME_REPLAY_DISABLE_RT_FLIP": "1",
             "EU4_FRAME_REPLAY_SAMPLER_SHIFT": "9",
-            "EU4_FRAME_REPLAY_PRECISE_MATH": "1",
+            "EU4_FRAME_REPLAY_FAST_MATH": "0",
             "PATH": "/bin",
         }
         env = gfx_independent_replay.resolve_replay_environment(
@@ -48,7 +48,7 @@ class ReplayEnvironmentTests(unittest.TestCase):
         self.assertEqual(env, {
             "EU4_FRAME_REPLAY_DISABLE_RT_FLIP": "1",
             "EU4_FRAME_REPLAY_SAMPLER_SHIFT": "2",
-            "EU4_FRAME_REPLAY_PRECISE_MATH": "1",
+            "EU4_FRAME_REPLAY_FAST_MATH": "0",
             "PATH": "/bin",
         })
 
@@ -59,11 +59,11 @@ class ReplayEnvironmentTests(unittest.TestCase):
         self.assertEqual(canonical["scrubbed_env"], [])
 
         inherited = _recipe(
-            env={"EU4_FRAME_REPLAY_PRECISE_MATH": "1"},
-            ambient={"EU4_FRAME_REPLAY_PRECISE_MATH": "1"})
+            env={"EU4_FRAME_REPLAY_FAST_MATH": "0"},
+            ambient={"EU4_FRAME_REPLAY_FAST_MATH": "0"})
         self.assertTrue(inherited["diagnostic"])
         self.assertEqual(inherited["inherited_env"],
-                         ["EU4_FRAME_REPLAY_PRECISE_MATH"])
+                         ["EU4_FRAME_REPLAY_FAST_MATH"])
         self.assertNotEqual(canonical["sha256"], inherited["sha256"])
 
         scrubbed = _recipe(
@@ -91,7 +91,7 @@ class ReplayEnvironmentTests(unittest.TestCase):
     def test_explicit_defaults_canonicalize_but_effective_values_do_not(self):
         canonical = _recipe(env={}, ambient={})
         explicit_default = _recipe(
-            env={"EU4_FRAME_REPLAY_PRECISE_MATH": "0",
+            env={"EU4_FRAME_REPLAY_FAST_MATH": "1",
                  "EU4_FRAME_REPLAY_NO_CULL": "0",
                  "EU4_FRAME_REPLAY_DEBUG_DESCRIPTOR": "0"},
             ambient={})
@@ -105,16 +105,48 @@ class ReplayEnvironmentTests(unittest.TestCase):
                             explicit_default["sha256"])
 
         inert_only = _recipe(
-            env={"EU4_FRAME_REPLAY_PRECISE_MATH": "0",
+            env={"EU4_FRAME_REPLAY_FAST_MATH": "1",
                  "EU4_FRAME_REPLAY_NO_CULL": "0"},
             ambient={})
         self.assertFalse(inert_only["diagnostic"])
         self.assertEqual(inert_only["sha256"], canonical["sha256"])
 
         effective = _recipe(
-            env={"EU4_FRAME_REPLAY_PRECISE_MATH": "1"}, ambient={})
+            env={"EU4_FRAME_REPLAY_FAST_MATH": "0"}, ambient={})
         self.assertTrue(effective["diagnostic"])
         self.assertNotEqual(canonical["sha256"], effective["sha256"])
+
+    def test_renderer_default_and_effective_math_are_bound_to_recipe(self):
+        precise = _recipe(env={}, default_fast_math=False)
+        explicit_precise = _recipe(
+            env={"EU4_FRAME_REPLAY_FAST_MATH": "0"}, default_fast_math=False)
+        ab_fast = _recipe(
+            env={"EU4_FRAME_REPLAY_FAST_MATH": "1"}, default_fast_math=False)
+        self.assertEqual(precise["sha256"], explicit_precise["sha256"])
+        self.assertEqual(explicit_precise["consumed_env"],
+                         {"EU4_FRAME_REPLAY_FAST_MATH": "0"})
+        self.assertFalse(precise["diagnostic"])
+        self.assertNotEqual(precise["sha256"], _recipe(env={})["sha256"])
+        self.assertNotEqual(precise["sha256"], ab_fast["sha256"])
+        self.assertTrue(ab_fast["diagnostic"])
+        self.assertEqual(ab_fast["shader_compile_options"],
+                         {"default_fast_math": False, "fast_math": True})
+
+    def test_invalid_and_retired_overrides_fail_closed(self):
+        for env in (
+                {"EU4_FRAME_REPLAY_FAST_MATH": ""},
+                {"EU4_FRAME_REPLAY_FAST_MATH": "01"},
+                {"EU4_FRAME_REPLAY_FAST_MATH": "true"},
+                {"EU4_FRAME_REPLAY_PRECISE_MATH": "1"},
+                {"EU4_FRAME_REPLAY_PRECISE_MATH": "1",
+                 "EU4_FRAME_REPLAY_FAST_MATH": "1"}):
+            with self.subTest(env=env):
+                with self.assertRaisesRegex(gfx_independent_replay.ReplayError,
+                                            "invalid_shader_compile_options"):
+                    gfx_independent_replay.resolve_replay_environment(ambient=env)
+                with self.assertRaisesRegex(gfx_independent_replay.ReplayError,
+                                            "invalid_shader_compile_options"):
+                    _recipe(env=env)
 
     def test_sampler_fault_selectors_are_inert_without_a_shift(self):
         recipe = _recipe(
@@ -146,6 +178,8 @@ class ProducerReceiptEnvironmentTests(unittest.TestCase):
             (out / "replay.json").write_text(json.dumps({
                 "schema": "gfx-independent-replay/v1",
                 "status": "ok",
+                "shader_compile_options": {"default_fast_math": False,
+                                           "fast_math": True},
                 "checkpoints": [],
                 "frame": {"raw_file": "metal-frame.bgra"},
             }))
@@ -160,7 +194,7 @@ class ProducerReceiptEnvironmentTests(unittest.TestCase):
             "source_revision": "d" * 40,
         }
         ambient = {
-            "EU4_FRAME_REPLAY_PRECISE_MATH": "1",
+            "EU4_FRAME_REPLAY_FAST_MATH": "1",
             "EU4_FRAME_REPLAY_DISABLE_RT_FLIP": "1",
             "EU4_FRAME_REPLAY_SAMPLER_SHIFT": "9",
             "PATH": os.environ.get("PATH", "/bin"),
@@ -206,19 +240,31 @@ class ProducerReceiptEnvironmentTests(unittest.TestCase):
                          ["EU4_FRAME_REPLAY_DISABLE_RT_FLIP",
                           "EU4_FRAME_REPLAY_SAMPLER_SHIFT"])
         self.assertEqual(recipe["inherited_env"],
-                         ["EU4_FRAME_REPLAY_PRECISE_MATH"])
+                         ["EU4_FRAME_REPLAY_FAST_MATH"])
         self.assertEqual(recipe["scrubbed_env"],
                          ["EU4_FRAME_REPLAY_DISABLE_RT_FLIP",
                           "EU4_FRAME_REPLAY_SAMPLER_SHIFT"])
         self.assertTrue(recipe["diagnostic"])
         self.assertEqual(recipe["faults"], faults)
 
-        alternative = gfx_independent_replay.replay_recipe(
-            env=dict(captured["env"],
-                     **{"EU4_FRAME_REPLAY_PRECISE_MATH": "0"}),
-            ambient=ambient, faults={"sampler_shift": 3},
-            shaders=self.fixture.shaders)
-        self.assertNotEqual(recipe["sha256"], alternative["sha256"])
+        self.assertEqual(recipe["shader_compile_options"],
+                         {"default_fast_math": False, "fast_math": True})
+        canonical_env = dict(captured["env"], EU4_FRAME_REPLAY_FAST_MATH="0")
+        result_path = self.out / "replay.json"
+        with self.assertRaisesRegex(gfx_independent_replay.ReplayError,
+                                    "disagrees with child environment"):
+            gfx_independent_replay.write_producer_receipt(
+                self.out, self.fixture.frame, producer, result_path,
+                env=canonical_env, faults=faults, shaders=self.fixture.shaders)
+        result = json.loads(result_path.read_text())
+        result["shader_compile_options"]["fast_math"] = False
+        result_path.write_text(json.dumps(result))
+        canonical = gfx_independent_replay.write_producer_receipt(
+            self.out, self.fixture.frame, producer, result_path,
+            env=canonical_env, faults=faults, shaders=self.fixture.shaders)
+        self.assertNotEqual(recipe["sha256"], canonical["recipe"]["sha256"])
+        self.assertNotEqual(receipt["result"]["replay_json_sha256"],
+                            canonical["result"]["replay_json_sha256"])
 
 
 class TrustedReferenceTests(unittest.TestCase):
@@ -316,9 +362,14 @@ class TrustedReferenceTests(unittest.TestCase):
                 for artifact in self.fixture.metal.iterdir():
                     if artifact.name != "checkpoint-request.json":
                         shutil.copyfile(artifact, output / artifact.name)
-            if scenario == "invalid_receipt":
-                result = json.loads((output / "replay.json").read_text())
-                (output / result["checkpoints"][0]["file"]).unlink()
+                result_path = output / "replay.json"
+                result = json.loads(result_path.read_text())
+                result["shader_compile_options"] = {
+                    "default_fast_math": True, "fast_math": True,
+                }
+                result_path.write_text(json.dumps(result))
+                if scenario == "invalid_receipt":
+                    (output / result["checkpoints"][0]["file"]).unlink()
             return subprocess.CompletedProcess(command, int(scenario == "host_failed"))
 
         for scenario, exit_code, status, execution, diagnostic, classification in (

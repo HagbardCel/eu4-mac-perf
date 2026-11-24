@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,6 +39,7 @@ def _write_case(root: Path) -> Path:
         "status": "ok", "stage": "complete", "readback": True,
         "partial": False, "timed_out": False, "failed": 0,
         "command_status": 4, "events": 3, "encoded": 3,
+        "shader_compile_options": {"default_fast_math": True, "fast_math": True},
         "checkpoints": [{"event": 0, "target": "0", "file": "event0.bgra"}]
     }).encode())
     add("replay/metal-frame.bgra", b"\0" * 16)
@@ -192,6 +194,16 @@ class BaselineIdentityTests(unittest.TestCase):
                          "ok")
         self.assertEqual(recorded["identity"]["validity"]["replay_status"],
                          "ok")
+
+    def test_baseline_reuse_requires_same_effective_math(self):
+        case_baseline.record(self.case, self.baseline)
+        with mock.patch.dict(os.environ, {"EU4_FRAME_REPLAY_FAST_MATH": "1"}):
+            self.assertTrue(case_baseline.load_check(
+                self.case, self.baseline)["reusable"])
+        with mock.patch.dict(os.environ, {"EU4_FRAME_REPLAY_FAST_MATH": "0"}):
+            with self.assertRaisesRegex(case_baseline.BaselineError,
+                                        "shader_compile_mode_mismatch"):
+                case_baseline.load_check(self.case, self.baseline)
 
     def test_portable_identity_uses_quoted_include_fallback(self):
         with mock.patch.object(replay_host_dependencies.sys, "platform",

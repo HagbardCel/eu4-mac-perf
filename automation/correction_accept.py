@@ -267,6 +267,10 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                     f"producer receipt capture.{key} does not match the "
                     "sealed case capture")
         raw_recipe = receipt.get("recipe")
+        if raw_recipe is None and "shader_compile_options" in replay:
+            raise AcceptanceError(
+                "invalid_recipe",
+                "producer receipt is missing the replay's compile-option recipe")
         if raw_recipe is not None and not isinstance(raw_recipe, dict):
             raise AcceptanceError(
                 "invalid_recipe",
@@ -292,9 +296,22 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                     "invalid_recipe",
                     "producer receipt recipe schema is not the current "
                     "replay recipe")
-            expected_effective = (
-                gfx_independent_replay.effective_replay_environment(
-                    recipe.get("consumed_env")))
+            try:
+                options = gfx_independent_replay.recorded_shader_compile_options(
+                    replay)
+                expected_options = gfx_independent_replay.shader_compile_options(
+                    recipe["consumed_env"],
+                    default_fast_math=options["default_fast_math"])
+            except gfx_independent_replay.ReplayError as exc:
+                raise AcceptanceError("invalid_recipe", exc.detail) from exc
+            if (options != expected_options
+                    or options != recipe.get("shader_compile_options")):
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt shader compile options disagree with replay.json "
+                    "or the consumed environment")
+            expected_effective = gfx_independent_replay.effective_replay_environment(
+                recipe["consumed_env"], options)
             if recipe.get("effective_env") != expected_effective:
                 raise AcceptanceError(
                     "invalid_recipe",

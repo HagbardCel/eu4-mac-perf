@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 import tempfile
 import threading
@@ -58,6 +59,22 @@ def make_frame(root: Path) -> Path:
     }
     (frame / "frame-trace.json").write_text(json.dumps(manifest))
     return frame
+
+
+@unittest.skipUnless(sys.platform == "darwin", "native compile-option cache")
+class ShaderCompileOptionsCacheTests(unittest.TestCase):
+    def test_native_cache_uses_the_mode_passed_to_the_compiler(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "test.metal").write_text("mock MSL")
+            binary = directory / "shader-compile-options-test"
+            source = ROOT / "tests/gfx_shader_compile_options_host.mm"
+            subprocess.run(
+                ["clang++", "-arch", "arm64", "-fobjc-arc", "-Wno-deprecated-declarations",
+                 "-framework", "Foundation", "-framework", "Metal", "-o", str(binary),
+                 str(source)],
+                check=True, capture_output=True, timeout=120)
+            subprocess.run([str(binary), str(directory)], check=True, timeout=10)
 
 
 class TranslationCacheTests(unittest.TestCase):
@@ -197,25 +214,26 @@ class TranslationCacheTests(unittest.TestCase):
         from automation import gfx_independent_replay
 
         with mock.patch.dict(os.environ, {
-                "EU4_FRAME_REPLAY_PRECISE_MATH": "1",
+                "EU4_FRAME_REPLAY_FAST_MATH": "0",
                 "EU4_FRAME_REPLAY_SAMPLER_SHIFT": "2",
                 "UNRELATED_OVERRIDE": "ignored"}, clear=False):
             recipe = gfx_independent_replay.replay_recipe(
                 faults={"sampler_shift": 2})
-        self.assertEqual(recipe["schema"], "gfx-replay-recipe/v2")
+        self.assertEqual(recipe["schema"], "gfx-replay-recipe/v3")
         self.assertTrue(recipe["diagnostic"])
         self.assertEqual(recipe["faults"], {"sampler_shift": 2})
         self.assertEqual(recipe["consumed_env"],
-                         {"EU4_FRAME_REPLAY_PRECISE_MATH": "1",
+                         {"EU4_FRAME_REPLAY_FAST_MATH": "0",
                           "EU4_FRAME_REPLAY_SAMPLER_SHIFT": "2"})
         self.assertEqual(recipe["effective_env"],
-                         {"EU4_FRAME_REPLAY_PRECISE_MATH": "1",
+                         {"EU4_FRAME_REPLAY_FAST_MATH": "0",
                           "EU4_FRAME_REPLAY_SAMPLER_SHIFT": "2"})
-        self.assertIn("EU4_FRAME_REPLAY_PRECISE_MATH",
+        self.assertIn("EU4_FRAME_REPLAY_FAST_MATH",
                       recipe["inherited_env"])
         self.assertIn("EU4_FRAME_REPLAY_SAMPLER_SHIFT",
                       recipe["injected_env"])
-        self.assertEqual(recipe["precise_math"], "1")
+        self.assertEqual(recipe["shader_compile_options"],
+                         {"default_fast_math": True, "fast_math": False})
         self.assertEqual(len(recipe["sha256"]), 64)
         self.assertNotIn("UNRELATED_OVERRIDE", recipe["consumed_env"])
 
