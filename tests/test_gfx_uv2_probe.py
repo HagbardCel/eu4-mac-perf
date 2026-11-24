@@ -959,6 +959,36 @@ class NativeHostTests(unittest.TestCase):
             self.assertEqual(descriptor["draw"]["entry"], "_GfxDrawIndexed")
             self.assertTrue(all(a["digest_ok"]
                                 for a in descriptor["attributes"]))
+            observed = dict(line.split("=", 1) for line in ran.stdout.splitlines())
+            for scenario in ("sparse-0x81a6", "sparse-0x81a5"):
+                with self.subTest(scenario=scenario):
+                    bits = int(observed[f"{scenario}_bits"])
+                    failure = json.loads(
+                        (output / scenario / "uv2-fragments.json").read_text())
+                    self.assertEqual(failure["status"], "unsupported_sparse_draw")
+                    self.assertEqual(failure["pixels"], [])
+                    # Drivers may allocate greater precision than requested.
+                    if bits == 24:
+                        self.assertEqual(failure["reason"], "program")
+                        self.assertEqual(failure["observed"], int(observed["program_name"]))
+                        self.assertEqual(failure["required"], 310)
+                    else:
+                        self.assertEqual(failure["reason"], "depth_bits")
+                        self.assertEqual((failure["observed"], failure["required"]), (bits, 24))
+                        self.assertEqual(failure["depth_attachment"], {
+                            "type": "renderbuffer",
+                            "name": int(observed["renderbuffer_name"]),
+                            "internal_format": int(observed[f"{scenario}_format"]),
+                            "depth_bits": bits,
+                            "component_type": int(observed[f"{scenario}_component"]),
+                        })
+            absent = json.loads(
+                (output / "sparse-no-depth" / "uv2-fragments.json").read_text())
+            self.assertEqual(absent["status"], "unsupported_sparse_draw")
+            self.assertEqual(absent["reason"], "depth_bits")
+            self.assertEqual((absent["observed"], absent["required"]), (0, 24))
+            self.assertEqual(absent["pixels"], [])
+            self.assertNotIn("depth_attachment", absent)
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the Metal replay is macOS")

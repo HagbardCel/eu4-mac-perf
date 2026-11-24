@@ -156,8 +156,19 @@ static uint8_t *read_file(const char *path, size_t *size) {
     if (data == NULL) { fclose(file); return NULL; }
     size_t got = fread(data, 1, (size_t)length, file);
     fclose(file);
+    data[got] = 0;
     *size = got;
     return data;
+}
+
+static int sparse_refused(const char *out_dir, const char *scenario,
+                         GLuint program, GLuint fbo, GLuint texture) {
+    char directory[1200];
+    snprintf(directory, sizeof(directory), "%s/%s", out_dir, scenario);
+    return eu4_gfx_uv2_probe_test_configure(directory, 1, (int)program, (int)fbo,
+                                           (int)texture, "0,0") == 0 &&
+           eu4_gfx_uv2_probe_test_run(1, 1, GL_TRIANGLES, 6, 0, 1, 0, 0) == 0 &&
+           glGetError() == GL_NO_ERROR;
 }
 
 int main(int argc, char **argv) {
@@ -268,7 +279,7 @@ int main(int argc, char **argv) {
     state_snapshot before, after;
     snapshot(&before);
     int configured = eu4_gfx_uv2_probe_test_configure(
-        out_dir, 1, (int)program, (int)target_fbo, (int)target_texture);
+        out_dir, 1, (int)program, (int)target_fbo, (int)target_texture, NULL);
     int ran = configured == 0
                   ? eu4_gfx_uv2_probe_test_run(1, 1, GL_TRIANGLES, 6, 0, 1, 0, 0)
                   : -1;
@@ -296,7 +307,7 @@ int main(int argc, char **argv) {
     int first_refused = 0;
     if (eu4_gfx_uv2_probe_test_configure(first_dir, 1, (int)program,
                                          (int)target_fbo,
-                                         (int)target_texture) == 0) {
+                                         (int)target_texture, NULL) == 0) {
         int first_result = eu4_gfx_uv2_probe_test_run(
             1, 1, GL_TRIANGLES, 6, 1, 1, 0, 0);
         char first_json_path[1400];
@@ -309,6 +320,38 @@ int main(int argc, char **argv) {
                                "\"status\":\"selection_unsupported\"") != NULL;
         free(first_json);
     }
+    GLint attachment_bits = -1, storage_bits = -1, storage_format = 0;
+    const GLenum depth_formats[] = {GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT16};
+    printf("gl_version=%s\n", glGetString(GL_VERSION));
+    printf("program_name=%u\nrenderbuffer_name=%u\n", program, depth_buffer);
+    for (size_t i = 0; i < sizeof(depth_formats) / sizeof(depth_formats[0]); i++) {
+        glRenderbufferStorage(GL_RENDERBUFFER, depth_formats[i], 4, 4);
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+            GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &attachment_bits);
+        GLint component_type = 0;
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+            GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &component_type);
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_DEPTH_SIZE,
+                                     &storage_bits);
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
+                                     &storage_format);
+        if (glGetError() != GL_NO_ERROR || attachment_bits <= 0 ||
+            attachment_bits != storage_bits || storage_format == 0) {
+            fprintf(stderr, "depth size queries disagree: attachment=%d storage=%d\n",
+                    attachment_bits, storage_bits);
+            return 1;
+        }
+        char scenario[24];
+        snprintf(scenario, sizeof(scenario), "sparse-0x%x", depth_formats[i]);
+        printf("%s_bits=%d\n%s_format=%d\n%s_component=%d\n", scenario, storage_bits,
+               scenario, storage_format, scenario, component_type);
+        if (!sparse_refused(out_dir, scenario, program, target_fbo, target_texture))
+            return 1;
+    }
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                              GL_RENDERBUFFER, 0);
+    if (!sparse_refused(out_dir, "sparse-no-depth", program, target_fbo, target_texture))
+        return 1;
     printf("probe=%d\n", ran == 1 ? 1 : 0);
     printf("layout=%d\n", layout);
     printf("control=%d\n", control_ok);
