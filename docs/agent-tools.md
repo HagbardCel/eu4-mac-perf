@@ -469,6 +469,13 @@ qualification. Use `result.axes.capture_validity` and `result.axes.gpu_execution
 to inspect those axes of a replay diagnosis. A valid reference can accompany an
 unverified Metal comparison.
 
+The standalone `python3 -m automation.gfx_independent_replay` keeps the Metal
+host result in `outcome.execution`. Read `diagnostic_outcome` for the canonical
+diagnosis, where `execution` describes whether the tool returned a result.
+The standalone `diagnose` subcommand exposes those same fields under
+`diagnostic_outcome` and retains `outcome` as an alias. The `eu4_replay` tool
+envelope continues to report tool execution in `outcome.execution`.
+
 For a shell fallback, check the subprocess exit status and parse its JSON
 envelope before using the comparison. The agent CLI can return zero for a
 completed difference. Inspect `outcome.diagnostic`, `outcome.evidence`,

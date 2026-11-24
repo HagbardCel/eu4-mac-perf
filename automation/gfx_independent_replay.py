@@ -2771,7 +2771,7 @@ def _minimal_diagnosis(frame_dir: Path, metal_dir: Path, *, message: str,
                         "gpu_execution_failure": "valid"}.get(
                             classification, "invalid")
     execution = "failed" if classification == "gpu_execution_failure" else "missing"
-    _, qualification = classify_diagnosis(
+    classification, qualification = classify_diagnosis(
         capture_validity=capture_validity, identity="unknown", execution=execution,
         provenance="incomplete", operation_coverage="incomplete",
         state_cov="invalid", pixels="unavailable", divergence="inconclusive",
@@ -3759,11 +3759,13 @@ def diagnose_main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
     qualification = report.get("qualification") or {}
+    diagnostic_outcome = classification_outcome(report)
     print(json.dumps({
         "schema": report.get("schema"),
         "status": report.get("status"),
         "classification": report.get("classification"),
-        "outcome": classification_outcome(report),
+        "outcome": diagnostic_outcome,
+        "diagnostic_outcome": diagnostic_outcome,
         "axes": qualification.get("axes"),
         "first_divergence": {
             "kind": (report.get("first_divergence") or {}).get("kind"),
@@ -3811,12 +3813,15 @@ def main(argv: list[str] | None = None) -> int:
     except ReplayError as exc:
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
-    outcome = classification_outcome(report)
+    outcome = report.get("outcome")
+    diagnostic_outcome = classification_outcome(report)
     print(json.dumps({
         "status": report.get("status"),
         "classification": report.get("classification"),
-        "outcome": {**(report.get("outcome") or {}), **outcome},
-        "qualified": outcome["qualified"],
+        # Preserve the standalone CLI's Metal execution and qualification fields.
+        "outcome": outcome,
+        "diagnostic_outcome": diagnostic_outcome,
+        "qualified": (outcome or {}).get("qualified") and diagnostic_outcome["qualified"],
         "graph": (report.get("graph") or {}).get("status"),
         "evaluation": (report.get("evaluation") or {}).get("status"),
         "final": (report.get("final") or {}).get("status"),
