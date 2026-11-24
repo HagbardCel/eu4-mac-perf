@@ -151,40 +151,156 @@ stage remains unresolved, and the existing `compare` command reports isolated
 coverage and UV2 conditionally. [Producer receipt][canonical] ·
 [offline harness](../../docs/harness.md#event-1-uv2-diagnostic-probe).
 
-### Operator request for the next observation
+### Sparse fragment observation for independent review
 
-- Capture one draw, event **1**, program **310**, framebuffer **6**, RGB8
-  texture **433** level **0**. Use one controlled authorization and bound
-  prefix observations to events **0–1**. Preserve the unmodified original GL
-  post-draw color plus the pre-draw color and depth, draw inputs, attachment
-  sample count and write state. [Controlled capture workflow](../../docs/harness.md#event-1-uv2-diagnostic-probe).
-- Before spending the authorization, extend and review the existing probe to
-  observe which primitive and sample contributes color, with coverage,
-  pre-draw depth and test decision, original discard, write mask, blend and
-  logic state accounted for. Retain enough fragment order to disambiguate
-  overlap. Report UV2 float32 bits for the attributable fragment at the
-  residual coordinates and up to eight RGB-match controls. Extend the opt-in
-  branch in the existing GL observer and keep the original draw and readback
-  as the reference. The existing `--uv2-probe` produces a control and
-  isolated UV2 sidecar. Its depth bypass, replacement fragment shader and
-  unsealed sidecars leave this request
-  unsupported today. [GL probe implementation](../../benchmark/eu4_gfx_frame_trace.c).
-- Expect a fresh `frame-seal.json`, the prefix observation manifest and blobs,
-  and digest-bound sparse observation records containing seal, event and target
-  identities, sample/primitive labels and raw UV2 bits. Independently recheck
-  the new seal, observation payload digests, original-shader behavior and
-  readback layout. Pair observations only within the new seal and pin the Metal
-  renderer identity before recomputing the residual and control coordinates.
-  Diagnostic re-execution stays conditional if fragment correspondence or
-  attachment behavior remains unproven. The independent exact-prefix checker
-  continues to use the sealed original color.
+The sparse mode adds one digest-bound record to the existing frame manifest.
+The record is separate from the prefix color and depth checkpoints. The
+unchanged game draw supplies the authoritative OpenGL RGB8 and depth, before
+the draw-exit diagnostic runs.
 
-Once fragment correspondence is established, compare UV2 first. A difference
-directs investigation to vertex outputs, interpolation and perspective
-precision. Agreement advances to sampled values, then pre-conversion color,
-then RGB8 conversion. A coverage or contributing-primitive difference directs
-investigation to rasterization, depth and discard. Missing evidence leaves the
-next comparison unresolved.
+- **OpenGL writer.** The unchanged linked program queries the single sample
+  with a one-pixel scissor and read-only pre-draw D24 depth. Under LEQUAL, a
+  successful depth write can only tighten the test. Every actual color
+  writer therefore belongs to the set that passes against the initial depth.
+  A change in the sealed normal RGB8 establishes that a writer exists. A
+  full-query count of one, range bisection, and a one-triangle query then
+  identify its zero-based ordinal. The pinned shader discards on interpolated
+  height without derivatives or framebuffer reads. A zero count is retested
+  without depth. A positive retry identifies depth rejection. A second zero
+  leaves coverage and discard unresolved. More than one eligible sample
+  leaves overlap unresolved. [OpenGL 2.1, §§3.11 and 4.1.7](https://registry.khronos.org/OpenGL/specs/gl/glspec21.pdf).
+- **Metal writer.** The normal replay captures RGB8 before and after event 1.
+  The probe queries the same pipeline with read-only LEQUAL against its
+  actual post-depth. The pinned translation uses raster depth, has no
+  early-fragment-tests attribute or sample-mask output, and preserves the
+  derivative-free discard. Under full replacement, the final RGB writer
+  owns that post-depth and passes LEQUAL at its stored value. The full draw
+  and the GL-named triangle must each count one sample, and normal RGB8
+  must change. A counter that includes depth-passing discards can add
+  candidates and make the proof inconclusive. A count alone establishes
+  visibility. The RGB change and unique membership establish the writer.
+  GL and Metal test against their own depth and may have different depth
+  values or eligible sets. [Metal visibility counts](https://developer.apple.com/documentation/metal/mtlvisibilityresultmode/counting) ·
+  [Metal Shading Language, §5.1.2](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf).
+- **Instrumented UV2.** Each variant adds an RGBA32F output after the original
+  color computation and discard. The probe reports raw float32 bits, signed
+  and ULP differences, and whether the variant reproduced the normal
+  outputs. OpenGL checks its variant depth against the sealed post-depth.
+  Metal runs its variant against its own read-only post-depth. A failed
+  control limits the UV2 evidence independently of the normal writer proof.
+  Even matching outputs leave UV2 conditional because adding an attachment
+  can change shader compilation. The report retains the original RGB8
+  comparison and sealed depth as separate evidence.
+
+The native proof is scoped to the reviewed GLSL and translated MSL digests,
+indexed triangle list without restart, single instance, single sample,
+LEQUAL with depth writes and the default depth range, and full RGB
+replacement. Stencil, alpha testing, blending, logic
+operations, masked writes, polygon offset, user clip planes and an active
+draw scissor fall outside that scope. Metal maps the same lower-left pixel
+to its upper-left origin at the scissor and blit. The original pipeline
+queries retain the normal shaders and use the same vertices, viewport and
+culling. The extra output and shader recompilation apply only to the
+instrumented measurement. The earlier discard-removal, unqualified GL
+control and conditional isolated UV2 observations remain in the
+[experiment index](#experiments).
+
+### One-use capture after review
+
+Use the same menu workload and 1728×1117 drawable as the saved observation.
+Run from the reviewed checkout with a free host campaign marker and fresh
+output and state paths. The [operator runbook](m7-operator-runbook.md)
+documents marker ownership. The coordinate list comes from the 20 saved
+residuals and eight saved RGB-match controls in the historical localization.
+Check that the new seal names event 1, program 310, framebuffer 6, and
+RGB8 texture 433 at level 0. Use the same seal, index stream and selection
+for Metal.
+
+```sh
+OUT="$PWD/.local/m7/event1-fragments-capture"
+STATE="$PWD/.local/m7/event1-fragments-state.json"
+PIXELS='187,565;97,559;154,547;51,487;53,433;60,432;151,417;108,387;66,376;87,369;84,344;169,289;30,206;90,130;126,95;143,69;81,56;111,29;110,27;100,24;99,23;100,23;101,23;99,24;101,24;99,25;100,25;101,25'
+mkdir -p "$PWD/.local/m7"
+TOKEN="$(cat "$HOME/.local/share/eu4-dsh/operator-token")"
+EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard ensure \
+  --state "$STATE" --mode controlled_capture --deadline-seconds 3600
+EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard authorize-launch \
+  --state "$STATE"
+unset TOKEN
+printf 'Paste the one-use authorization ID: '
+IFS= read -r AUTH_ID
+EU4_CAMPAIGN_STATE="$STATE" EU4_CAMPAIGN_AUTHORIZATION="$AUTH_ID" \
+  EU4_TEST_PROFILE=live python3.14 -m automation.m6_frame capture \
+  --output "$OUT" --prefix-end 1 --seal --log --uv2-probe --uv2-probe-pixels "$PIXELS"
+unset AUTH_ID
+```
+
+Expect a fresh `$OUT/frame/frame-seal.json`, `frame-trace.json`,
+`prefix-observations.jsonl` and the event 0–1 color and depth blobs. The
+manifest's `uv2_fragments` binds `$OUT/frame/uv2-fragments.json` by SHA-256.
+A sparse record reports the capture identity, event/program/attachment,
+index stream digest, pixel coordinates, sample, passing-sample count, triangle
+ordinal, write marker, control RGB and raw UV2 bits. OpenGL also records pre-color and depth
+bits. A failed or unsupported observation records its selection and reason.
+
+#### Stop the controlled capture before offline replay
+
+After the capture command returns, stop the state that issued the one-use
+authorization. Use `operator_stop` as the reason if the capture was
+interrupted or failed. The stop records the result and prevents further
+campaign activity. It does not terminate an already-running game.
+
+```sh
+python3.14 -m automation.campaign_guard stop --state "$STATE" --reason objective_met
+python3.14 -m automation.campaign_guard status --state "$STATE"
+```
+
+Confirm that the EU4 process from this launch has exited before deactivating.
+Use the PID and process start recorded by the seal or the launcher evidence
+for an interrupted capture, and check the process listing. Quit EU4 and wait
+for it to exit if it is still running. Keep the marker active until you have
+confirmed exit. Then release the marker for the same state.
+
+```sh
+python3.14 -m automation.campaign_guard deactivate --state "$STATE"
+```
+
+Retain the capture, state and authorization record. A refused or inconclusive
+observation stays recorded under this launch. Any later launch needs its own
+reviewed authorization and fresh seal.
+
+The following commands are offline and use the same coordinates. Pin the
+replay executable digest before running. Precise math matches the historical
+candidate's compile mode.
+
+```sh
+python3.14 -m automation.m6_frame translate --frame "$OUT/frame" --out "$OUT/translated"
+HOST="$(python3.14 -c 'from automation.m6_frame import build_replay_host; print(build_replay_host())')"
+RENDERER_SHA="$(shasum -a 256 "$HOST" | cut -d ' ' -f 1)"
+EU4_FRAME_REPLAY_FAST_MATH=0 python3.14 -m automation.m6_frame replay \
+  --frame "$OUT/frame" --shaders "$OUT/translated" --out "$OUT/metal" \
+  --uv2-probe --uv2-probe-pixels "$PIXELS" --rationale 'event-1 fragment correspondence'
+python3.14 -m automation.gfx_uv2_probe localize --frame "$OUT/frame" \
+  --replay "$OUT/metal" --renderer-sha256 "$RENDERER_SHA" > "$OUT/localization.json"
+```
+
+The Metal producer receipt binds the untouched pre/post RGB8 checkpoints, the
+frame seal and `replay.json`. The latter binds
+`$OUT/metal/uv2-probe/uv2-fragments.json` by digest. Localization reports the
+per-side writer decisions and corresponding fragment identity for each selected
+pixel. Event-level attribution requires every selected coordinate to verify
+and the selection to cover every current RGB residual. A positive
+`fresh_residuals_outside_selection` blocks the event-level result, even when
+all selected coordinates verify. Sparse reports count the full mask even
+when it exceeds the historical per-pixel report budget.
+
+The observation can narrow the numerical hypotheses. A corresponding
+UV2 difference in the instrumented variants motivates examination of vertex
+outputs, interpolation and instrumentation effects. Instrumented agreement
+can guide which downstream observations to collect. The first causal
+numerical stage requires additional qualification of the original pipeline.
+Record negative and inconclusive results here before proposing another
+capture.
 
 ## Compile-option identity and the retained candidate
 

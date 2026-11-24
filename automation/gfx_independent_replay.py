@@ -3879,6 +3879,8 @@ _CONSUMED_REPLAY_ENV = (
     _FAST_MATH_ENV,
     "EU4_FRAME_REPLAY_SAMPLER_SHIFT",
     "EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN",
+    "EU4_FRAME_REPLAY_UV2_PROBE_PIXELS",
+    "EU4_FRAME_REPLAY_UV2_PROBE_PRIMITIVES",
 )
 
 # These switches are always removed before a replay so a stray ambient
@@ -3979,6 +3981,9 @@ def effective_replay_environment(consumed: dict, options: dict) -> dict:
     for key, value in consumed.items():
         if key == _FAST_MATH_ENV:
             active = options["fast_math"] != options["default_fast_math"]
+        elif key in ("EU4_FRAME_REPLAY_UV2_PROBE_PIXELS",
+                     "EU4_FRAME_REPLAY_UV2_PROBE_PRIMITIVES"):
+            active = bool(value)
         elif key in _BOOLEAN_REPLAY_ENV:
             active = _replay_enabled(value)
         elif key == "EU4_FRAME_REPLAY_DEBUG_FRAGMENT":

@@ -9,6 +9,7 @@
 #define GL_GLEXT_PROTOTYPES 1
 
 #include "eu4_gfx_frame_trace.h"
+#include "eu4_gfx_uv2_sparse.h"
 #include "eu4_gfx_draw_semantics.h"
 
 #include "eu4_gfx_observe_framebuffer.h"
@@ -385,6 +386,9 @@ typedef struct {
 static uv2_probe_config g_uv2_probe = {
     0, 1, 310, 6, 433, 1, "", "v_TEXCOORD1"};
 static int g_uv2_probe_done;
+static eu4_uv2_selection g_uv2_pixels;
+static char g_uv2_sparse_sha[65];
+static void uv2_probe_write_failure(const char *status, const char *reason);
 
 /* The probe executes at the draw's exit hook, where the deferred uniform and
  * attribute uploads inside _GfxDrawIndexed have been applied; the engine's
@@ -1418,6 +1422,11 @@ static int parse_u64(const char *text, uint64_t *out) {
 static int uv2_probe_configure_from_env(const char *trace_dir) {
     g_uv2_probe.enabled = 0;
     g_uv2_probe_done = 0;
+    g_uv2_sparse_sha[0] = 0;
+    if (eu4_uv2_parse_pixels(getenv("EU4_GFX_UV2_PROBE_PIXELS"),
+                             &g_uv2_pixels) != 0) {
+        return -1;
+    }
     const char *enabled = getenv("EU4_GFX_UV2_PROBE");
     if (enabled == NULL || enabled[0] == 0 || strcmp(enabled, "0") == 0) {
         return 0;
@@ -4698,6 +4707,8 @@ static void write_prefix_manifest(FILE *file) {
 }
 
 static int write_frame_manifest(int complete, const char *reason) {
+    if (g_uv2_pixels.count != 0 && g_uv2_sparse_sha[0] == 0)
+        uv2_probe_write_failure("event_not_observed", "sparse event or readback was unavailable");
     char path[FTRACE_PATH];
     snprintf(path, sizeof(path), "%s/frame-trace.json.partial", g.dir);
     FILE *file = fopen(path, "w");
@@ -4797,6 +4808,10 @@ static int write_frame_manifest(int complete, const char *reason) {
     fprintf(file, "\"blobs\":%d", g.blob_count);
     if (g.prefix_enabled) {
         write_prefix_manifest(file);
+    }
+    if (g_uv2_pixels.count != 0) {
+        fprintf(file, ",\"uv2_fragments\":{\"file\":\""
+                EU4_UV2_SPARSE_FILE "\",\"sha256\":\"%s\"}", g_uv2_sparse_sha);
     }
     fputs("}\n", file);
     if (ferror(file) != 0 || fflush(file) != 0 || fsync(fileno(file)) != 0) {
@@ -7228,7 +7243,7 @@ void eu4_gfx_frame_trace_clear_exit(eu4_gfx_capture_frame *frame,
  *                    to test that this diagnostic execution reproduces the
  *                    authentic event output.
  *
- * The probe runs before the engine's own draw, never writes the engine's
+ * The probe runs after the engine's own draw, never writes the engine's
  * render target and restores every GL binding it changes.  It is diagnostic
  * evidence only and never feeds the sealed reference. */
 
@@ -7311,7 +7326,8 @@ static int uv2_probe_program_sources(GLuint program, char **vertex_source,
     fragment_sha[0] = 0;
     GLint shader_count = 0;
     glGetProgramiv(program, GL_ATTACHED_SHADERS, &shader_count);
-    if (shader_count <= 0 || shader_count > 16) {
+    if (shader_count <= 0 || shader_count > 16 ||
+        (g_uv2_pixels.count != 0 && shader_count != 2)) {
         snprintf(reason, reason_size, "attached_shader_count");
         return -1;
     }
@@ -8031,14 +8047,252 @@ static int uv2_probe_attribute_digest(const uv2_attribute *attribute,
     return 0;
 }
 
+/* Add an observation to the reviewed shader's final store. Its original
+ * discard, arithmetic and color output still execute with depth enabled. */
+static char *uv2_sparse_fragment(const char *source) {
+    const char *store = "gl_FragColor = glsl_main( glsl_vertex );";
+    const char *where = strstr(source, store);
+    if (where == NULL)
+        return NULL;
+    char *result = NULL;
+    if (asprintf(&result, "%.*sgl_FragData[0] = glsl_main( glsl_vertex );"
+                 "\n gl_FragData[1] = vec4(glsl_vertex.uv2, 0.0, 1.0);%s",
+                 (int)(where - source), source, where + strlen(store)) < 0)
+        return NULL;
+    return result;
+}
+
+static void uv2_sparse_publish(const char *body, size_t size) {
+    char path[FTRACE_PATH];
+    snprintf(path, sizeof(path), "%s/" EU4_UV2_SPARSE_FILE, g.dir);
+    if (write_atomic(path, body, size) == 0)
+        sha256_hex(body, size, g_uv2_sparse_sha);
+}
+
+static void uv2_sparse_header(json_out *out, const char *status) {
+    jprintf(out, "{\"schema\":\"" EU4_UV2_SPARSE_SCHEMA "\","
+            "\"side\":\"opengl\",\"status\":\"%s\",\"origin\":\"lower_left\","
+            "\"capture\":{\"session_id\":\"%s\",\"capture_frame_id\":%llu,\"pid\":%d},"
+            "\"event\":%d,\"program\":%d,\"framebuffer\":%d,\"texture\":%d,\"level\":0",
+            status, g.session_id, (unsigned long long)g.capture_id, (int)getpid(),
+            g_uv2_probe.event, g_uv2_probe.program, g_uv2_probe.framebuffer,
+            g_uv2_probe.texture);
+    jprintf(out, ",\"selection\":[");
+    for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+        eu4_uv2_pixel pixel = g_uv2_pixels.pixels[i];
+        jprintf(out, "%s[%u,%u]", i ? "," : "", pixel.x, pixel.y);
+    }
+    jprintf(out, "]");
+}
+
+static void uv2_sparse_read(GLuint framebuffer, GLenum attachment,
+                            GLenum format, GLenum type, void *values) {
+    observation_readback_guard guard;
+    begin_observation_readback(&guard, framebuffer, attachment, 0);
+    for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+        eu4_uv2_pixel pixel = g_uv2_pixels.pixels[i];
+        size_t stride = format == GL_RGBA && type == GL_FLOAT ? 16 : 4;
+        glReadPixels(pixel.x, pixel.y, 1, 1, format, type,
+                     (uint8_t *)values + i * stride);
+    }
+    end_observation_readback(&guard);
+}
+
+static void uv2_sparse_draw(int first, int triangles) {
+    glDrawElements(GL_TRIANGLES, triangles * 3, GL_UNSIGNED_SHORT,
+                   (const GLvoid *)(uintptr_t)(first * 3 * sizeof(uint16_t)));
+}
+
+static GLuint uv2_sparse_samples(GLuint query, int first, int triangles) {
+    GLuint samples = 0;
+    glBeginQuery(GL_SAMPLES_PASSED, query);
+    uv2_sparse_draw(first, triangles);
+    glEndQuery(GL_SAMPLES_PASSED);
+    glGetQueryObjectuiv(query, GL_QUERY_RESULT, &samples);
+    return samples;
+}
+
+/* Query the original linked program with the captured pre-depth held fixed.
+ * Every actual writer also passes against the initial depth because LEQUAL
+ * writes can only tighten it. The actual RGB8 change proves a writer exists.
+ * The pinned shader's discard is independent of derivatives and destinations,
+ * and the linked program has no fragment depth export or draw-relative IDs. */
+static int uv2_sparse_observe(const uv2_state_guard *guard, uv2_target control,
+                              uv2_target probe, GLuint instrumented,
+                              int count, int width, int height, const char *index_sha,
+                              const uint8_t *pre_color, const uint8_t *pre_depth) {
+    GLint max_draw_buffers = 0, active_query = 0, counter_bits = 0;
+    GLint depth_type = 0, sample_buffers = -1;
+    glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                           GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE,
+                                           &depth_type);
+    glGetIntegerv(GL_SAMPLE_BUFFERS, &sample_buffers);
+    glGetIntegerv(GL_MAX_DRAW_BUFFERS, &max_draw_buffers);
+    glGetQueryiv(GL_SAMPLES_PASSED, GL_CURRENT_QUERY, &active_query);
+    glGetQueryiv(GL_SAMPLES_PASSED, GL_QUERY_COUNTER_BITS, &counter_bits);
+    if (max_draw_buffers < 2 || active_query || counter_bits < 16 ||
+        depth_type != GL_UNSIGNED_NORMALIZED || sample_buffers != 0 ||
+        pre_color == NULL || pre_depth == NULL)
+        return -1;
+    for (int i = 0; i < max_draw_buffers; i++) {
+        GLint buffer = 0;
+        glGetIntegerv(GL_DRAW_BUFFER0 + i, &buffer);
+        if (buffer != (i == 0 ? GL_COLOR_ATTACHMENT0 : GL_NONE))
+            return -1;
+    }
+    for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+        if (g_uv2_pixels.pixels[i].x >= (unsigned)width ||
+            g_uv2_pixels.pixels[i].y >= (unsigned)height)
+            return -1;
+    }
+    if (guard->blend || guard->color_logic_op || guard->scissor_test ||
+        !guard->depth_test || !guard->depth_mask || guard->depth_func != GL_LEQUAL ||
+        guard->depth_range[0] != 0.0f || guard->depth_range[1] != 1.0f ||
+        !guard->color_mask[0] || !guard->color_mask[1] || !guard->color_mask[2] ||
+        !guard->color_mask[3] || guard->polygon_mode[0] != GL_FILL ||
+        guard->polygon_mode[1] != GL_FILL || guard->polygon_offset_fill ||
+        glIsEnabled(GL_POLYGON_SMOOTH) ||
+        glIsEnabled(GL_POLYGON_STIPPLE) || glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE) ||
+        glIsEnabled(GL_SAMPLE_ALPHA_TO_ONE) || glIsEnabled(GL_SAMPLE_COVERAGE))
+        return -1;
+
+    // User clip planes are undefined when this vertex shader omits gl_ClipVertex.
+    GLint clip_planes = 0;
+    glGetIntegerv(GL_MAX_CLIP_PLANES, &clip_planes);
+    for (int i = 0; i < clip_planes; i++)
+        if (glIsEnabled(GL_CLIP_PLANE0 + i))
+            return -1;
+    const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+    if (extensions != NULL && strstr(extensions, "GL_NV_primitive_restart") &&
+        glIsEnabled(0x8558 /* GL_PRIMITIVE_RESTART_NV */))
+        return -1;
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, control.framebuffer);
+    glUseProgram((GLuint)guard->program);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_SCISSOR_TEST);
+    GLuint query = 0;
+    glGenQueries(1, &query);
+    if (query == 0)
+        return -1;
+    GLuint hits[EU4_UV2_MAX_PIXELS] = {0};
+    GLuint hits_without_depth[EU4_UV2_MAX_PIXELS] = {0};
+    int primitives[EU4_UV2_MAX_PIXELS];
+    for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+        eu4_uv2_pixel pixel = g_uv2_pixels.pixels[i];
+        glScissor(pixel.x, pixel.y, 1, 1);
+        hits[i] = uv2_sparse_samples(query, 0, count / 3);
+        primitives[i] = -1;
+        if (hits[i] == 0) {
+            glDisable(GL_DEPTH_TEST);
+            hits_without_depth[i] = uv2_sparse_samples(query, 0, count / 3);
+            glEnable(GL_DEPTH_TEST);
+        }
+        if (hits[i] != 1)
+            continue;
+        int first = 0, end = count / 3;
+        while (end - first > 1) {
+            int middle = first + (end - first) / 2;
+            GLuint lower_hits = uv2_sparse_samples(query, first, middle - first);
+            if (lower_hits > 1)
+                break;
+            if (lower_hits == 1)
+                end = middle;
+            else
+                first = middle;
+        }
+        if (end - first == 1 && uv2_sparse_samples(query, first, 1) == 1)
+            primitives[i] = first;
+    }
+    glDeleteQueries(1, &query);
+
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                           GL_TEXTURE_2D, probe.color, 0);
+    GLenum attachments[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(2, attachments);
+    if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        return -1;
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glDrawBuffer(GL_COLOR_ATTACHMENT1);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawBuffers(2, attachments);
+    glEnable(GL_SCISSOR_TEST);
+    glUseProgram(instrumented);
+    for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+        int primitive = primitives[i];
+        if (primitive < 0)
+            continue;
+        eu4_uv2_pixel pixel = g_uv2_pixels.pixels[i];
+        glScissor(pixel.x, pixel.y, 1, 1);
+        uv2_sparse_draw(primitive, 1);
+    }
+
+    uint8_t control_rgb[EU4_UV2_MAX_PIXELS][4] = {{0}};
+    uint32_t uv[EU4_UV2_MAX_PIXELS][4] = {{0}};
+    uint32_t depth[EU4_UV2_MAX_PIXELS] = {0};
+    uv2_sparse_read(control.framebuffer, GL_COLOR_ATTACHMENT0,
+                    GL_RGBA, GL_UNSIGNED_BYTE, control_rgb);
+    uv2_sparse_read(control.framebuffer, GL_COLOR_ATTACHMENT1, GL_RGBA, GL_FLOAT, uv);
+    uv2_sparse_read(control.framebuffer, GL_COLOR_ATTACHMENT0,
+                    GL_DEPTH_COMPONENT, GL_FLOAT, depth);
+
+    char *body = NULL;
+    size_t size = 0;
+    FILE *memory = open_memstream(&body, &size);
+    if (memory == NULL)
+        return -1;
+    json_out out = {memory, 0};
+    uv2_sparse_header(&out, "observed");
+    jprintf(&out, ",\"method\":\"original_program_query_pre_depth\","
+            "\"width\":%d,\"height\":%d,\"samples\":1,"
+            "\"index_sha256\":\"%s\",\"pixels\":[", width, height, index_sha);
+    for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+        eu4_uv2_pixel pixel = g_uv2_pixels.pixels[i];
+        size_t offset = ((size_t)pixel.y * width + pixel.x) * 4;
+        uint32_t before_depth = 0;
+        memcpy(&before_depth, pre_depth + offset, sizeof(before_depth));
+        jprintf(&out, "%s{\"x\":%u,\"y\":%u,\"sample\":0,\"hits\":%u,"
+                "\"hits_without_depth\":%u,\"primitive\":%d,\"survived\":%s,\"uv2_bits\":[%u,%u],"
+                "\"control_rgb\":[%u,%u,%u],\"pre_rgb\":[%u,%u,%u],"
+                "\"pre_depth_bits\":%u,\"control_depth_bits\":%u}",
+                i ? "," : "", pixel.x, pixel.y, hits[i], hits_without_depth[i],
+                primitives[i], uv[i][3] == 0x3f800000 ? "true" : "false",
+                uv[i][0], uv[i][1],
+                control_rgb[i][0], control_rgb[i][1], control_rgb[i][2],
+                pre_color[offset + 2], pre_color[offset + 1], pre_color[offset],
+                before_depth, depth[i]);
+    }
+    jprintf(&out, "]}\n");
+    fclose(memory);
+    if (!out.failed && body != NULL)
+        uv2_sparse_publish(body, size);
+    free(body);
+    return g_uv2_sparse_sha[0] != 0 ? 0 : -1;
+}
+
 /* Writes one descriptor-only failure so the operator and the offline
  * comparator see exactly why the probe did not produce numbers. */
 static void uv2_probe_write_failure(const char *status, const char *reason) {
-    char *buffer = NULL;
+    int sparse = g_uv2_pixels.count != 0;
+    if (sparse)
+        fprintf(stderr, "[frame trace] sparse UV2: %s (%s)\n", status, reason);
+    char *body = NULL;
     size_t size = 0;
-    FILE *memory = open_memstream(&buffer, &size);
-    if (memory != NULL) {
-        json_out out = {memory, 0};
+    FILE *memory = open_memstream(&body, &size);
+    if (memory == NULL)
+        return;
+    json_out out = {memory, 0};
+    if (sparse) {
+        uv2_sparse_header(&out, status);
+        const char *code = reason[0] != 0 && strlen(reason) < 64 &&
+            strspn(reason, "abcdefghijklmnopqrstuvwxyz0123456789_") == strlen(reason)
+            ? reason : status;
+        jprintf(&out, ",\"reason\":\"%s\",\"pixels\":[]}\n", code);
+    } else {
         jprintf(&out,
                 "{\"schema\":\"gfx-uv2-probe/v1\",\"side\":\"opengl\","
                 "\"status\":\"%s\",\"reason\":\"%s\","
@@ -8047,20 +8301,22 @@ static void uv2_probe_write_failure(const char *status, const char *reason) {
                 status, reason, g.session_id,
                 (unsigned long long)g.capture_id, (int)getpid(),
                 g_uv2_probe.event, g_uv2_probe.program);
-        fclose(memory);
-        if (!out.failed && buffer != NULL) {
+    }
+    fclose(memory);
+    if (!out.failed && body != NULL) {
+        if (sparse) {
+            uv2_sparse_publish(body, size);
+        } else {
             char path[FTRACE_PATH];
-            snprintf(path, sizeof(path), "%s/uv2-probe.json",
-                     g_uv2_probe.dir);
-            (void)write_atomic(path, buffer, size);
+            snprintf(path, sizeof(path), "%s/uv2-probe.json", g_uv2_probe.dir);
+            (void)write_atomic(path, body, size);
         }
     }
-    free(buffer);
+    free(body);
 }
 
-/* Runs the diagnostic once for the configured event.  The engine's draw has
- * not executed yet, so the live state is exactly the pre-draw state the engine
- * is about to use.  Returns 1 when numbers were produced, 0 when skipped. */
+/* Run once from the draw exit, using the original program and bindings,
+ * and the pre-draw attachments saved at entry. */
 static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                              int first, int instances, int base_vertex,
                              uintptr_t master) {
@@ -8238,6 +8494,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     char fragment_sha[65];
     char *vertex_source = NULL;
     char *fragment_source = NULL;
+    char *instrumented_fragment = NULL;
     int result = -1;
     uv2_target control = {0, 0, 0};
     uv2_target probe = {0, 0, 0};
@@ -8246,6 +8503,8 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     uint8_t *pre_color = NULL;
     uint8_t *pre_depth_raw = NULL;
     const float *pre_depth = NULL;
+    int owns_pre = 0;
+    uint16_t *index_data = NULL;
     uint8_t *control_pixels = NULL;
     uint8_t *probe_pixels = NULL;
     char probe_fragment[UV2_PROBE_FRAGMENT_MAX];
@@ -8268,6 +8527,18 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                                 "the uv2 varying");
         goto done;
     }
+    if (g_uv2_pixels.count != 0) {
+        if (event != 1 || program != 310 || draw_framebuffer != 6 ||
+            texture_name != 433 || level != 0 || depth_bits != 24 ||
+            mode != GL_TRIANGLES || count % 3 != 0 || count / 3 > EU4_UV2_MAX_TRIANGLES ||
+            strcmp(vertex_sha, EU4_UV2_VERTEX_SHA) != 0 ||
+            strcmp(fragment_sha, EU4_UV2_FRAGMENT_SHA) != 0 ||
+            strcmp(g_uv2_probe.varying, "v_TEXCOORD1") != 0 ||
+            (instrumented_fragment = uv2_sparse_fragment(fragment_source)) == NULL) {
+            uv2_probe_write_failure("unsupported_sparse_draw", "event1_shader_or_target");
+            goto done;
+        }
+    }
     GLuint control_vertex_shader = uv2_probe_compile_shader(
         GL_VERTEX_SHADER, vertex_source, log, sizeof(log));
     if (control_vertex_shader == 0) {
@@ -8275,7 +8546,9 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         goto done;
     }
     GLuint control_fragment_shader = uv2_probe_compile_shader(
-        GL_FRAGMENT_SHADER, fragment_source, log, sizeof(log));
+        GL_FRAGMENT_SHADER, instrumented_fragment != NULL ? instrumented_fragment
+                                                           : fragment_source,
+        log, sizeof(log));
     if (control_fragment_shader == 0) {
         glDeleteShader(control_vertex_shader);
         uv2_probe_write_failure("shader_compile", log);
@@ -8284,27 +8557,29 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     control_program = uv2_probe_link_program(
         control_vertex_shader, control_fragment_shader, (GLuint)program, log,
         sizeof(log));
-    GLuint probe_vertex_shader = uv2_probe_compile_shader(
-        GL_VERTEX_SHADER, vertex_source, log, sizeof(log));
-    GLuint probe_fragment_shader =
-        probe_vertex_shader == 0
-            ? 0
-            : uv2_probe_compile_shader(GL_FRAGMENT_SHADER, probe_fragment, log,
-                                       sizeof(log));
-    if (probe_fragment_shader != 0) {
-        probe_program = uv2_probe_link_program(
-            probe_vertex_shader, probe_fragment_shader, (GLuint)program, log,
-            sizeof(log));
-    }
     glDeleteShader(control_vertex_shader);
     glDeleteShader(control_fragment_shader);
-    if (probe_vertex_shader != 0) {
-        glDeleteShader(probe_vertex_shader);
+    if (g_uv2_pixels.count == 0) {
+        GLuint probe_vertex_shader = uv2_probe_compile_shader(
+            GL_VERTEX_SHADER, vertex_source, log, sizeof(log));
+        GLuint probe_fragment_shader =
+            probe_vertex_shader == 0
+                ? 0
+                : uv2_probe_compile_shader(GL_FRAGMENT_SHADER, probe_fragment, log,
+                                           sizeof(log));
+        if (probe_fragment_shader != 0) {
+            probe_program = uv2_probe_link_program(
+                probe_vertex_shader, probe_fragment_shader, (GLuint)program, log,
+                sizeof(log));
+        }
+        if (probe_vertex_shader != 0) {
+            glDeleteShader(probe_vertex_shader);
+        }
+        if (probe_fragment_shader != 0) {
+            glDeleteShader(probe_fragment_shader);
+        }
     }
-    if (probe_fragment_shader != 0) {
-        glDeleteShader(probe_fragment_shader);
-    }
-    if (control_program == 0 || probe_program == 0) {
+    if (control_program == 0 || (g_uv2_pixels.count == 0 && probe_program == 0)) {
         uv2_probe_write_failure("shader_link", log);
         goto done;
     }
@@ -8312,7 +8587,6 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
        hook; the control is seeded with both and the float probe target with
        the depth only.  A direct test invocation may fall back to reading the
        current state when no pending entry capture exists. */
-    int owns_pre = 0;
     if (!g_uv2_probe_pending.ready && g_uv2_probe_require_pre) {
         snprintf(reason, sizeof(reason), "pre_state_unavailable");
         uv2_probe_write_failure("error", reason);
@@ -8366,7 +8640,8 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                               pre_color, pre_depth, reason,
                               sizeof(reason)) != 0 ||
         uv2_probe_make_target(&probe, GL_RGBA32F_VALUE, GL_RGBA, GL_FLOAT,
-                              (uint32_t)width, (uint32_t)height, depth_bits,
+                              (uint32_t)width, (uint32_t)height,
+                              g_uv2_pixels.count != 0 ? 0 : depth_bits,
                               NULL, pre_depth, reason, sizeof(reason)) != 0) {
         uv2_probe_write_failure("error", reason);
         goto done;
@@ -8375,7 +8650,6 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
        consume. */
     GLint element_buffer = guard.element_buffer;
     GLint index_buffer_size = 0;
-    uint16_t *index_data = NULL;
     int32_t index_first = 0;
     int32_t index_last = 0;
     char index_sha[65] = "";
@@ -8425,6 +8699,18 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
             glEnableVertexAttribArray((GLuint)attribute->location);
         }
     }
+    if (g_uv2_pixels.count != 0) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_framebuffer);
+        if (index_data != NULL && index_last >= 0 && index_last < UINT16_MAX &&
+            uv2_sparse_observe(&guard, control, probe,
+                control_program, count, width, height, index_sha,
+                pre_color, pre_depth_raw) == 0) {
+            result = 1;
+        } else {
+            uv2_probe_write_failure("unsupported_sparse_state", "coverage_or_mrt");
+        }
+        goto done;
+    }
     {
         GLint viewport[4];
         glGetIntegerv(GL_VIEWPORT, viewport);
@@ -8472,7 +8758,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     }
     result = 1;
 done:
-    /* Every path restores the exact live state; the engine's draw follows. */
+    /* Every path restores the engine state at draw exit. */
     if (g_uv2_probe_done == 0) {
         uv2_probe_restore_state(&guard);
     }
@@ -8658,8 +8944,7 @@ done:
             free(buffer);
         }
     }
-    /* Descriptor digests read live buffers; restore the engine state again so
-       the draw that follows sees exactly the pre-probe state. */
+    /* Descriptor digests read live buffers and can change their bindings. */
     uv2_probe_restore_state(&guard);
     if (owns_pre) {
         free(pre_color);
@@ -8669,6 +8954,7 @@ done:
     free(probe_pixels);
     free(vertex_source);
     free(fragment_source);
+    free(instrumented_fragment);
     free(index_data);
     if (control_program != 0) {
         glDeleteProgram(control_program);
@@ -8819,6 +9105,7 @@ int eu4_gfx_uv2_probe_test_configure(const char *directory, int event,
         return -1;
     }
     memset(&g_uv2_probe, 0, sizeof(g_uv2_probe));
+    g_uv2_pixels.count = 0;
     g_uv2_probe.enabled = 1;
     g_uv2_probe.event = event;
     g_uv2_probe.program = program;

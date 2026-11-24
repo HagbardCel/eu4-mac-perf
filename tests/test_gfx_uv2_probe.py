@@ -409,7 +409,8 @@ class StageLocalizationTests(unittest.TestCase):
     def compare(self, observations, *, verified=True, provenance=True, origin="lower_left"):
         return gfx_uv2_probe.compare_stages(
             observations, attribution={"verified": verified},
-            provenance_valid=provenance, origin=origin)
+            provenance_valid=provenance, origin=origin,
+            original_pipeline_stages=gfx_uv2_probe.FLOAT_STAGES)
 
     def test_first_observable_stage_distinguishes_numerical_mechanisms(self):
         for stage, channel in (("uv2", "x"), ("texture_samples", "tex0.r"),
@@ -542,6 +543,279 @@ class Event1ArtifactLocalizationTests(unittest.TestCase):
 
     def localize(self):
         return gfx_uv2_probe.localize(self.frame, self.replay, renderer_sha256=self.renderer)
+
+    def setup_sparse(self):
+        event = self.trace["_events"][1]
+        event["program"]["shaders"] = [
+            {"stage": stage, "sha256": digest}
+            for stage, digest in gfx_uv2_probe.EVENT1_SHADER_SHA256.items()]
+        event["indices"].update(first_index=0, range_valid=True, read_error=False,
+                                bytes=12, sha256="a" * 64)
+        event["state"] = {
+            "color_mask": [1, 1, 1, 1],
+            "depth": {"test": True, "write": True, "func": "0x203", "range": [0, 1]},
+            "polygon": {"mode": ["0x1b02", "0x1b02"], "offset_fill": False},
+            "blend": {"enabled": False}, "logic_op": {"enabled": False},
+            "alpha_test": {"enabled": False}, "stencil": {"test": False},
+            "scissor": {"enabled": False},
+        }
+        self.post["depth"] = {**self.pre["depth"], "file": "post-depth.f32"}
+        values = struct.pack("<f", 0.5) * (WIDTH * HEIGHT)
+        (self.frame / "blobs" / "post-depth.f32").write_bytes(values)
+        self.post["depth"]["sha256"] = hashlib.sha256(values).hexdigest()
+        (self.replay / "pre.bgra").write_bytes((self.frame / "blobs" / "pre.bgra").read_bytes())
+        self.result["checkpoints"].append({
+            **self.result["checkpoints"][0], "timing": "pre_event", "file": "pre.bgra",
+            "reference_sha256": self.pre["color"]["sha256"],
+        })
+        self.gl_sample = {
+            "x": 1, "y": 2, "sample": 0, "primitive": 1, "hits": 1,
+            "hits_without_depth": 0, "uv2_bits": [0x3e800000, 0x3f000000],
+            "survived": True, "control_rgb": [20, 10, 2], "pre_rgb": [1, 1, 1],
+            "pre_depth_bits": 0x3f800000, "control_depth_bits": 0x3f000000,
+        }
+        self.metal_sample = {
+            **self.gl_sample, "selected_hits": 1, "control_rgb": [20, 10, 3],
+            "uv2_bits": [0x3e800001, 0x3f000000],
+        }
+
+    def publish_sparse(self, *, gl_fields=None, metal_fields=None):
+        for side, folder, row, fields in (
+                ("opengl", self.frame, self.gl_sample, gl_fields),
+                ("metal", self.replay / "uv2-probe", self.metal_sample, metal_fields)):
+            folder.mkdir(exist_ok=True)
+            doc = {
+                **gfx_uv2_probe.EVENT1, "level": 0, "capture": self.seal,
+                "schema": gfx_uv2_probe.SPARSE_SCHEMA, "side": side, "status": "observed",
+                "origin": "lower_left", "selection": [[row["x"], row["y"]]],
+                "width": WIDTH, "height": HEIGHT, "samples": 1,
+                "method": gfx_uv2_probe.SPARSE_METHODS[side], "pixels": [row],
+                "index_sha256": self.trace["_events"][1]["indices"]["sha256"],
+                **(fields or {}),
+            }
+            payload = json.dumps(doc).encode()
+            (folder / gfx_uv2_probe.SPARSE_FILE).write_bytes(payload)
+            binding = {"file": gfx_uv2_probe.SPARSE_FILE,
+                       "sha256": hashlib.sha256(payload).hexdigest()}
+            if side == "opengl":
+                self.trace["uv2_fragments"] = binding
+            else:
+                self.result["uv2_probe"] = binding
+        self.publish_candidate()
+
+    def test_sparse_coverage_and_instrumented_disagreement_are_separate(self):
+        self.setup_sparse()
+        self.publish_sparse()
+        report = self.localize()
+        self.assertEqual(report["status"], "correspondence_verified", report.get("reason"))
+        self.assertTrue(report["fragment_attribution_verified"])
+        sparse = report["sparse_observations"]
+        self.assertTrue(sparse["all_selected_coordinates_verified"])
+        self.assertTrue(sparse["selection_covers_all_residuals"])
+        self.assertEqual(sparse["fresh_residuals_outside_selection"], 0)
+        pixel, = report["pixels"]
+        self.assertEqual((pixel["x"], pixel["y"], pixel["selection"]), (1, 2, "residual"))
+        self.assertEqual(pixel["first_observed_difference"], "rgb8")
+        self.assertIsNone(pixel["first_differing_stage"])
+        self.assertEqual(pixel["first_unresolved_stage"], "uv2")
+        uv2 = pixel["stages"]["uv2"]
+        self.assertEqual(uv2["ulp_differences"], {"x": 1, "y": 0})
+        self.assertEqual(uv2["authority"], "instrumented_shader_variants")
+        self.assertEqual(uv2["instrumented_comparison"], "different")
+        self.assertFalse(uv2["original_pipeline_qualified"])
+        self.assertTrue(pixel["fragment_correspondence"]["verified"])
+        self.assertEqual(pixel["fragment_correspondence"]["decisions"],
+                         {"opengl": "verified_writer", "metal": "verified_writer"})
+
+    def set_candidate_blue(self, x, y, blue):
+        path = self.replay / self.post["color"]["file"]
+        data = bytearray(path.read_bytes())
+        data[(y * WIDTH + x) * 4] = blue
+        path.write_bytes(data)
+
+    def test_new_residual_outside_a_fully_verified_selection_blocks_event_attribution(self):
+        self.setup_sparse()
+        self.set_candidate_blue(2, 3, 3)
+        self.publish_sparse()
+        report = self.localize()
+        self.assertEqual(report["mask_pixels"], 2)
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertFalse(report["fragment_attribution_verified"])
+        self.assertTrue(report["pixels"][0]["fragment_correspondence"]["verified"])
+        sparse = report["sparse_observations"]
+        self.assertTrue(sparse["all_selected_coordinates_verified"])
+        self.assertFalse(sparse["selection_covers_all_residuals"])
+        self.assertEqual(sparse["fresh_residuals_outside_selection"], 1)
+        self.assertIn("current_residuals_outside_selection", report["missing"])
+        self.assertEqual(report["next_observation"],
+                         "fragment_correspondence_at_unobserved_residuals")
+
+    def test_large_residual_mask_keeps_sparse_results_and_counts_unselected_pixels(self):
+        self.setup_sparse()
+        self.set_candidate_blue(2, 3, 3)
+        self.publish_sparse()
+        with mock.patch.object(gfx_uv2_probe, "MAX_MASK_PIXELS", 1):
+            report = self.localize()
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertEqual(report["mask_pixels"], 2)
+        self.assertEqual(report["sparse_observations"]["fresh_residuals_outside_selection"], 1)
+        self.assertTrue(report["pixels"][0]["fragment_correspondence"]["verified"])
+
+    def test_every_residual_in_a_multi_pixel_selection_can_verify(self):
+        self.setup_sparse()
+        self.set_candidate_blue(2, 3, 3)
+        selection = [[1, 2], [2, 3]]
+        self.publish_sparse(
+            gl_fields={"selection": selection,
+                       "pixels": [self.gl_sample, {**self.gl_sample, "x": 2, "y": 3}]},
+            metal_fields={"selection": selection,
+                          "pixels": [self.metal_sample, {**self.metal_sample, "x": 2, "y": 3}]})
+        report = self.localize()
+        self.assertEqual(report["status"], "correspondence_verified")
+        self.assertEqual(report["mask_pixels"], 2)
+        self.assertEqual(report["sparse_observations"]["verified"], 2)
+        self.assertEqual(report["sparse_observations"]["fresh_residuals_outside_selection"], 0)
+        self.assertTrue(report["sparse_observations"]["selection_covers_all_residuals"])
+
+    def test_verified_rgb_control_alone_cannot_cover_residual(self):
+        self.setup_sparse()
+        for sample in (self.gl_sample, self.metal_sample):
+            sample.update(x=2, y=2, control_rgb=[20, 10, 2])
+        self.publish_sparse()
+        report = self.localize()
+        self.assertEqual(report["mask_pixels"], 1)
+        self.assertEqual(report["sparse_observations"]["fresh_residuals_outside_selection"], 1)
+        self.assertTrue(report["sparse_observations"]["all_selected_coordinates_verified"])
+        self.assertFalse(report["sparse_observations"]["selection_covers_all_residuals"])
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertEqual(report["pixels"][0]["selection"], "rgb_match_control")
+
+    def test_matching_color_and_depth_controls_do_not_authenticate_uv2(self):
+        self.setup_sparse()
+        self.set_candidate_blue(1, 2, 2)
+        self.metal_sample["control_rgb"] = self.gl_sample["control_rgb"]
+        self.publish_sparse()
+        report = self.localize()
+        pixel, = report["pixels"]
+        self.assertTrue(pixel["fragment_correspondence"]["verified"])
+        self.assertEqual(pixel["original_gl_depth"]["float32_bits"]["post"], 0x3f000000)
+        self.assertEqual(pixel["stages"]["rgb8"]["status"], "exact")
+        uv2 = pixel["stages"]["uv2"]
+        # GL's depth bits reproduce the sealed value; the Metal witness
+        # re-passes at its own post-depth. Both color controls reproduced RGB8.
+        self.assertEqual(uv2["controls"], {"opengl": "matched", "metal": "matched"})
+        self.assertEqual(uv2["instrumented_comparison"], "different")
+        self.assertEqual(uv2["ulp_differences"], {"x": 1, "y": 0})
+        self.assertFalse(uv2["original_pipeline_qualified"])
+        self.assertIsNone(pixel["first_observed_difference"])
+        self.assertIsNone(pixel["first_differing_stage"])
+
+    def test_failed_instrumentation_does_not_invalidate_the_two_normal_writers(self):
+        self.setup_sparse()
+        for side, change, expected in (
+                ("opengl", {"survived": False}, "no_instrumented_write"),
+                ("opengl", {"control_depth_bits": 0x3f000001}, "instrumented_depth_differs"),
+                ("metal", {"control_rgb": [20, 10, 2]}, "instrumented_color_differs")):
+            with self.subTest(side=side, change=change):
+                target = self.gl_sample if side == "opengl" else self.metal_sample
+                with mock.patch.dict(target, change):
+                    self.publish_sparse()
+                    pixel, = self.localize()["pixels"]
+                self.assertTrue(pixel["fragment_correspondence"]["verified"])
+                self.assertEqual(pixel["stages"]["uv2"]["controls"][side], expected)
+                self.assertIsNone(pixel["first_differing_stage"])
+
+    def test_sparse_requires_actual_write_coverage_and_same_fragment(self):
+        self.setup_sparse()
+        examples = (
+            ("opengl", {"hits": 0}, "no_coverage_or_discard"),
+            ("opengl", {"hits": 0, "hits_without_depth": 1}, "depth_rejected"),
+            ("opengl", {"hits": 2}, "overlap"),
+            ("opengl", {"pre_depth_bits": 0x3f000000}, "original_pre_depth_or_color_unbound"),
+            ("metal", {"selected_hits": 0}, "gl_primitive_not_observed"),
+            ("metal", {"hits": 2}, "overlap"),
+            ("metal", {"hits": 0}, "no_passing_sample"),
+            ("metal", {"sample": 1}, "unsupported_sample"),
+            ("metal", {"primitive": 0}, "verified_writer"),
+        )
+        for side, change, expected in examples:
+            with self.subTest(side=side, change=change):
+                sample = self.gl_sample if side == "opengl" else self.metal_sample
+                with mock.patch.dict(sample, change):
+                    self.publish_sparse()
+                    report = self.localize()
+                self.assertEqual(report["status"], "inconclusive")
+                sparse = report["sparse_observations"]
+                self.assertFalse(sparse["all_selected_coordinates_verified"])
+                self.assertTrue(sparse["selection_covers_all_residuals"])
+                pixel, = report["pixels"]
+                self.assertFalse(pixel["fragment_correspondence"]["verified"])
+                self.assertEqual(pixel["fragment_correspondence"]["decisions"][side], expected)
+                self.assertIsNone(pixel["first_differing_stage"])
+        self.assertTrue(pixel["fragment_correspondence"]["different_primitive_or_sample"])
+
+    def test_rgb_match_cannot_establish_overlap_or_a_color_preserving_write(self):
+        self.setup_sparse()
+        for sample in (self.gl_sample, self.metal_sample):
+            sample.update(x=0, y=1, control_rgb=[20, 10, 2])
+        self.publish_sparse()
+        pixel, = self.localize()["pixels"]
+        self.assertEqual(pixel["stages"]["rgb8"]["status"], "exact")
+        self.assertEqual(pixel["fragment_correspondence"]["decisions"]["opengl"],
+                         "normal_color_write_unproven")
+        self.assertEqual(pixel["status"], "inconclusive")
+
+    def test_sparse_rejects_wrong_seal_orientation_or_changed_payload(self):
+        self.setup_sparse()
+        for fields, message in (
+                ({"capture": {**self.seal, "session_id": "another"}}, "different seal"),
+                ({"origin": "upper_left"}, "orientation mismatch"),
+                ({"index_sha256": "b" * 64}, "different index stream"),
+                ({"method": "normal_pipeline_query_post_lequal"}, "unsupported method"),
+                ({"selection": [[2, 1]]}, "sample record is invalid")):
+            with self.subTest(fields=fields):
+                self.publish_sparse(metal_fields=fields)
+                report = self.localize()
+                self.assertEqual(report["status"], "invalid_provenance")
+                self.assertIn(message, report["reason"])
+        self.publish_sparse()
+        (self.frame / gfx_uv2_probe.SPARSE_FILE).write_bytes(b"{}")
+        self.assertIn("digest mismatch", self.localize()["reason"])
+
+    def test_negative_observation_and_unsupported_write_state_remain_unresolved(self):
+        self.setup_sparse()
+        self.publish_sparse(gl_fields={"status": "unresolved", "reason": "unsupported",
+                                       "pixels": []})
+        report = self.localize()
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertEqual(report["sparse_observations"]["opengl"]["reason"], "unsupported")
+        for state in ({"blend": {"enabled": True}}, {"color_mask": [0, 1, 1, 1]},
+                      {"logic_op": {"enabled": True}}, {"alpha_test": {"enabled": True}},
+                      {"depth": {"test": True, "write": False, "func": "0x203", "range": [0, 1]}},
+                      {"depth": {"test": True, "write": True, "func": "0x201", "range": [0, 1]}},
+                      {"depth": {"test": True, "write": True, "func": "0x203", "range": [1, 0]}}):
+            with self.subTest(state=state), mock.patch.dict(self.trace["_events"][1]["state"], state):
+                self.publish_sparse()
+                pixel, = self.localize()["pixels"]
+                self.assertEqual(pixel["fragment_correspondence"]["decisions"]["opengl"],
+                                 "unsupported_write_or_draw_state")
+
+    def test_sparse_replay_uses_only_sealed_selection_and_primitive(self):
+        self.setup_sparse()
+        self.publish_sparse()
+        ordinals, checkpoints = gfx_uv2_probe.sparse_replay_inputs(self.frame, "1,2")
+        self.assertEqual(ordinals, "1")
+        self.assertEqual({row["timing"]: row["reference_sha256"] for row in checkpoints},
+                         {"pre_event": self.pre["color"]["sha256"],
+                          "post_event": self.post["color"]["sha256"]})
+        with self.assertRaisesRegex(gfx_uv2_probe.ProbeError, "sealed selection"):
+            gfx_uv2_probe.sparse_replay_inputs(self.frame, "2,1")
+
+    def test_sparse_cli_pixels_reject_duplicates_shape_and_range(self):
+        self.assertEqual(m6_frame._uv2_probe_pixels("0,1;7,2"), "0,1;7,2")
+        for text in ("0,1;0,1", "0,1;", "-1,0", "0,8192", ""):
+            with self.subTest(text=text), self.assertRaises(argparse.ArgumentTypeError):
+                m6_frame._uv2_probe_pixels(text)
 
     def test_receipt_bound_rgb_and_controls_preserve_lower_left_order(self):
         report = self.localize()

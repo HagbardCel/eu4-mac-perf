@@ -15,6 +15,7 @@
 #import "eu4_gfx_draw_semantics.h"
 #include "eu4_gfx_replay_semantics.h"
 #include "eu4_gfx_metal_replay.h"
+#include "eu4_gfx_uv2_sparse.h"
 
 #include <CommonCrypto/CommonDigest.h>
 #include <time.h>
@@ -2156,8 +2157,16 @@ static NSString *shader_source_identity(NSString *path, NSString **source_out,
     return hex;
 }
 
+static MTLCompileOptions *translated_shader_options(void) {
+    MTLCompileOptions *options = [MTLCompileOptions new];
+    options.languageVersion = MTLLanguageVersion2_1;
+    options.fastMathEnabled = g_state.shader_fast_math;
+    return options;
+}
+
 static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
-                                    NSString **identity_out, NSError **error) {
+                                    NSString **identity_out, NSString **source_out,
+                                    NSError **error) {
     NSString *file = string_value(stage[@"msl_file"]);
     NSString *entry = string_value(stage[@"msl_entry"]);
     NSString *kind = string_value(stage[@"stage"]) ?: @"";
@@ -2175,8 +2184,9 @@ static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
     if (digest == nil) {
         return nil;
     }
-    BOOL fast_math = g_state.shader_fast_math;
-    NSString *options_key = fast_math ? @"fastmath-on" : @"fastmath-off";
+    if (source_out != NULL)
+        *source_out = source;
+    NSString *options_key = g_state.shader_fast_math ? @"fastmath-on" : @"fastmath-off";
     NSString *key = [NSString stringWithFormat:@"%@#%@#%@#%@", digest, entry,
                                                kind, options_key];
     if (identity_out != NULL) {
@@ -2186,12 +2196,9 @@ static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
     if (cached != nil) {
         return cached;
     }
-    MTLCompileOptions *options = [MTLCompileOptions new];
-    options.languageVersion = MTLLanguageVersion2_1;
-    options.fastMathEnabled = fast_math;
     NSError *read_error = nil;
     id<MTLLibrary> library = [g_device newLibraryWithSource:source
-                                                    options:options
+                                                    options:translated_shader_options()
                                                       error:&read_error];
     if (library == nil) {
         if (error != NULL) {
@@ -2265,6 +2272,9 @@ typedef struct {
 } uv2_probe_config;
 
 static uv2_probe_config g_uv2_probe;
+static eu4_uv2_selection g_uv2_pixels;
+static NSDictionary *g_uv2_sparse_targets;
+static int g_uv2_primitives[EU4_UV2_MAX_PIXELS];
 static int g_uv2_probe_done;
 static int g_uv2_probe_status; /* 0 skipped, 1 ok, 2 error */
 static char g_uv2_probe_error[512];
@@ -2282,6 +2292,8 @@ static void uv2_probe_reset(void) {
     snprintf(g_uv2_probe.varying, sizeof(g_uv2_probe.varying), "%s",
              "v_TEXCOORD1");
     g_uv2_probe_done = 0;
+    g_uv2_pixels.count = 0;
+    g_uv2_sparse_targets = nil;
     g_uv2_probe_status = 0;
     g_uv2_probe_error[0] = 0;
     g_uv2_probe_records = [NSMutableArray array];
@@ -2378,6 +2390,28 @@ static void uv2_probe_configure_from_env(void) {
             return;
         }
         snprintf(g_uv2_probe.dir, sizeof(g_uv2_probe.dir), "%s", dir);
+    }
+    if (eu4_uv2_parse_pixels(getenv("EU4_FRAME_REPLAY_UV2_PROBE_PIXELS"),
+                             &g_uv2_pixels) != 0) {
+        g_uv2_probe_status = 2;
+        snprintf(g_uv2_probe_error, sizeof(g_uv2_probe_error),
+                 "invalid sparse UV2 coordinates");
+        return;
+    }
+    const char *primitives = getenv("EU4_FRAME_REPLAY_UV2_PROBE_PRIMITIVES");
+    for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+        char *end = NULL;
+        long primitive = primitives != NULL ? strtol(primitives, &end, 10) : -2;
+        char terminator = i + 1 == g_uv2_pixels.count ? '\0' : ',';
+        if (primitive < -1 || primitive > 65534 || end == primitives ||
+            *end != terminator) {
+            g_uv2_probe_status = 2;
+            snprintf(g_uv2_probe_error, sizeof(g_uv2_probe_error),
+                     "invalid sealed UV2 primitive selection");
+            return;
+        }
+        g_uv2_primitives[i] = (int)primitive;
+        primitives = end + 1;
     }
     g_uv2_probe.enabled = 1;
 }
@@ -2484,20 +2518,14 @@ static id<MTLFunction> uv2_probe_compile_fragment(NSDictionary *program_entry,
     return function;
 }
 
-static void uv2_probe_write_descriptor(NSString *directory,
-                                       NSDictionary *document) {
+static NSData *uv2_probe_write_descriptor(NSString *directory, NSString *file,
+                                          NSDictionary *document) {
     [[NSFileManager defaultManager] createDirectoryAtPath:directory
-                              withIntermediateDirectories:YES
-                                               attributes:nil
-                                                    error:NULL];
+                              withIntermediateDirectories:YES attributes:nil error:NULL];
     NSData *json = [NSJSONSerialization dataWithJSONObject:document
-                                                   options:NSJSONWritingPrettyPrinted
-                                                     error:NULL];
-    if (json != nil) {
-        [json writeToFile:[directory
-                              stringByAppendingPathComponent:@"uv2-probe.json"]
-               atomically:YES];
-    }
+                                                   options:NSJSONWritingPrettyPrinted error:NULL];
+    return [json writeToFile:[directory stringByAppendingPathComponent:file] atomically:YES]
+        ? json : nil;
 }
 
 static void uv2_probe_record_failure(NSString *reason, NSDictionary *event,
@@ -2546,12 +2574,98 @@ static NSDictionary *uv2_probe_read_capture_identity(NSString *frame_path) {
         @"session_id": seal[@"session_id"] ?: @"",
         @"capture_frame_id": seal[@"capture_frame_id"] ?: @0,
         @"manifest_sha256": seal[@"manifest_sha256"] ?: @"",
+        @"pid": seal[@"pid"] ?: @0,
         @"reference_sha256": seal[@"reference_sha256"] ?: @"",
     };
 }
 
 /* Reads every recorded probe target back after the frame command buffer has
  * completed and writes the raw float payload plus its descriptor. */
+static NSUInteger uv2_metal_sample_y(eu4_uv2_pixel pixel, NSUInteger height) {
+    return height - 1 - pixel.y;
+}
+
+static NSDictionary *uv2_sparse_metal_output(NSString *directory) {
+    NSDictionary *identity = @{
+        @"schema": @EU4_UV2_SPARSE_SCHEMA, @"side": @"metal",
+        @"event": @(g_uv2_probe.event), @"program": @(g_uv2_probe.program),
+        @"framebuffer": @(g_uv2_probe.framebuffer), @"texture": @(g_uv2_probe.texture),
+        @"capture": g_uv2_probe_capture_identity ?: @{}, @"level": @0,
+        @"origin": @"lower_left",
+    };
+    NSMutableDictionary *document = [identity mutableCopy];
+    NSMutableArray *pixels = [NSMutableArray array];
+    NSMutableArray *selection = [NSMutableArray array];
+    for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+        eu4_uv2_pixel pixel = g_uv2_pixels.pixels[i];
+        [selection addObject:@[@(pixel.x), @(pixel.y)]];
+    }
+    document[@"selection"] = selection;
+    NSString *reason = g_uv2_probe_failure[@"reason"] ?: @"event_not_replayed";
+    NSArray<id<MTLTexture>> *textures = g_uv2_sparse_targets[@"textures"];
+    id<MTLTexture> color = textures.firstObject;
+    id<MTLBuffer> queries = g_uv2_sparse_targets[@"queries"];
+    if (color != nil && queries != nil) {
+        // Each copy uses a 256-byte aligned destination. Convert lower-left
+        // capture coordinates once, at the Metal readback boundary.
+        const NSUInteger stride = 256;
+        NSUInteger plane_size = g_uv2_pixels.count * stride;
+        id<MTLBuffer> buffer = [g_device newBufferWithLength:plane_size * textures.count
+                                                    options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> command = [g_queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+        if (buffer != nil && blit != nil) {
+            for (NSUInteger plane = 0; plane < textures.count; plane++) {
+                for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+                    eu4_uv2_pixel pixel = g_uv2_pixels.pixels[i];
+                    [blit copyFromTexture:textures[plane] sourceSlice:0 sourceLevel:0
+                        sourceOrigin:MTLOriginMake(pixel.x, uv2_metal_sample_y(pixel, color.height), 0)
+                        sourceSize:MTLSizeMake(1, 1, 1) toBuffer:buffer
+                        destinationOffset:plane * plane_size + i * stride
+                        destinationBytesPerRow:stride destinationBytesPerImage:stride];
+                }
+            }
+            [blit endEncoding];
+            [command commit];
+        }
+        if (buffer != nil && blit != nil &&
+            wait_for_transfer(command, @"sparse UV2 readback", NULL)) {
+            for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+                eu4_uv2_pixel pixel = g_uv2_pixels.pixels[i];
+                const uint8_t *rgb = (const uint8_t *)buffer.contents + i * stride;
+                const uint32_t *uv = (const uint32_t *)(rgb + plane_size);
+                const uint64_t *hits = (const uint64_t *)queries.contents + i * 2;
+                [pixels addObject:@{
+                    @"x": @(pixel.x), @"y": @(pixel.y), @"sample": @0,
+                    @"primitive": @(g_uv2_primitives[i]),
+                    @"hits": @(hits[0]), @"selected_hits": @(hits[1]),
+                    @"survived": @(uv[3] == 0x3f800000),
+                    @"uv2_bits": @[@(uv[0]), @(uv[1])],
+                    @"control_rgb": @[@(rgb[2]), @(rgb[1]), @(rgb[0])],
+                }];
+            }
+            document[@"method"] = @"reviewed_pipeline_query_post_lequal";
+            document[@"width"] = @(color.width);
+            document[@"height"] = @(color.height);
+            document[@"samples"] = @(color.sampleCount);
+            document[@"index_sha256"] = g_uv2_sparse_targets[@"index_sha256"];
+            reason = nil;
+        } else {
+            reason = @"sparse_readback";
+        }
+    }
+    document[@"status"] = reason == nil ? @"observed" : @"unresolved";
+    if (reason != nil)
+        document[@"reason"] = reason;
+    document[@"pixels"] = pixels;
+    NSString *file = @EU4_UV2_SPARSE_FILE;
+    NSData *data = uv2_probe_write_descriptor(directory, file, document);
+    if (data == nil)
+        return @{@"status": @"error", @"reason": @"sparse_observation_write"};
+    return @{@"status": document[@"status"], @"file": file,
+             @"sha256": uv2_probe_sha256(data)};
+}
+
 static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
     if (!g_uv2_probe.enabled) {
         return nil;
@@ -2559,8 +2673,10 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
     NSString *directory = g_uv2_probe.dir[0] != 0
         ? [NSString stringWithUTF8String:g_uv2_probe.dir]
         : [output_path stringByAppendingPathComponent:@"uv2-probe"];
+    if (g_uv2_pixels.count != 0)
+        return uv2_sparse_metal_output(directory);
     if (g_uv2_probe_failure != nil) {
-        uv2_probe_write_descriptor(directory, g_uv2_probe_failure);
+        uv2_probe_write_descriptor(directory, @"uv2-probe.json", g_uv2_probe_failure);
         return @{
             @"status": @"error",
             @"reason": g_uv2_probe_failure[@"reason"] ?: @"",
@@ -2603,7 +2719,7 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
         uv2_probe_record_failure(
             reason, @{@"target": record[@"target"] ?: @{}},
             record[@"observed"] ?: @{});
-        uv2_probe_write_descriptor(directory, g_uv2_probe_failure);
+        uv2_probe_write_descriptor(directory, @"uv2-probe.json", g_uv2_probe_failure);
         return @{@"status": @"error", @"reason": reason};
     }
     uint8_t *flipped = (uint8_t *)malloc(stride * height);
@@ -2661,7 +2777,7 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
         uv2_probe_record_failure(
             reason, @{@"target": record[@"target"] ?: @{}},
             record[@"observed"] ?: @{});
-        uv2_probe_write_descriptor(directory, g_uv2_probe_failure);
+        uv2_probe_write_descriptor(directory, @"uv2-probe.json", g_uv2_probe_failure);
         return @{@"status": @"error", @"reason": reason};
     }
     NSMutableDictionary *document = [record mutableCopy];
@@ -2684,7 +2800,7 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
     document[@"raw_file"] = raw_name;
     document[@"raw_bytes"] = @(data.length);
     document[@"raw_sha256"] = uv2_probe_sha256(data);
-    uv2_probe_write_descriptor(directory, document);
+    uv2_probe_write_descriptor(directory, @"uv2-probe.json", document);
     g_uv2_probe_status = 1;
     return @{
         @"status": @"ok",
@@ -2754,6 +2870,160 @@ static void apply_draw_binding(id<MTLRenderCommandEncoder> encoder,
                : MTLWindingClockwise];
 }
 
+static id<MTLTexture> uv2_sparse_target(id<MTLTexture> source, MTLPixelFormat format) {
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:format width:source.width height:source.height
+        mipmapped:NO];
+    descriptor.storageMode = MTLStorageModePrivate;
+    descriptor.usage = MTLTextureUsageRenderTarget;
+    return [g_device newTextureWithDescriptor:descriptor];
+}
+
+// Digests of the reviewed event-1 translations. The fragment has no early
+// tests attribute, custom depth, or sample-mask write. Its discard depends
+// only on interpolated height. Neither stage changes behavior by draw ordinal.
+static NSString *const kUV2VertexIdentityPrefix =
+    @"2b491271bbf265800331850045d51f776da43361b551a4e7384e689caad965db#main0#";
+static NSString *const kUV2FragmentIdentityPrefix =
+    @"8d911f6c73d2b307e74b50e3f308b1d1b5a3edc785abc0175a9e9cecc36d649a#main0#";
+
+static id<MTLFunction> uv2_sparse_metal_fragment(NSString *source) {
+    NSString *declaration = @"struct main0_out\n{";
+    NSString *store = @"    return out;\n}";
+    if ([source componentsSeparatedByString:declaration].count != 2 ||
+        [source componentsSeparatedByString:store].count != 2)
+        return nil;
+    source = [source stringByReplacingOccurrencesOfString:declaration withString:
+        @"struct main0_out\n{\n    float4 eu4_uv2 [[color(1)]];"];
+    source = [source stringByReplacingOccurrencesOfString:store withString:
+        @"    out.eu4_uv2 = float4(glsl_vertex.uv2, 0.0, 1.0);\n    return out;\n}"];
+    id<MTLLibrary> library = [g_device newLibraryWithSource:source
+                                                   options:translated_shader_options() error:NULL];
+    return [library newFunctionWithName:@"main0"];
+}
+
+static NSString *uv2_sparse_encode(
+    id<MTLCommandBuffer> command, NSString *fragment_source, NSDictionary *fs,
+    NSDictionary *vs, id<MTLFunction> vertex,
+    MTLVertexDescriptor *layout, const draw_binding *binding,
+    id<MTLRenderPipelineState> normal_pipeline, id<MTLTexture> normal_color, id<MTLTexture> depth, id<MTLBuffer> indices,
+    NSUInteger count, NSString *index_sha, NSDictionary *buffers, NSData *vertex_uniforms,
+    NSData *fragment_uniforms, NSDictionary *textures, NSDictionary *samplers) {
+    for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+        if (g_uv2_pixels.pixels[i].x >= normal_color.width ||
+            g_uv2_pixels.pixels[i].y >= normal_color.height)
+            return @"coordinate_outside_target";
+        if (g_uv2_primitives[i] >= (int)(count / 3))
+            return @"primitive_outside_draw";
+    }
+    id<MTLFunction> instrumented = uv2_sparse_metal_fragment(fragment_source);
+    if (instrumented == nil)
+        return @"sparse_shader_compile";
+    if (![g_device supportsFamily:MTLGPUFamilyApple4] &&
+        ![g_device supportsFamily:MTLGPUFamilyMac2])
+        return @"visibility_count_unsupported";
+
+    id<MTLTexture> color = uv2_sparse_target(normal_color, normal_color.pixelFormat);
+    id<MTLTexture> uv = uv2_sparse_target(normal_color, MTLPixelFormatRGBA32Float);
+    NSUInteger query_stride = 2 * sizeof(uint64_t);
+    id<MTLBuffer> queries = [g_device newBufferWithLength:g_uv2_pixels.count * query_stride
+                                                 options:MTLResourceStorageModeShared];
+    if (color == nil || uv == nil || queries == nil)
+        return @"sparse_target_alloc";
+    memset(queries.contents, 0, queries.length);
+
+    // A normal draw that changed RGB has a final writer. Under the pinned
+    // pipeline with LEQUAL and full replacement, that writer owns the actual
+    // post-depth and will pass again at that depth. The read-only full query
+    // can overcount, but only a unique hit also seen in the isolated query
+    // establishes the triangle. GL and Metal depth values need not agree.
+    MTLDepthStencilDescriptor *ds = [MTLDepthStencilDescriptor new];
+    ds.depthCompareFunction = MTLCompareFunctionLessEqual;
+    id<MTLDepthStencilState> depth_state = [g_device newDepthStencilStateWithDescriptor:ds];
+    if (depth_state == nil)
+        return @"sparse_depth_state";
+    for (int pass_index = 0; pass_index < 2; pass_index++) {
+        BOOL visibility = pass_index == 0;
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = color;
+        pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+        pass.colorAttachments[0].storeAction = visibility ? MTLStoreActionDontCare : MTLStoreActionStore;
+        pass.depthAttachment.texture = depth;
+        pass.depthAttachment.loadAction = MTLLoadActionLoad;
+        pass.depthAttachment.storeAction = MTLStoreActionStore;
+        pass.stencilAttachment.texture = depth;
+        pass.stencilAttachment.loadAction = MTLLoadActionLoad;
+        pass.stencilAttachment.storeAction = MTLStoreActionStore;
+        id<MTLRenderPipelineState> pipeline = normal_pipeline;
+        if (visibility) {
+            pass.visibilityResultBuffer = queries;
+        } else {
+            MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
+            descriptor.vertexFunction = vertex;
+            descriptor.vertexDescriptor = layout;
+            descriptor.fragmentFunction = instrumented;
+            descriptor.colorAttachments[0].pixelFormat = color.pixelFormat;
+            descriptor.colorAttachments[1].pixelFormat = uv.pixelFormat;
+            descriptor.depthAttachmentPixelFormat = depth.pixelFormat;
+            descriptor.stencilAttachmentPixelFormat = depth.pixelFormat;
+            pipeline = [g_device newRenderPipelineStateWithDescriptor:descriptor error:NULL];
+            pass.colorAttachments[1].texture = uv;
+            pass.colorAttachments[1].loadAction = MTLLoadActionClear;
+            pass.colorAttachments[1].storeAction = MTLStoreActionStore;
+            pass.colorAttachments[1].clearColor = MTLClearColorMake(0, 0, 0, 0);
+        }
+        if (pipeline == nil)
+            return @"sparse_pipeline";
+        id<MTLRenderCommandEncoder> probe = [command renderCommandEncoderWithDescriptor:pass];
+        if (probe == nil)
+            return @"sparse_encoder";
+        [probe setRenderPipelineState:pipeline];
+        apply_draw_binding(probe, binding);
+        [probe setDepthStencilState:depth_state];
+        if (vertex_uniforms.length > 0) {
+            [probe setVertexBytes:vertex_uniforms.bytes length:vertex_uniforms.length
+                          atIndex:number(vs[@"msl_uniform_buffer"], 0)];
+        }
+        for (NSNumber *location in buffers) {
+            [probe setVertexBuffer:buffers[location] offset:0
+                           atIndex:kVertexBufferBase + location.unsignedIntegerValue];
+        }
+        if (fragment_uniforms.length > 0) {
+            [probe setFragmentBytes:fragment_uniforms.bytes length:fragment_uniforms.length
+                            atIndex:number(fs[@"msl_uniform_buffer"], 0)];
+        }
+        for (NSNumber *index in textures)
+            [probe setFragmentTexture:textures[index] atIndex:index.unsignedIntegerValue];
+        for (NSNumber *index in samplers)
+            [probe setFragmentSamplerState:samplers[index] atIndex:index.unsignedIntegerValue];
+        for (unsigned i = 0; i < g_uv2_pixels.count; i++) {
+            eu4_uv2_pixel pixel = g_uv2_pixels.pixels[i];
+            MTLScissorRect scissor = {pixel.x, uv2_metal_sample_y(pixel, color.height), 1, 1};
+            [probe setScissorRect:scissor];
+            NSUInteger offset = i * query_stride;
+            if (visibility) {
+                [probe setVisibilityResultMode:MTLVisibilityResultModeCounting offset:offset];
+                [probe drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:count
+                                    indexType:MTLIndexTypeUInt16 indexBuffer:indices
+                            indexBufferOffset:0];
+            }
+            int primitive = g_uv2_primitives[i];
+            if (primitive < 0)
+                continue;
+            if (visibility)
+                [probe setVisibilityResultMode:MTLVisibilityResultModeCounting
+                                        offset:offset + sizeof(uint64_t)];
+            [probe drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:3
+                                indexType:MTLIndexTypeUInt16 indexBuffer:indices
+                        indexBufferOffset:(NSUInteger)primitive * 3 * sizeof(uint16_t)];
+        }
+        [probe endEncoding];
+    }
+    g_uv2_sparse_targets = @{@"textures": @[color, uv], @"queries": queries,
+                             @"index_sha256": index_sha ?: @""};
+    return nil;
+}
+
 static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                         NSString *frameDir, NSString *shaderDir,
                         id<MTLCommandBuffer> command, NSError **error) {
@@ -2770,12 +3040,16 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             return NO;
         }
+        BOOL sparse_event = g_uv2_probe.enabled && g_uv2_pixels.count != 0 &&
+            (NSInteger)number(event[@"index"], -1) == g_uv2_probe.event;
         NSString *vertex_identity = nil;
         NSString *fragment_identity = nil;
+        NSString *fragment_source = nil;
         id<MTLFunction> vertex_function =
-            function_for(shaderDir, vs, &vertex_identity, error);
+            function_for(shaderDir, vs, &vertex_identity, NULL, error);
         id<MTLFunction> fragment_function =
-            function_for(shaderDir, fs, &fragment_identity, error);
+            function_for(shaderDir, fs, &fragment_identity,
+                         sparse_event ? &fragment_source : NULL, error);
         const char *debug_attr_vertex_env = getenv("EU4_FRAME_REPLAY_DEBUG_ATTR_VERTEX");
         if (debug_attr_vertex_env != NULL && debug_attr_vertex_env[0] == '1') {
             if (g_debug_attr_vertex == nil) {
@@ -3303,6 +3577,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                               atIndex:0];
         }
 
+        NSMutableDictionary *probe_textures = sparse_event ? [NSMutableDictionary dictionary] : nil;
+        NSMutableDictionary *probe_samplers = sparse_event ? [NSMutableDictionary dictionary] : nil;
         /* Textures and samplers by MSL name. */
         NSMutableDictionary *texture_by_name = [NSMutableDictionary dictionary];
         NSMutableDictionary *texture_by_unit = [NSMutableDictionary dictionary];
@@ -3570,6 +3846,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 } else {
                     [encoder setFragmentTexture:metal_texture
                                         atIndex:texture_index];
+                    probe_textures[@(texture_index)] = metal_texture;
                 }
                 NSDictionary *sampler_state = texture[@"sampler"] ?: @{};
                 NSString *sampler_key =
@@ -3624,6 +3901,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 } else {
                     [encoder setFragmentSamplerState:sampler
                                              atIndex:sampler_index];
+                    probe_samplers[@(sampler_index)] = sampler;
                 }
             }
         }
@@ -3659,6 +3937,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         }
         NSUInteger indexed = number(draw[@"indexed"], 0);
         id<MTLBuffer> uv2_index_buffer = nil;
+        NSString *sparse_index_sha = nil;
+        BOOL sparse_restart_index = NO;
         NSError *primitive_error = nil;
         MTLPrimitiveType primitive = primitive_type(mode, &primitive_error);
         if (primitive_error != nil) {
@@ -3696,6 +3976,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 [encoder endEncoding];
                 return NO;
             }
+            if (sparse_event && index_data.length == count * sizeof(uint16_t))
+                sparse_index_sha = uv2_probe_sha256(index_data);
             NSMutableData *rebased = [NSMutableData dataWithLength:count * 2];
             uint16_t *destination = (uint16_t *)rebased.mutableBytes;
             const uint16_t *source = (const uint16_t *)index_data.bytes;
@@ -3714,6 +3996,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     [encoder endEncoding];
                     return NO;
                 }
+                sparse_restart_index |= sparse_event &&
+                    (source[i] == UINT16_MAX || effective == UINT16_MAX);
                 destination[i] = (uint16_t)effective;
             }
             uv2_index_buffer = [g_device newBufferWithBytes:rebased.bytes
@@ -3755,6 +4039,43 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 observed_texture != g_uv2_probe.texture) {
                 uv2_probe_record_failure(@"identity_mismatch", event,
                                          observed);
+            } else if (sparse_event) {
+                id<MTLTexture> color = target_info[@"color"];
+                id<MTLTexture> depth = target_info[@"depth"];
+                NSUInteger depth_op = enum_value(depth_state[@"func"], 0);
+                if (!indexed || mode != 4 || count == 0 || count % 3 != 0 ||
+                    count / 3 > EU4_UV2_MAX_TRIANGLES || sparse_restart_index ||
+                    ![sparse_index_sha isEqual:event[@"indices"][@"sha256"]] ||
+                    instances != 1 || base_vertex != 0 ||
+                    observed_program != 310 || observed_framebuffer != 6 ||
+                    observed_texture != 433 || number(event[@"index"], -1) != 1 ||
+                    number(probe_target[@"color_attachment"][@"level"], -1) != 0 ||
+                    number(draw[@"first"], -1) != 0 || no_cull || cull_empty ||
+                    number(scissor[@"enabled"], 1) != 0 || blend_enabled ||
+                    ![state[@"color_mask"] isEqual:@[@1, @1, @1, @1]] ||
+                    number(state[@"logic_op"][@"enabled"], 1) != 0 ||
+                    number(state[@"alpha_test"][@"enabled"], 1) != 0 ||
+                    !depth_test || !depth_write || depth_op != 0x203 ||
+                    ![depth_state[@"range"] isEqual:@[@0, @1]] ||
+                    color.sampleCount != 1 || depth.sampleCount != 1 ||
+                    color.pixelFormat != MTLPixelFormatBGRA8Unorm ||
+                    [vs[@"msl_samplers"] count] != 0 ||
+                    ![vertex_identity hasPrefix:kUV2VertexIdentityPrefix] ||
+                    ![fragment_identity hasPrefix:kUV2FragmentIdentityPrefix] ||
+                    ![vs[@"source_sha256"] isEqual:@EU4_UV2_VERTEX_SHA] ||
+                    ![fs[@"source_sha256"] isEqual:@EU4_UV2_FRAGMENT_SHA] ||
+                    strcmp(g_uv2_probe.varying, "v_TEXCOORD1") != 0) {
+                    uv2_probe_record_failure(@"unsupported_sparse_draw", event, observed);
+                } else {
+                    NSString *reason = uv2_sparse_encode(command, fragment_source, fs,
+                        vs, vertex_function, vertex_descriptor, &binding, pipeline, color, depth,
+                        uv2_index_buffer, count, sparse_index_sha, buffers, vertex_uniforms, fragment_uniforms,
+                        probe_textures, probe_samplers);
+                    if (reason != nil)
+                        uv2_probe_record_failure(reason, event, observed);
+                    else
+                        g_uv2_probe_done = 1;
+                }
             } else if (!indexed) {
                 uv2_probe_record_failure(
                     @"selection_unsupported", event,
