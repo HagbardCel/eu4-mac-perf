@@ -19,6 +19,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import re
 import struct
 import sys
 from pathlib import Path
@@ -39,6 +40,14 @@ EVENT1 = {"event": 1, "program": 310, "framebuffer": 6, "texture": 433}
 STAGES = ("fragment_coverage", "uv2", "texture_samples", "pre_conversion", "rgb8")
 FLOAT_STAGES = ("uv2", "texture_samples", "pre_conversion")
 CONTROL_PIXELS = 8
+SPARSE_FILE = "uv2-fragments.json"
+SPARSE_SCHEMA = "gfx-uv2-fragments/v1"
+EVENT1_SHADER_SHA256 = {
+    "vertex": "2e8842a26b765c70f06594103eff681f8a149a49966c34b25d8648058f7a4b98",
+    "pixel": "3ecb11ae2fcd0c07bb9960e41fa7122a6cb7b5d873dcc9f95b9d55b765caf548",
+}
+SPARSE_METHODS = {"opengl": "original_program_query_pre_depth",
+                  "metal": "normal_pipeline_query_post_lequal"}
 
 
 class ProbeError(RuntimeError):
@@ -699,8 +708,310 @@ def _event1_images(frame_dir: Path, trace: dict, event: dict) -> tuple[dict, dic
     return reference, predecessor
 
 
+def sparse_pixels(text: str) -> list[tuple[int, int]]:
+    pairs = text.split(";")
+    if len(pairs) > 64 or any(not re.fullmatch(r"[0-9]{1,4},[0-9]{1,4}", p)
+                              for p in pairs):
+        raise ProbeError("expected 1–64 lower-left x,y pairs separated by semicolons")
+    pixels = [tuple(map(int, pair.split(","))) for pair in pairs]
+    if len(set(pixels)) != len(pixels) or any(max(p) > 8191 for p in pixels):
+        raise ProbeError("sparse coordinates must be unique and in 0–8191")
+    return pixels
+
+
+def load_sparse(directory: Path, binding: dict, side: str, seal: dict,
+                width: int, height: int, index_sha: str | None) -> tuple[dict, dict]:
+    """Authenticate the observation envelope through its existing producer."""
+    if not isinstance(binding, dict) or binding.get("file") != SPARSE_FILE:
+        raise ProbeError(f"{side} sparse observation file identity is missing")
+    body = (directory / SPARSE_FILE).read_bytes()
+    if len(body) > 64 * 1024 or _sha256(body) != binding.get("sha256"):
+        raise ProbeError(f"{side} sparse observation digest mismatch")
+    value = json.loads(body)
+    if (not isinstance(value, dict) or value.get("schema") != SPARSE_SCHEMA
+            or value.get("side") != side or value.get("origin") != "lower_left"
+            or any(type(value.get(k)) is not int or value[k] != v
+                   for k, v in {**EVENT1, "level": 0}.items())):
+        raise ProbeError(f"{side} sparse observation identity or orientation mismatch")
+    capture = value.get("capture")
+    keys = ("session_id", "capture_frame_id", "pid")
+    if side == "metal":
+        keys += ("manifest_sha256", "reference_sha256")
+    if not isinstance(capture, dict) or any(capture.get(k) != seal.get(k) for k in keys):
+        raise ProbeError(f"{side} sparse observation belongs to a different seal")
+    selection = value.get("selection")
+    if (not isinstance(selection, list) or not 1 <= len(selection) <= 64
+            or any(not isinstance(p, list) or len(p) != 2
+                   or any(type(v) is not int for v in p)
+                   or not (0 <= p[0] <= 8191 and 0 <= p[1] <= 8191) for p in selection)
+            or len({tuple(p) for p in selection}) != len(selection)):
+        raise ProbeError(f"{side} sparse observation has an invalid coordinate selection")
+    pixels = value.get("pixels")
+    if not isinstance(pixels, list):
+        raise ProbeError(f"{side} sparse observation has no pixel records")
+    if value.get("status") != "observed":
+        if pixels or not isinstance(value.get("reason"), str):
+            raise ProbeError(f"{side} sparse failure has invalid evidence")
+        return value, {}
+    if (not isinstance(index_sha, str) or not re.fullmatch(r"[a-f0-9]{64}", index_sha)
+            or value.get("index_sha256") != index_sha):
+        raise ProbeError(f"{side} sparse observation names a different index stream")
+    if (value.get("method") != SPARSE_METHODS[side]
+            or any(value.get(k) != v for k, v in (("width", width), ("height", height)))
+            or type(value.get("samples")) is not int or value["samples"] != 1
+            or len(pixels) != len(selection)):
+        raise ProbeError(f"{side} sparse observation has an unsupported method or layout")
+
+    def uint(n, maximum):
+        return type(n) is int and 0 <= n <= maximum
+
+    def vector(row, key, length, maximum):
+        v = row.get(key)
+        return isinstance(v, list) and len(v) == length and all(uint(n, maximum) for n in v)
+
+    rows = {}
+    for (x, y), row in zip(selection, pixels):
+        if (not isinstance(row, dict) or (row.get("x"), row.get("y")) != (x, y)
+                or not uint(row.get("x"), width - 1) or not uint(row.get("y"), height - 1)
+                or any(not uint(row.get(k), 0xffffffff) for k in ("sample", "hits"))
+                or type(row.get("primitive")) is not int or not -1 <= row["primitive"] < 65535
+                or type(row.get("survived")) is not bool
+                or not vector(row, "control_rgb", 3, 255)
+                or not vector(row, "uv2_bits", 2, 0xffffffff)):
+            raise ProbeError(f"{side} sparse sample record is invalid")
+        if side == "opengl" and (
+                not vector(row, "pre_rgb", 3, 255)
+                or any(not uint(row.get(k), 0xffffffff) for k in
+                       ("pre_depth_bits", "control_depth_bits", "hits_without_depth"))):
+            raise ProbeError("OpenGL sparse sample has invalid pre-draw/depth evidence")
+        if side == "metal" and not uint(row.get("selected_hits"), 0xffffffff):
+            raise ProbeError("Metal sparse sample has no selected-primitive visibility result")
+        rows[(x, y)] = row
+    return value, rows
+
+
+def sparse_replay_inputs(frame_dir: Path, selection: str) -> tuple[str, list[dict]]:
+    trace, seal, event = frame_context(frame_dir, 1)
+    if gfx_observation.authority(trace, seal) != "authentic":
+        raise ProbeError("sparse replay requires authentic GL evidence")
+    reference, before = _event1_images(frame_dir, trace, event)
+    document, rows = load_sparse(frame_dir, trace.get("uv2_fragments"), "opengl",
+                                 seal, reference["width"], reference["height"],
+                                 (event.get("indices") or {}).get("sha256"))
+    pixels = sparse_pixels(selection)
+    if [list(pixel) for pixel in pixels] != document["selection"]:
+        raise ProbeError("replay pixels differ from the sealed selection")
+    primitives = ",".join(str(rows.get(pixel, {}).get("primitive", -1)) for pixel in pixels)
+    checkpoints = [{
+        "event": 1, "target": "433", "resource": "tex:433", "timing": timing,
+        "file": name, "reference_sha256": item["sha256"],
+    } for timing, name, item in (
+        ("post_event", "uv2-color.bgra", reference),
+        ("pre_event", "uv2-pre-color.bgra", before.get("color")),
+    ) if item is not None]
+    return primitives, checkpoints
+
+
+def _sparse_state(event: dict) -> int:
+    """Return the triangle count for the reviewed replace-write path."""
+    draw, state = event.get("draw") or {}, event.get("state") or {}
+    count = draw.get("count")
+    sources = {stage["stage"]: stage.get("sha256")
+               for stage in (event.get("program") or {}).get("shaders", [])}
+    if (type(count) is not int or not 0 < count <= 65535 * 3 or count % 3
+            or draw.get("indexed") is not True
+            or any(draw.get(k) != v for k, v in
+                   {"mode": 4, "first": 0, "instance_count": 1, "base_vertex": 0}.items())
+            or state.get("color_mask") != [1, 1, 1, 1]
+            or (state.get("depth") or {}).get("test") is not True
+            or (state.get("depth") or {}).get("write") is not True
+            or (state.get("depth") or {}).get("func") != "0x203"
+            or (state.get("polygon") or {}).get("mode") != ["0x1b02", "0x1b02"]
+            or (state.get("polygon") or {}).get("offset_fill") is not False
+            or any((state.get(k) or {}).get(field) is not False for k, field in
+                   (("blend", "enabled"), ("logic_op", "enabled"),
+                    ("scissor", "enabled"), ("alpha_test", "enabled"), ("stencil", "test")))
+            or sources != EVENT1_SHADER_SHA256):
+        return 0
+    indices = event.get("indices") or {}
+    if (indices.get("first_index") != 0 or indices.get("count") != count
+            or indices.get("range_valid") is not True or indices.get("bytes") != 2 * count):
+        return 0
+    return count // 3
+
+
+def _side_witness(row: dict | None, *, triangles: int, before: list | None,
+                  after: list, depth: tuple[int, int] | None = None,
+                  opengl: bool = False) -> str:
+    if row is None:
+        return "missing_observation"
+    if not triangles:
+        return "unsupported_write_or_draw_state"
+    if row["sample"] != 0:
+        return "unsupported_sample"
+    if row["hits"] == 0:
+        if opengl:
+            return ("depth_rejected" if row["hits_without_depth"] > 0
+                    else "no_coverage_or_discard")
+        return "no_passing_sample"
+    if row["hits"] != 1:
+        return "overlap"
+    if not 0 <= row["primitive"] < triangles:
+        return "primitive_unresolved"
+    if not opengl and row["selected_hits"] != 1:
+        return "gl_primitive_not_observed"
+    if not row["survived"]:
+        return "instrumented_fragment_did_not_write"
+    if before is None or before == after:
+        return "normal_color_write_unproven"
+    if row["control_rgb"] != after:
+        return "instrumented_color_differs"
+    if opengl and (depth is None or depth[0] != 0x3f800000
+                   or (row["pre_depth_bits"], row["control_depth_bits"]) != depth
+                   or row["pre_rgb"] != before):
+        return "original_pre_or_post_depth_unbound"
+    return "verified_writer"
+
+
+def _sparse_pair(gl, metal, *, triangles, before, after, depth) -> dict:
+    decisions = {
+        side: _side_witness(row, triangles=triangles, before=before.get(side),
+                            after=after[side], depth=depth, opengl=side == "opengl")
+        for side, row in (("opengl", gl), ("metal", metal))
+    }
+    both_writers = all(value == "verified_writer" for value in decisions.values())
+    verified = both_writers and (gl["primitive"], gl["sample"]) == (metal["primitive"],
+                                                                    metal["sample"])
+    return {
+        "verified": verified,
+        "status": "verified" if verified else "unresolved",
+        "decisions": decisions,
+        "different_primitive_or_sample": both_writers and not verified,
+        "opengl": gl,
+        "metal": metal,
+    }
+
+
+def _sealed_depth(frame_dir: Path, record: dict, event: dict, width: int,
+                  height: int) -> bytes | None:
+    plane = record.get("depth") or {}
+    identity = _attachment(event.get("target") or {}, "depth")
+    if (identity is None or _attachment(record.get("target") or {}, "depth") != identity
+            or plane.get("status") != "captured" or plane.get("format") != "f32"
+            or plane.get("bytes") != width * height * 4 or not plane.get("file")
+            or any(plane.get(k) != v for k, v in (("width", width), ("height", height)))):
+        return None
+    body = (frame_dir / "blobs" / plane["file"]).read_bytes()
+    return body if len(body) == plane["bytes"] and _sha256(body) == plane.get("sha256") else None
+
+
+def _sparse_localization(report, frame_dir, replay_dir, trace, seal, event,
+                         reference, before, replay, checkpoint_files, left, right,
+                         mask, matched):
+    width, height = reference["width"], reference["height"]
+    index_sha = (event.get("indices") or {}).get("sha256")
+    gl, gl_rows = load_sparse(frame_dir, trace["uv2_fragments"], "opengl", seal,
+                              width, height, index_sha)
+    binding = replay.get("uv2_probe") or {}
+    if binding.get("file") == SPARSE_FILE:
+        if report["candidate"]["compile_mode_provenance"] != "verified":
+            raise ProbeError("Metal sparse observations require a current replay recipe")
+        metal, metal_rows = load_sparse(replay_dir / "uv2-probe", binding, "metal", seal,
+                                       width, height, index_sha)
+        if gl["selection"] != metal["selection"]:
+            raise ProbeError("the sealed GL and Metal sparse coordinates differ")
+    else:
+        metal, metal_rows = {"status": "missing", "reason": binding.get("reason")}, {}
+    before_rgb = {}
+    gl_before = before.get("color")
+    if gl_before is not None:
+        before_rgb["opengl"] = _image(gl_before["path"], gl_before["sha256"],
+                                      width, height, "sealed pre-draw RGB8")
+        candidates = [item for item in replay["checkpoints"]
+                      if item.get("event") == 1 and item.get("target") == "433"
+                      and item.get("resource") == "tex:433" and item.get("timing") == "pre_event"]
+        if len(candidates) == 1:
+            checkpoint = candidates[0]
+            if (checkpoint.get("reference_sha256") != gl_before["sha256"]
+                    or checkpoint.get("ok") is not True or checkpoint.get("pixel_format") != "BGRA8"
+                    or checkpoint.get("origin", "lower_left") != "lower_left"
+                    or any(checkpoint.get(k) != reference[k] for k in ("width", "height"))):
+                raise ProbeError("Metal sparse pre-draw checkpoint disagrees with the seal")
+            digest = checkpoint_files[checkpoint["file"]]
+            before_rgb["metal"] = _image(replay_dir / checkpoint["file"], digest,
+                                         width, height, "Metal pre-draw RGB8")
+    pre_depth = _sealed_depth(frame_dir, post_observation(trace, 0, "tex:433"),
+                              event, width, height) if "depth" in before else None
+    post_depth = _sealed_depth(frame_dir, post_observation(trace, 1, "tex:433"),
+                               event, width, height)
+    triangles = _sparse_state(event)
+    residuals, controls = set(mask), set(matched)
+    for x, y in gl["selection"]:
+        if not (0 <= x < width and 0 <= y < height):
+            report["pixels"].append({"x": x, "y": y, "origin": "lower_left",
+                                     "status": "inconclusive",
+                                     "reason": "coordinate_outside_target"})
+            continue
+        rgb = {side: list(map(int, image[height - 1 - y, x, :3]))
+               for side, image in (("opengl", left), ("metal", right))}
+        prior = {side: list(map(int, image[height - 1 - y, x, :3]))
+                 for side, image in before_rgb.items()}
+        offset = (y * width + x) * 4
+        depth = ((_f32_bits(pre_depth, offset), _f32_bits(post_depth, offset))
+                 if pre_depth is not None and post_depth is not None else None)
+        pair = _sparse_pair(gl_rows.get((x, y)), metal_rows.get((x, y)), triangles=triangles,
+                            before=prior, after=rgb, depth=depth)
+        stages = {"rgb8": {side: dict(zip("RGB", value)) for side, value in rgb.items()}}
+        for side in ("opengl", "metal"):
+            row = pair[side]
+            if row is not None and row["survived"]:
+                stages.setdefault("uv2", {})[side] = dict(zip(("x", "y"), row["uv2_bits"]))
+            if pair["decisions"][side] == "verified_writer":
+                stages.setdefault("fragment_coverage", {})[side] = {
+                    "covered": True, "primitive": row["primitive"], "sample": row["sample"]}
+        report["pixels"].append({
+            "x": x, "y": y, "origin": "lower_left",
+            "selection": ("residual" if (x, y) in residuals else
+                          "rgb_match_control" if (x, y) in controls else "saved_coordinate"),
+            **compare_stages(stages, attribution=pair, provenance_valid=True),
+            "fragment_correspondence": pair,
+        })
+        if pair["verified"]:
+            report["pixels"][-1]["stages"]["uv2"]["kind"] = {
+                "opengl": "instrumented_original_shader",
+                "metal": "instrumented_replay_shader",
+            }
+        else:
+            report["pixels"][-1]["status"] = "inconclusive"
+    verified = sum(row.get("fragment_correspondence", {}).get("verified", False)
+                   for row in report["pixels"])
+    report["sparse_observations"] = {
+        "opengl": {"sha256": trace["uv2_fragments"]["sha256"],
+                   "status": gl["status"], "reason": gl.get("reason")},
+        "metal": {"sha256": binding.get("sha256"), "status": metal["status"],
+                  "reason": metal.get("reason")},
+        "selected": len(gl["selection"]), "verified": verified,
+        "fresh_residuals_outside_selection": len(residuals - set(map(tuple, gl["selection"]))),
+    }
+    all_verified = verified == len(gl["selection"])
+    report["fragment_attribution"] = {
+        "verified": all_verified, "status": "verified" if all_verified else "unresolved"}
+    report["fragment_attribution_verified"] = all_verified
+    if all_verified:
+        report["missing"].remove("contributing_fragment_identity_and_coverage")
+        uv2_statuses = {pixel["stages"]["uv2"]["status"] for pixel in report["pixels"]}
+        if uv2_statuses == {"exact"}:
+            report.update(next_observation="texture_samples", first_unresolved_stage="texture_samples")
+        elif uv2_statuses <= {"exact", "different"}:
+            report.update(next_observation="vertex_outputs_and_interpolation",
+                          first_unresolved_stage=None)
+        else:
+            report.update(next_observation="uv2", first_unresolved_stage="uv2")
+    return "correspondence_verified" if all_verified else "inconclusive"
+
+
 def _event1_checkpoint(replay_dir: Path, seal: dict, trace: dict,
-                       reference: dict, renderer_sha256: str | None) -> tuple[dict, dict]:
+                       reference: dict, renderer_sha256: str | None) -> tuple[dict, dict, dict, dict]:
     verified = gfx_replay_case.verify_replay_producer_receipt(replay_dir, seal)
     if verified["status"] != "verified":
         raise ProbeError("; ".join(verified["problems"]) or "missing producer receipt")
@@ -729,11 +1040,13 @@ def _event1_checkpoint(replay_dir: Path, seal: dict, trace: dict,
             or checkpoint.get("reference_sha256") != reference["sha256"]
             or any(checkpoint.get(k) != reference[k] for k in ("width", "height"))):
         raise ProbeError("candidate checkpoint does not name the sealed RGB8 observation")
-    digest = next(item["sha256"] for item in receipt["result"]["checkpoint_files"]
-                  if item["file"] == checkpoint["file"])
+    checkpoint_files = {item["file"]: item["sha256"]
+                        for item in receipt["result"]["checkpoint_files"]}
     producer = {**receipt["producer"],
                 "compile_mode_provenance": verified["compile_mode_provenance"]}
-    return {"path": replay_dir / checkpoint["file"], "sha256": digest}, producer
+    image = {"path": replay_dir / checkpoint["file"],
+             "sha256": checkpoint_files[checkpoint["file"]]}
+    return image, producer, replay, checkpoint_files
 
 
 def localize(frame_dir: Path, replay_dir: Path | None = None, *,
@@ -767,8 +1080,8 @@ def localize(frame_dir: Path, replay_dir: Path | None = None, *,
         if replay_dir is None:
             report["missing"].append("candidate_event1_rgb8")
             return {**report, "status": "missing_evidence"}
-        image, producer = _event1_checkpoint(replay_dir, seal, trace, reference,
-                                             renderer_sha256)
+        image, producer, replay, checkpoint_files = _event1_checkpoint(
+            replay_dir, seal, trace, reference, renderer_sha256)
         width, height = reference["width"], reference["height"]
         left = _image(reference["path"], reference["sha256"], width, height, "sealed RGB8")
         right = _image(image["path"], image["sha256"], width, height, "candidate RGB8")
@@ -781,6 +1094,14 @@ def localize(frame_dir: Path, replay_dir: Path | None = None, *,
             changed = _diff_mask(before_rgb, left)
             matched = [(x, y) for x, y in _neighborhood(mask, width, height, 1)
                        if (x, y) not in residuals and changed[height - 1 - y, x]][:CONTROL_PIXELS]
+        report["candidate"] = {**producer, **image, "path": str(image["path"])}
+        report["mask_pixels"] = len(mask)
+        report["matched_control_pixels"] = len(matched)
+        if "uv2_fragments" in trace:
+            report["status"] = _sparse_localization(
+                report, frame_dir, replay_dir, trace, seal, event, reference, before,
+                replay, checkpoint_files, left, right, mask, matched)
+            return report
         for x, y in mask + matched:
             rgb = {side: dict(zip("RGB", map(int, array[height - 1 - y, x, :3])))
                    for side, array in (("opengl", left), ("metal", right))}
@@ -790,9 +1111,6 @@ def localize(frame_dir: Path, replay_dir: Path | None = None, *,
                 **compare_stages({"rgb8": rgb}, attribution=attribution,
                                  provenance_valid=True),
             })
-        report["candidate"] = {**producer, **image, "path": str(image["path"])}
-        report["mask_pixels"] = len(mask)
-        report["matched_control_pixels"] = len(matched)
         report["status"] = "missing_evidence"
     except MissingObservation as exc:
         report.update(status="missing_evidence", missing=["original_event1_rgb8"],

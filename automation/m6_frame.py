@@ -1530,6 +1530,20 @@ def capture(args: argparse.Namespace) -> int:
             int(getattr(args, "prefix_max_bytes", 384 * 1024 * 1024)))
         env_extra["EU4_GFX_FRAME_TRACE_PREFIX_MAX_NS"] = str(
             int(getattr(args, "prefix_max_ns", 10_000_000_000)))
+    sparse_uv2 = getattr(args, "uv2_probe_pixels", None)
+    if sparse_uv2:
+        if (capture_guard is None or not getattr(args, "seal", False)
+                or not getattr(args, "uv2_probe", False)
+                or prefix_end != 1 or args.uv2_probe_event != 1
+                or (args.uv2_probe_program, args.uv2_probe_framebuffer,
+                    args.uv2_probe_texture) != (310, 6, 433)
+                or getattr(args, "shadow", False)):
+            print("capture refused: sparse UV2 requires an authorized single sealed "
+                  "capture of event 1 with --uv2-probe and --prefix-end 1",
+                  file=sys.stderr)
+            return 2
+        env_extra.update(EU4_GFX_UV2_PROBE_PIXELS=sparse_uv2,
+                         EU4_GFX_FRAME_TRACE_OBSERVE_DEPTH_STENCIL="1")
     if getattr(args, "uv2_probe", False):
         event = int(args.uv2_probe_event)
         if event < 0 or event >= int(getattr(args, "max_draws", 0) or 0):
@@ -2622,6 +2636,24 @@ def _replay_command_body(args: argparse.Namespace,
         if args.shaders
         else frame_dir / "shaders"
     )
+    sparse_uv2 = getattr(args, "uv2_probe_pixels", None)
+    sparse_primitives = None
+    uv2_checkpoints = None
+    if sparse_uv2:
+        from automation import gfx_uv2_probe
+
+        if (not getattr(args, "uv2_probe", False) or args.uv2_probe_event != 1
+                or (args.uv2_probe_program, args.uv2_probe_framebuffer,
+                    args.uv2_probe_texture) != (310, 6, 433)
+                or args.only_event is not None or args.stop_after is not None
+                or args.seed_marked or args.depth_from_prefix or args.checkpoint_request):
+            raise FrameError("sparse UV2 requires the normal sealed replay and "
+                             "its automatic event-1 checkpoints")
+        try:
+            sparse_primitives, uv2_checkpoints = gfx_uv2_probe.sparse_replay_inputs(
+                frame_dir, sparse_uv2)
+        except (gfx_uv2_probe.ProbeError, OSError, ValueError) as exc:
+            raise FrameError(str(exc)) from exc
     if args.only_event is not None:
         try:
             trace = load_trace(frame_dir)
@@ -2703,7 +2735,7 @@ def _replay_command_body(args: argparse.Namespace,
             checkpoint_path = out / "uv2-checkpoint-request.json"
             checkpoint_path.write_text(json.dumps({
                 "schema": "gfx-frame-checkpoint-request/v1",
-                "checkpoints": [{
+                "checkpoints": uv2_checkpoints or [{
                     "event": int(args.uv2_probe_event),
                     "target": str(args.uv2_probe_texture),
                     "resource": f"tex:{args.uv2_probe_texture}",
@@ -2717,6 +2749,19 @@ def _replay_command_body(args: argparse.Namespace,
     if child_env is None:
         print("replay refused: --uv2-probe-event is negative", file=sys.stderr)
         return 2
+    if sparse_uv2:
+        from automation import gfx_independent_replay
+
+        # Only the math selection and probe settings are accepted for this
+        # diagnostic. Other replay experiments would change the normal pass.
+        child_env = {k: v for k, v in child_env.items()
+                     if not k.startswith("EU4_FRAME_REPLAY_")
+                     or k.startswith("EU4_FRAME_REPLAY_UV2_PROBE")
+                     or k == "EU4_FRAME_REPLAY_FAST_MATH"}
+        child_env.pop("EU4_FRAME_REPLAY_UV2_PROBE_VARYING", None)
+        child_env.update(EU4_FRAME_REPLAY_UV2_PROBE_PIXELS=sparse_uv2,
+                         EU4_FRAME_REPLAY_UV2_PROBE_PRIMITIVES=sparse_primitives)
+    producer = None
     from automation import launch_lease
 
     with launch_lease.gpu_execution():
@@ -2729,8 +2774,16 @@ def _replay_command_body(args: argparse.Namespace,
             print(f"replay refused: {exc.kind}: {exc.detail}",
                   file=sys.stderr)
             return 3
-        ran = subprocess.run(command, capture_output=True, text=True,
-                             check=False, timeout=1200, env=child_env)
+        snapshot = None
+        try:
+            if sparse_uv2:
+                snapshot, producer = snapshot_replay_host(host)
+                command[0] = str(snapshot)
+            ran = subprocess.run(command, capture_output=True, text=True,
+                                 check=False, timeout=1200, env=child_env)
+        finally:
+            if snapshot is not None:
+                snapshot.unlink(missing_ok=True)
     result_path = out / "replay.json"
     if ran.returncode != 0 or not result_path.is_file():
         _replay_mark(evidence, status="error", returncode=ran.returncode,
@@ -2751,6 +2804,12 @@ def _replay_command_body(args: argparse.Namespace,
         )
         return 1
     result = json.loads(result_path.read_text())
+    if producer is not None:
+        try:
+            gfx_independent_replay.write_producer_receipt(
+                out, frame_dir, producer, result_path, shaders=shaders, env=child_env)
+        except gfx_independent_replay.ReplayError as exc:
+            raise FrameError(f"sparse UV2 producer receipt: {exc}") from exc
     _replay_mark(evidence, status=result.get("status"),
                  returncode=ran.returncode,
                  stderr_tail=(ran.stderr or "")[-2000:],
@@ -4069,6 +4128,16 @@ def inspect(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _uv2_probe_pixels(value: str) -> str:
+    from automation import gfx_uv2_probe
+
+    try:
+        pixels = gfx_uv2_probe.sparse_pixels(value)
+    except gfx_uv2_probe.ProbeError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return ";".join(f"{x},{y}" for x, y in pixels)
+
+
 def _checkpoint_event_list(value: str) -> list[int]:
     """Parse ``14,20,71,142`` into an ordered event list.
 
@@ -4152,7 +4221,9 @@ def _parser() -> argparse.ArgumentParser:
         "--uv2-probe", action="store_true",
         help="opt-in diagnostic: execute the selected event-1 draw twice in "
              "isolated offscreen targets (original-shader control + uv2 float "
-             "probe) before the engine's own draw; requires --prefix-end")
+             "probe) after the engine's own draw; requires --prefix-end")
+    cap.add_argument("--uv2-probe-pixels", type=_uv2_probe_pixels, metavar="X,Y;X,Y",
+                     help="use sparse fragment observation at lower-left coordinates")
     cap.add_argument("--uv2-probe-event", type=int, default=1)
     cap.add_argument("--uv2-probe-program", type=int, default=310)
     cap.add_argument("--uv2-probe-framebuffer", type=int, default=6)
@@ -4276,6 +4347,8 @@ def _parser() -> argparse.ArgumentParser:
         help="opt-in diagnostic: encode one isolated uv2 pass at --uv2-probe-event "
              "and write <out>/uv2-probe; the normal replay pass is unchanged",
     )
+    rep.add_argument("--uv2-probe-pixels", type=_uv2_probe_pixels, metavar="X,Y;X,Y",
+                     help="use sparse fragment observation at lower-left coordinates")
     rep.add_argument("--uv2-probe-event", type=int, default=1)
     rep.add_argument("--uv2-probe-program", type=int, default=310)
     rep.add_argument("--uv2-probe-framebuffer", type=int, default=6)
