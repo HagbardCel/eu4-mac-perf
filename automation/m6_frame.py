@@ -1650,7 +1650,7 @@ def capture(args: argparse.Namespace) -> int:
         env_extra["EU4_GFX_FRAME_SEAL"] = "1"
         if timeout_ms:
             env_extra["EU4_GFX_FRAME_TRACE_TIMEOUT_MS"] = str(timeout_ms)
-        if getattr(args, "seal_log", False):
+        if not shadow_enabled:
             env_extra["EU4_GFX_FRAME_SEAL_LOG"] = "1"
     coordinator = None
     if shadow_enabled:
@@ -4247,7 +4247,7 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument("--shadow-timeout-ms", type=int, default=120000)
     cap.add_argument("--shadow-wait-ms", type=int, default=180000)
     cap.add_argument("--seal-log", action="store_true",
-                     help="register the in-process logging consumer for the seal")
+                     help="compatibility flag; --seal enables logging for non-shadow captures")
     cap.add_argument("--seal-timeout-ms", type=int, default=600000,
                      help="bounded time from arming to a sealed/incomplete result")
     cap.add_argument("--background", action="store_true")

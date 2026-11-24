@@ -235,13 +235,41 @@ EU4_CAMPAIGN_STATE="$STATE" EU4_CAMPAIGN_AUTHORIZATION="$AUTH_ID" \
 unset AUTH_ID
 ```
 
-Expect a fresh `$OUT/frame/frame-seal.json`, `frame-trace.json`,
-`prefix-observations.jsonl` and the event 0–1 color and depth blobs. The
+Expect a fresh `$OUT/frame-seal-notification.json`, plus
+`frame-seal.json`, `frame-trace.json`, `prefix-observations.jsonl` and the event
+0–1 color and depth blobs under `$OUT/frame`. For a non-shadow capture,
+`--seal` registers the in-process logging consumer automatically. The capture
+requires the notification to verify the reference and manifest and agree with
+the seal's process, frame, digests and event counts. The
 manifest's `uv2_fragments` binds `$OUT/frame/uv2-fragments.json` by SHA-256.
 A sparse record reports the capture identity, event/program/attachment,
 index stream digest, pixel coordinates, sample, passing-sample count, triangle
 ordinal, write marker, control RGB and raw UV2 bits. OpenGL also records pre-color and depth
-bits. A failed or unsupported observation records its selection and reason.
+bits. A failed or unsupported observation records its selection and reason
+with an empty `pixels` array. Inspect that record before starting replay.
+
+For `unsupported_sparse_draw`, the `reason` identifies the specific check.
+Numeric failures give `observed` and `required`. `depth_bits` gives the measured
+attachment size (zero for no attachment), and `depth_bits_unavailable` gives
+`observed: null`. When a renderbuffer is attached, a depth-related refusal also
+records its name, OpenGL internal-format enum, independently queried
+`GL_RENDERBUFFER_DEPTH_SIZE` and component-type enum when available. The
+sparse diagnostic still requires measured 24-bit depth for its D24 control.
+A different size or unavailable query leaves the sparse observation unsupported.
+
+In the preserved `event1-fragments-20261124T195523Z` run, the event stream and
+prefix metadata identify framebuffer 6, RGB8 texture 433 and depth
+renderbuffer 3. The depth blobs store float32 readbacks. The run records the
+default drawable's 32-bit unsigned-normalized depth under `gl.default_drawable`.
+It contains no storage format or size for renderbuffer 3. Only a native query
+against the active event-1 attachment can establish those properties. The
+attachment size query is defined by OpenGL 3 or `GL_ARB_framebuffer_object`,
+which the Apple legacy context exposes. On Apple GL `2.1 Metal - 91.7`, the
+synthetic native host measured 32 bits for a renderbuffer requested as
+`GL_DEPTH_COMPONENT24` and 16 bits for a `GL_DEPTH_COMPONENT16` request. The
+attachment and renderbuffer size queries agreed in both cases. Use the
+reported size for the exact attachment. [Khronos framebuffer object
+specification](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_framebuffer_object.txt).
 
 #### Stop the controlled capture before offline replay
 

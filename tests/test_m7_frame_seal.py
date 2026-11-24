@@ -355,7 +355,7 @@ class CaptureSealWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run"
             args = self._args(
-                output, "--seal", "--seal-log", "--seal-timeout-ms", "1234"
+                output, "--seal", "--seal-timeout-ms", "1234"
             )
             captured = {}
 
@@ -363,7 +363,8 @@ class CaptureSealWiringTests(unittest.TestCase):
                 captured.update(kwargs["env_extra"])
                 frame = output / "frame"
                 seal = _write_frame(frame)
-                _write_notification(output, seal)
+                if captured.get("EU4_GFX_FRAME_SEAL_LOG") == "1":
+                    _write_notification(output, seal)
                 return {"pid": 4242, "session": "s", "display": None}
 
             with mock.patch.object(

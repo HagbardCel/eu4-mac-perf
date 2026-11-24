@@ -3275,12 +3275,16 @@ typedef struct {
     int green_bits;
     int blue_bits;
     int alpha_bits;
+    int renderbuffer_depth_bits;
+    GLint depth_component_type;
 } observation_attachment;
 
-/* Query one framebuffer attachment's effective identity.  Texture and
-   renderbuffer bindings are restored before returning; no GL error is read. */
+/* Query one framebuffer attachment's effective identity. Only the sparse
+   depth refusal requests the independent renderbuffer storage size.
+   Bindings are restored before returning; no GL error is read. */
 static void query_attachment_identity(GLenum attachment,
-                                      observation_attachment *out) {
+                                      observation_attachment *out,
+                                      bool measure_storage_depth) {
     memset(out, 0, sizeof(*out));
     GLint type = 0, name = 0, level = 0;
     glGetFramebufferAttachmentParameteriv(
@@ -3340,6 +3344,12 @@ static void query_attachment_identity(GLenum attachment,
         glGetRenderbufferParameteriv(GL_RENDERBUFFER,
                                      GL_RENDERBUFFER_INTERNAL_FORMAT,
                                      &internal);
+        if (measure_storage_depth) {
+            GLint bits = -1;
+            glGetRenderbufferParameteriv(GL_RENDERBUFFER,
+                                         GL_RENDERBUFFER_DEPTH_SIZE, &bits);
+            out->renderbuffer_depth_bits = bits;
+        }
         glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)previous);
         out->width = (int)width;
         out->height = (int)height;
@@ -3485,7 +3495,7 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
                 return -1;
             }
             observation_attachment colour;
-            query_attachment_identity(GL_COLOR_ATTACHMENT0, &colour);
+            query_attachment_identity(GL_COLOR_ATTACHMENT0, &colour, false);
             if (!colour.present ||
                 (colour.type != GL_TEXTURE && colour.type != GL_RENDERBUFFER)) {
                 fail_capture_locked("prefix_unsupported_target");
@@ -3540,9 +3550,10 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
             alpha = colour.alpha_bits;
             observation_attachment depth_attachment;
             observation_attachment stencil_attachment;
-            query_attachment_identity(GL_DEPTH_ATTACHMENT, &depth_attachment);
+            query_attachment_identity(GL_DEPTH_ATTACHMENT, &depth_attachment,
+                                      false);
             query_attachment_identity(GL_STENCIL_ATTACHMENT,
-                                      &stencil_attachment);
+                                      &stencil_attachment, false);
             int depth_bits = 0, stencil_bits = 0;
             if (depth_attachment.present &&
                 depth_stencil_bits_for(depth_attachment.internal_format,
@@ -8049,17 +8060,18 @@ static int uv2_probe_attribute_digest(const uv2_attribute *attribute,
 
 /* Add an observation to the reviewed shader's final store. Its original
  * discard, arithmetic and color output still execute with depth enabled. */
-static char *uv2_sparse_fragment(const char *source) {
+static const char *uv2_sparse_fragment(const char *source, char **result) {
     const char *store = "gl_FragColor = glsl_main( glsl_vertex );";
     const char *where = strstr(source, store);
     if (where == NULL)
-        return NULL;
-    char *result = NULL;
-    if (asprintf(&result, "%.*sgl_FragData[0] = glsl_main( glsl_vertex );"
+        return "instrumentation_marker";
+    char *instrumented = NULL;
+    if (asprintf(&instrumented, "%.*sgl_FragData[0] = glsl_main( glsl_vertex );"
                  "\n gl_FragData[1] = vec4(glsl_vertex.uv2, 0.0, 1.0);%s",
                  (int)(where - source), source, where + strlen(store)) < 0)
-        return NULL;
-    return result;
+        return "instrumentation_allocation";
+    *result = instrumented;
+    return NULL;
 }
 
 static void uv2_sparse_publish(const char *body, size_t size) {
@@ -8274,9 +8286,17 @@ static int uv2_sparse_observe(const uv2_state_guard *guard, uv2_target control,
     return g_uv2_sparse_sha[0] != 0 ? 0 : -1;
 }
 
+typedef struct {
+    int observed;
+    int required;
+    bool unavailable;
+} uv2_numeric_mismatch;
+
 /* Writes one descriptor-only failure so the operator and the offline
  * comparator see exactly why the probe did not produce numbers. */
-static void uv2_probe_write_failure(const char *status, const char *reason) {
+static void uv2_probe_write_failure_detail(
+    const char *status, const char *reason, const uv2_numeric_mismatch *mismatch,
+    const observation_attachment *depth) {
     int sparse = g_uv2_pixels.count != 0;
     if (sparse)
         fprintf(stderr, "[frame trace] sparse UV2: %s (%s)\n", status, reason);
@@ -8291,7 +8311,23 @@ static void uv2_probe_write_failure(const char *status, const char *reason) {
         const char *code = reason[0] != 0 && strlen(reason) < 64 &&
             strspn(reason, "abcdefghijklmnopqrstuvwxyz0123456789_") == strlen(reason)
             ? reason : status;
-        jprintf(&out, ",\"reason\":\"%s\",\"pixels\":[]}\n", code);
+        jprintf(&out, ",\"reason\":\"%s\"", code);
+        if (mismatch != NULL) {
+            jprintf(&out, ",\"required\":%d,\"observed\":", mismatch->required);
+            if (mismatch->unavailable)
+                jprintf(&out, "null");
+            else
+                jprintf(&out, "%d", mismatch->observed);
+        }
+        if (depth != NULL && depth->type == GL_RENDERBUFFER) {
+            jprintf(&out, ",\"depth_attachment\":{\"type\":\"renderbuffer\","
+                    "\"name\":%d,\"internal_format\":%d,\"depth_bits\":%d",
+                    depth->name, depth->internal_format, depth->renderbuffer_depth_bits);
+            if (depth->depth_component_type != 0)
+                jprintf(&out, ",\"component_type\":%d", depth->depth_component_type);
+            jprintf(&out, "}");
+        }
+        jprintf(&out, ",\"pixels\":[]}\n");
     } else {
         jprintf(&out,
                 "{\"schema\":\"gfx-uv2-probe/v1\",\"side\":\"opengl\","
@@ -8313,6 +8349,39 @@ static void uv2_probe_write_failure(const char *status, const char *reason) {
         }
     }
     free(body);
+}
+
+static void uv2_probe_write_failure(const char *status, const char *reason) {
+    uv2_probe_write_failure_detail(status, reason, NULL, NULL);
+}
+
+static bool uv2_probe_reject_value(const char *status, const char *reason,
+                                   int observed, int required) {
+    if (observed == required)
+        return false;
+    const uv2_numeric_mismatch mismatch = {observed, required, false};
+    uv2_probe_write_failure_detail(status, reason, &mismatch, NULL);
+    return true;
+}
+
+/* ARB_framebuffer_object (or GL 3+) defines the component-size query.
+ * For an absent attachment only object type/name can be queried. A -1
+ * sentinel distinguishes a query with no result from a measured size. */
+static GLint uv2_probe_depth_size(GLint *type) {
+    *type = -1;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, type);
+    if (*type == GL_NONE)
+        return 0;
+    if ((*type != GL_RENDERBUFFER && *type != GL_TEXTURE) ||
+        !framebuffer_attachment_identity_supported())
+        return -1;
+    GLint bits = -1;
+    glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &bits);
+    return bits;
 }
 
 /* Run once from the draw exit, using the original program and bindings,
@@ -8365,11 +8434,17 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         g_uv2_probe_done = 1;
         return 0;
     }
+    bool sparse = g_uv2_pixels.count != 0;
     if (g_uv2_probe.require_identity &&
-        ((int)program != g_uv2_probe.program ||
-         (int)draw_framebuffer != g_uv2_probe.framebuffer ||
-         (int)texture_name != g_uv2_probe.texture)) {
-        uv2_probe_write_failure("identity_mismatch", "event_draw_identity");
+        (uv2_probe_reject_value("identity_mismatch",
+                               sparse ? "program" : "event_draw_identity",
+                               program, g_uv2_probe.program) ||
+         uv2_probe_reject_value("identity_mismatch",
+                               sparse ? "framebuffer" : "event_draw_identity",
+                               draw_framebuffer, g_uv2_probe.framebuffer) ||
+         uv2_probe_reject_value("identity_mismatch",
+                               sparse ? "texture" : "event_draw_identity",
+                               texture_name, g_uv2_probe.texture))) {
         g_uv2_probe_done = 1;
         return 0;
     }
@@ -8407,10 +8482,44 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
         g_uv2_probe_done = 1;
         return 0;
     }
-    GLint depth_bits = 0;
-    glGetFramebufferAttachmentParameteriv(
-        GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-        GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depth_bits);
+    GLint depth_type = 0;
+    GLint depth_bits = uv2_probe_depth_size(&depth_type);
+    const char *unsupported_draw = "unsupported_sparse_draw";
+    if (sparse && depth_bits != 24) {
+        const uv2_numeric_mismatch mismatch = {depth_bits, 24, depth_bits < 0};
+        observation_attachment depth = {0};
+        if (depth_type == GL_RENDERBUFFER) {
+            query_attachment_identity(GL_DEPTH_ATTACHMENT, &depth, true);
+            if (depth_bits >= 0)
+                glGetFramebufferAttachmentParameteriv(
+                    GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                    GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &depth.depth_component_type);
+        }
+        uv2_probe_write_failure_detail(
+            unsupported_draw, mismatch.unavailable ? "depth_bits_unavailable" : "depth_bits",
+            &mismatch, &depth);
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    if (depth_bits < 0) {
+        uv2_probe_write_failure("unsupported_depth", "depth_bits_unavailable");
+        g_uv2_probe_done = 1;
+        return 0;
+    }
+    if (sparse &&
+        (uv2_probe_reject_value(unsupported_draw, "event", event, 1) ||
+         uv2_probe_reject_value(unsupported_draw, "program", program, 310) ||
+         uv2_probe_reject_value(unsupported_draw, "framebuffer", draw_framebuffer, 6) ||
+         uv2_probe_reject_value(unsupported_draw, "texture", texture_name, 433) ||
+         uv2_probe_reject_value(unsupported_draw, "level", level, 0) ||
+         uv2_probe_reject_value(unsupported_draw, "primitive_mode", (int)mode, GL_TRIANGLES) ||
+         uv2_probe_reject_value(unsupported_draw, "index_count_remainder", count % 3, 0) ||
+         (count / 3 > EU4_UV2_MAX_TRIANGLES &&
+          uv2_probe_reject_value(unsupported_draw, "triangle_limit",
+                                 count / 3, EU4_UV2_MAX_TRIANGLES)))) {
+        g_uv2_probe_done = 1;
+        return 0;
+    }
     GLint stencil_test = 0;
     glGetIntegerv(GL_STENCIL_TEST, &stencil_test);
     if (stencil_test) {
@@ -8527,15 +8636,18 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
                                 "the uv2 varying");
         goto done;
     }
-    if (g_uv2_pixels.count != 0) {
-        if (event != 1 || program != 310 || draw_framebuffer != 6 ||
-            texture_name != 433 || level != 0 || depth_bits != 24 ||
-            mode != GL_TRIANGLES || count % 3 != 0 || count / 3 > EU4_UV2_MAX_TRIANGLES ||
-            strcmp(vertex_sha, EU4_UV2_VERTEX_SHA) != 0 ||
-            strcmp(fragment_sha, EU4_UV2_FRAGMENT_SHA) != 0 ||
-            strcmp(g_uv2_probe.varying, "v_TEXCOORD1") != 0 ||
-            (instrumented_fragment = uv2_sparse_fragment(fragment_source)) == NULL) {
-            uv2_probe_write_failure("unsupported_sparse_draw", "event1_shader_or_target");
+    if (sparse) {
+        const char *failure = NULL;
+        if (strcmp(vertex_sha, EU4_UV2_VERTEX_SHA) != 0)
+            failure = "vertex_shader_digest";
+        else if (strcmp(fragment_sha, EU4_UV2_FRAGMENT_SHA) != 0)
+            failure = "fragment_shader_digest";
+        else if (strcmp(g_uv2_probe.varying, "v_TEXCOORD1") != 0)
+            failure = "varying";
+        else
+            failure = uv2_sparse_fragment(fragment_source, &instrumented_fragment);
+        if (failure != NULL) {
+            uv2_probe_write_failure(unsupported_draw, failure);
             goto done;
         }
     }
@@ -8602,6 +8714,10 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
             g_uv2_probe_pending.color == NULL) {
             snprintf(reason, sizeof(reason), "pending_state_mismatch");
             uv2_probe_write_failure("error", reason);
+            goto done;
+        }
+        if (sparse && uv2_probe_reject_value(unsupported_draw, "pre_depth_bits",
+                                             g_uv2_probe_pending.depth_bits, depth_bits)) {
             goto done;
         }
         pre_color = g_uv2_probe_pending.color;
@@ -9040,10 +9156,11 @@ static void uv2_probe_prepare(int event, int indexed, unsigned mode, int count,
     if (samples > 0 || stencil_test || alpha_test) {
         return;
     }
-    GLint depth_bits = 0;
-    glGetFramebufferAttachmentParameteriv(
-        GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-        GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depth_bits);
+    GLint depth_type = 0;
+    GLint depth_bits = uv2_probe_depth_size(&depth_type);
+    if (depth_bits < 0) {
+        return;
+    }
     uint8_t *color = NULL;
     if (read_observation_pixels((uint32_t)draw_framebuffer,
                                 GL_COLOR_ATTACHMENT0, 0, (uint32_t)width,
@@ -9100,12 +9217,15 @@ int eu4_gfx_uv2_probe_test_attribute_count_ok(int count) {
 }
 
 int eu4_gfx_uv2_probe_test_configure(const char *directory, int event,
-                                     int program, int framebuffer, int texture) {
-    if (directory == NULL || directory[0] != '/') {
+                                     int program, int framebuffer, int texture,
+                                     const char *pixels) {
+    if (directory == NULL || directory[0] != '/' ||
+        eu4_uv2_parse_pixels(pixels, &g_uv2_pixels) != 0) {
         return -1;
     }
     memset(&g_uv2_probe, 0, sizeof(g_uv2_probe));
-    g_uv2_pixels.count = 0;
+    snprintf(g.dir, sizeof(g.dir), "%s", directory);
+    g_uv2_sparse_sha[0] = 0;
     g_uv2_probe.enabled = 1;
     g_uv2_probe.event = event;
     g_uv2_probe.program = program;
