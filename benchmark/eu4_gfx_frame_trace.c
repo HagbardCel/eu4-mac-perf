@@ -7326,7 +7326,8 @@ static int uv2_probe_program_sources(GLuint program, char **vertex_source,
     fragment_sha[0] = 0;
     GLint shader_count = 0;
     glGetProgramiv(program, GL_ATTACHED_SHADERS, &shader_count);
-    if (shader_count <= 0 || shader_count > 16) {
+    if (shader_count <= 0 || shader_count > 16 ||
+        (g_uv2_pixels.count != 0 && shader_count != 2)) {
         snprintf(reason, reason_size, "attached_shader_count");
         return -1;
     }
@@ -8051,7 +8052,7 @@ static int uv2_probe_attribute_digest(const uv2_attribute *attribute,
 static char *uv2_sparse_fragment(const char *source) {
     const char *store = "gl_FragColor = glsl_main( glsl_vertex );";
     const char *where = strstr(source, store);
-    if (where == NULL || strstr(where + strlen(store), "gl_FragColor") != NULL)
+    if (where == NULL)
         return NULL;
     char *result = NULL;
     if (asprintf(&result, "%.*sgl_FragData[0] = glsl_main( glsl_vertex );"
@@ -8097,30 +8098,40 @@ static void uv2_sparse_read(GLuint framebuffer, GLenum attachment,
     end_observation_readback(&guard);
 }
 
+static void uv2_sparse_draw(int first, int triangles) {
+    glDrawElements(GL_TRIANGLES, triangles * 3, GL_UNSIGNED_SHORT,
+                   (const GLvoid *)(uintptr_t)(first * 3 * sizeof(uint16_t)));
+}
+
 static GLuint uv2_sparse_samples(GLuint query, int first, int triangles) {
     GLuint samples = 0;
     glBeginQuery(GL_SAMPLES_PASSED, query);
-    glDrawElements(GL_TRIANGLES, triangles * 3, GL_UNSIGNED_SHORT,
-                   (const GLvoid *)(uintptr_t)(first * 3 * sizeof(uint16_t)));
+    uv2_sparse_draw(first, triangles);
     glEndQuery(GL_SAMPLES_PASSED);
     glGetQueryObjectuiv(query, GL_QUERY_RESULT, &samples);
     return samples;
 }
 
 /* Query the original linked program with the captured pre-depth held fixed.
- * A LEQUAL write can only decrease that depth. Therefore one surviving
- * sample against the initial depth is sufficient to rule out another color
- * writer. The reviewed shader's discard uses no derivatives or destinations.
- * Bisection isolates the surviving triangle without a shader-assigned ID. */
+ * Every actual writer also passes against the initial depth because LEQUAL
+ * writes can only tighten it. The actual RGB8 change proves a writer exists.
+ * The pinned shader's discard is independent of derivatives and destinations,
+ * and the linked program has no fragment depth export or draw-relative IDs. */
 static int uv2_sparse_observe(const uv2_state_guard *guard, uv2_target control,
                               uv2_target probe, GLuint instrumented,
                               int count, int width, int height, const char *index_sha,
                               const uint8_t *pre_color, const uint8_t *pre_depth) {
     GLint max_draw_buffers = 0, active_query = 0, counter_bits = 0;
+    GLint depth_type = 0, sample_buffers = -1;
+    glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                           GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE,
+                                           &depth_type);
+    glGetIntegerv(GL_SAMPLE_BUFFERS, &sample_buffers);
     glGetIntegerv(GL_MAX_DRAW_BUFFERS, &max_draw_buffers);
     glGetQueryiv(GL_SAMPLES_PASSED, GL_CURRENT_QUERY, &active_query);
     glGetQueryiv(GL_SAMPLES_PASSED, GL_QUERY_COUNTER_BITS, &counter_bits);
     if (max_draw_buffers < 2 || active_query || counter_bits < 16 ||
+        depth_type != GL_UNSIGNED_NORMALIZED || sample_buffers != 0 ||
         pre_color == NULL || pre_depth == NULL)
         return -1;
     for (int i = 0; i < max_draw_buffers; i++) {
@@ -8136,12 +8147,24 @@ static int uv2_sparse_observe(const uv2_state_guard *guard, uv2_target control,
     }
     if (guard->blend || guard->color_logic_op || guard->scissor_test ||
         !guard->depth_test || !guard->depth_mask || guard->depth_func != GL_LEQUAL ||
+        guard->depth_range[0] != 0.0f || guard->depth_range[1] != 1.0f ||
         !guard->color_mask[0] || !guard->color_mask[1] || !guard->color_mask[2] ||
         !guard->color_mask[3] || guard->polygon_mode[0] != GL_FILL ||
         guard->polygon_mode[1] != GL_FILL || guard->polygon_offset_fill ||
         glIsEnabled(GL_POLYGON_SMOOTH) ||
         glIsEnabled(GL_POLYGON_STIPPLE) || glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE) ||
         glIsEnabled(GL_SAMPLE_ALPHA_TO_ONE) || glIsEnabled(GL_SAMPLE_COVERAGE))
+        return -1;
+
+    // User clip planes are undefined when this vertex shader omits gl_ClipVertex.
+    GLint clip_planes = 0;
+    glGetIntegerv(GL_MAX_CLIP_PLANES, &clip_planes);
+    for (int i = 0; i < clip_planes; i++)
+        if (glIsEnabled(GL_CLIP_PLANE0 + i))
+            return -1;
+    const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+    if (extensions != NULL && strstr(extensions, "GL_NV_primitive_restart") &&
+        glIsEnabled(0x8558 /* GL_PRIMITIVE_RESTART_NV */))
         return -1;
 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, control.framebuffer);
@@ -8171,12 +8194,15 @@ static int uv2_sparse_observe(const uv2_state_guard *guard, uv2_target control,
         int first = 0, end = count / 3;
         while (end - first > 1) {
             int middle = first + (end - first) / 2;
-            if (uv2_sparse_samples(query, first, middle - first) == 1)
+            GLuint lower_hits = uv2_sparse_samples(query, first, middle - first);
+            if (lower_hits > 1)
+                break;
+            if (lower_hits == 1)
                 end = middle;
             else
                 first = middle;
         }
-        if (uv2_sparse_samples(query, first, 1) == 1)
+        if (end - first == 1 && uv2_sparse_samples(query, first, 1) == 1)
             primitives[i] = first;
     }
     glDeleteQueries(1, &query);
@@ -8202,8 +8228,7 @@ static int uv2_sparse_observe(const uv2_state_guard *guard, uv2_target control,
             continue;
         eu4_uv2_pixel pixel = g_uv2_pixels.pixels[i];
         glScissor(pixel.x, pixel.y, 1, 1);
-        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT,
-                       (const GLvoid *)(uintptr_t)(primitive * 3 * sizeof(uint16_t)));
+        uv2_sparse_draw(primitive, 1);
     }
 
     uint8_t control_rgb[EU4_UV2_MAX_PIXELS][4] = {{0}};
@@ -8252,30 +8277,22 @@ static int uv2_sparse_observe(const uv2_state_guard *guard, uv2_target control,
 /* Writes one descriptor-only failure so the operator and the offline
  * comparator see exactly why the probe did not produce numbers. */
 static void uv2_probe_write_failure(const char *status, const char *reason) {
-    if (g_uv2_pixels.count != 0) {
-        char *body = NULL;
-        size_t size = 0;
-        FILE *memory = open_memstream(&body, &size);
-        if (memory != NULL) {
-            json_out out = {memory, 0};
-            uv2_sparse_header(&out, status);
-            const char *code = reason[0] != 0 && strlen(reason) < 64 &&
-                strspn(reason, "abcdefghijklmnopqrstuvwxyz0123456789_") == strlen(reason)
-                ? reason : status;
-            jprintf(&out, ",\"reason\":\"%s\",\"pixels\":[]}\n", code);
-            fclose(memory);
-            if (!out.failed && body != NULL)
-                uv2_sparse_publish(body, size);
-            free(body);
-        }
+    int sparse = g_uv2_pixels.count != 0;
+    if (sparse)
         fprintf(stderr, "[frame trace] sparse UV2: %s (%s)\n", status, reason);
-        return;
-    }
-    char *buffer = NULL;
+    char *body = NULL;
     size_t size = 0;
-    FILE *memory = open_memstream(&buffer, &size);
-    if (memory != NULL) {
-        json_out out = {memory, 0};
+    FILE *memory = open_memstream(&body, &size);
+    if (memory == NULL)
+        return;
+    json_out out = {memory, 0};
+    if (sparse) {
+        uv2_sparse_header(&out, status);
+        const char *code = reason[0] != 0 && strlen(reason) < 64 &&
+            strspn(reason, "abcdefghijklmnopqrstuvwxyz0123456789_") == strlen(reason)
+            ? reason : status;
+        jprintf(&out, ",\"reason\":\"%s\",\"pixels\":[]}\n", code);
+    } else {
         jprintf(&out,
                 "{\"schema\":\"gfx-uv2-probe/v1\",\"side\":\"opengl\","
                 "\"status\":\"%s\",\"reason\":\"%s\","
@@ -8284,15 +8301,18 @@ static void uv2_probe_write_failure(const char *status, const char *reason) {
                 status, reason, g.session_id,
                 (unsigned long long)g.capture_id, (int)getpid(),
                 g_uv2_probe.event, g_uv2_probe.program);
-        fclose(memory);
-        if (!out.failed && buffer != NULL) {
+    }
+    fclose(memory);
+    if (!out.failed && body != NULL) {
+        if (sparse) {
+            uv2_sparse_publish(body, size);
+        } else {
             char path[FTRACE_PATH];
-            snprintf(path, sizeof(path), "%s/uv2-probe.json",
-                     g_uv2_probe.dir);
-            (void)write_atomic(path, buffer, size);
+            snprintf(path, sizeof(path), "%s/uv2-probe.json", g_uv2_probe.dir);
+            (void)write_atomic(path, body, size);
         }
     }
-    free(buffer);
+    free(body);
 }
 
 /* Run once from the draw exit, using the original program and bindings,
@@ -8510,7 +8530,7 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     if (g_uv2_pixels.count != 0) {
         if (event != 1 || program != 310 || draw_framebuffer != 6 ||
             texture_name != 433 || level != 0 || depth_bits != 24 ||
-            mode != GL_TRIANGLES || count % 3 != 0 || count / 3 > 65535 ||
+            mode != GL_TRIANGLES || count % 3 != 0 || count / 3 > EU4_UV2_MAX_TRIANGLES ||
             strcmp(vertex_sha, EU4_UV2_VERTEX_SHA) != 0 ||
             strcmp(fragment_sha, EU4_UV2_FRAGMENT_SHA) != 0 ||
             strcmp(g_uv2_probe.varying, "v_TEXCOORD1") != 0 ||
@@ -8681,7 +8701,8 @@ static int uv2_probe_execute(int event, int indexed, unsigned mode, int count,
     }
     if (g_uv2_pixels.count != 0) {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_framebuffer);
-        if (index_data != NULL && uv2_sparse_observe(&guard, control, probe,
+        if (index_data != NULL && index_last >= 0 && index_last < UINT16_MAX &&
+            uv2_sparse_observe(&guard, control, probe,
                 control_program, count, width, height, index_sha,
                 pre_color, pre_depth_raw) == 0) {
             result = 1;

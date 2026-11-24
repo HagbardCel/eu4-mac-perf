@@ -1,9 +1,11 @@
 #ifndef EU4_GFX_UV2_SPARSE_H
 #define EU4_GFX_UV2_SPARSE_H
 
+#include <stdint.h>
 #include <stdlib.h>
 
 #define EU4_UV2_MAX_PIXELS 64
+#define EU4_UV2_MAX_TRIANGLES UINT16_MAX
 #define EU4_UV2_VERTEX_SHA "2e8842a26b765c70f06594103eff681f8a149a49966c34b25d8648058f7a4b98"
 #define EU4_UV2_FRAGMENT_SHA "3ecb11ae2fcd0c07bb9960e41fa7122a6cb7b5d873dcc9f95b9d55b765caf548"
 #define EU4_UV2_SPARSE_FILE "uv2-fragments.json"
@@ -24,7 +26,7 @@ static inline int eu4_uv2_parse_pixels(const char *text,
     out->count = 0;
     if (text == NULL)
         return 0;
-    while (*text != '\0' && out->count < EU4_UV2_MAX_PIXELS) {
+    do {
         char *end;
         if (*text < '0' || *text > '9')
             break;
@@ -38,12 +40,11 @@ static inline int eu4_uv2_parse_pixels(const char *text,
             if (out->pixels[i].x == x && out->pixels[i].y == y)
                 return -1;
         }
-        out->pixels[out->count].x = (unsigned)x;
-        out->pixels[out->count++].y = (unsigned)y;
+        out->pixels[out->count++] = (eu4_uv2_pixel){(unsigned)x, (unsigned)y};
         if (*end == '\0')
             return 0;
         text = end + 1;
-    }
+    } while (out->count < EU4_UV2_MAX_PIXELS);
     return -1;
 }
 
