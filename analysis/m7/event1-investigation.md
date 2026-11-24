@@ -112,19 +112,32 @@ For translated shaders, `EU4_FRAME_REPLAY_FAST_MATH` accepts exactly `0`
 present. Main retains fast math by default. The standalone producer's v3
 recipe binds the effective mode and renderer default reported in
 `replay.json`. A case baseline also checks the requested effective mode
-before reuse. Existing v2 receipts remain historical records. The independent
+before reuse. Historical receipts still support pixel and checkpoint
+inspection. Exact correction acceptance requires verified native compile-mode
+provenance. The independent
 exact-prefix checker scrubs ambient `EU4_*` switches and binds the candidate
 source closure, which includes its native default.
 
-After infrastructure review, port only the reviewed native compile-mode
-resolution, cache-key, compiler-option and result-reporting changes to the
-pinned candidate using the existing [candidate workflow](m7-operator-runbook.md#diagnostic-starting-evidence).
-Set `kDefaultShaderFastMath = NO` there and remove the candidate's separate
-`getenv("EU4_FRAME_REPLAY_FAST_MATH")` block from `function_for`. Keep this a
-`benchmark/**` candidate edit. Use reviewed infrastructure for v3 receipt
-generation. Record the new source closure before using its observations.
-Historical results identify the earlier renderer and keep their original
-receipts.
+After infrastructure review, port the native changes to
+`benchmark/eu4_gfx_frame_replay.mm` in the pinned candidate. That file is
+within the sidecar's allowed `benchmark/**` scope.
+
+1. Set `kDefaultShaderFastMath = NO` to preserve the candidate's canonical
+   precise-math baseline. Port `resolve_shader_fast_math` and resolve the mode
+   once per frame into `EU4MetalReplayState.shader_fast_math`.
+2. Use that mode for both the function cache key and
+   `MTLCompileOptions.fastMathEnabled`. Remove the candidate's separate
+   `getenv("EU4_FRAME_REPLAY_FAST_MATH")` block in `function_for` and the old
+   options-key helper. Built-in debug functions keep their fixed compile options.
+3. Port the native `shader_compile_options` report for success and failure
+   results. Use reviewed infrastructure for v3 receipt generation. Record the
+   new renderer-source closure before comparing outputs with historical
+   results, which retain their original identities and receipts.
+
+The existing campaign objective includes this index's infrastructure path in
+the prepared goal text. The pinned workspace can read that path in the
+reviewed infrastructure checkout. [Campaign
+objective](../../campaigns/eu4-m7-event20/objective.md#evidence-convention).
 
 [gl]: ../../.local/m7/event20/trusted-copy/47590918/frame/prefix-observations.jsonl
 [trusted]: ../../.local/m7/event20/trusted-copy/47590918/trusted-evidence.json

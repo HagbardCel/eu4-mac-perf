@@ -12,7 +12,7 @@ from unittest import mock
 from automation import case_baseline, replay_host_dependencies
 
 
-def _write_case(root: Path) -> Path:
+def _write_case(root: Path, *, legacy: bool = False) -> Path:
     case = root / "case"
     (case / "capture").mkdir(parents=True)
     (case / "replay").mkdir()
@@ -35,13 +35,15 @@ def _write_case(root: Path) -> Path:
     add("capture/frame-events.jsonl", b"")
     add("shaders/shaders.json", b"{}")
     add("shaders/program.metal", b"kernel")
-    add("replay/replay.json", json.dumps({
+    replay = {
         "status": "ok", "stage": "complete", "readback": True,
         "partial": False, "timed_out": False, "failed": 0,
         "command_status": 4, "events": 3, "encoded": 3,
-        "shader_compile_options": {"default_fast_math": True, "fast_math": True},
         "checkpoints": [{"event": 0, "target": "0", "file": "event0.bgra"}]
-    }).encode())
+    }
+    if not legacy:
+        replay["shader_compile_options"] = {"default_fast_math": True, "fast_math": True}
+    add("replay/replay.json", json.dumps(replay).encode())
     add("replay/metal-frame.bgra", b"\0" * 16)
     add("replay/event0.bgra", b"checkpoint")
     replay_bytes = (case / "replay" / "replay.json").read_bytes()
@@ -194,6 +196,16 @@ class BaselineIdentityTests(unittest.TestCase):
                          "ok")
         self.assertEqual(recorded["identity"]["validity"]["replay_status"],
                          "ok")
+
+    def test_legacy_replay_remains_inspectable_but_cannot_be_reused(self):
+        legacy = _write_case(self.root / "legacy", legacy=True)
+        verified = case_baseline.gfx_replay_case.verify(legacy)
+        self.assertTrue(verified["ok"], verified)
+        self.assertEqual(verified["producer_identity"]["status"], "verified")
+        case_baseline.record(self.case, self.baseline)
+        with self.assertRaisesRegex(case_baseline.BaselineError,
+                                    "invalid_shader_compile_options"):
+            case_baseline.load_check(legacy, self.baseline)
 
     def test_baseline_reuse_requires_same_effective_math(self):
         case_baseline.record(self.case, self.baseline)

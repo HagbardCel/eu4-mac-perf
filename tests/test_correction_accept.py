@@ -292,6 +292,79 @@ class CorrectionAcceptanceTests(unittest.TestCase):
                 self.assertEqual(report["result"], "invalid_evidence")
                 self.assertIn("invalid_recipe", json.dumps(report["problems"]))
 
+    def test_exact_legacy_compile_receipts_preserve_observations(self):
+        for receipt_kind in ("no-recipe", "v2", "diagnostic-v2"):
+            with self.subTest(receipt_kind=receipt_kind):
+                after = self.model.replay_dir(f"after-{receipt_kind}",
+                                              self.model.reference)
+                self.make_legacy_compile_receipt(after, receipt_kind)
+                report = self.acceptance(
+                    after=after,
+                    claims=self.model.claims(
+                        {"mismatched_pixels": 1, "max_channel_error": 7},
+                        {"mismatched_pixels": 0, "max_channel_error": 0}),
+                    qualification_contract=contract(allow_no_exact_control=True))
+                self.assertTrue(report["observed_checkpoint_equality"], report)
+                self.assertTrue(report["producer_bound_checkpoint_evidence"], report)
+                self.assertEqual(report["after"]["statistics"]["mismatched_pixels"], 0)
+                self.assertEqual(report["after"]["statistics"]["max_channel_error"], 0)
+                self.assertEqual(report["qualification"]["after"]["shader_compile_mode"],
+                                 "unverified")
+                self.assertFalse(report["pixel_perfect"], report)
+                self.assertFalse(report["authenticated_equivalence"], report)
+                self.assertTrue(any("lacks verifiable shader compile mode" in item
+                                    for item in report["limitations"]))
+                if receipt_kind == "diagnostic-v2":
+                    self.assertEqual(report["result"], "invalid_evidence")
+                    self.assertIn("diagnostic_recipe", json.dumps(report["problems"]))
+                else:
+                    self.assertEqual(report["result"], "accepted", report)
+
+    def make_legacy_compile_receipt(self, directory, kind):
+        replay_path = directory / "replay.json"
+        replay = json.loads(replay_path.read_text())
+        replay.pop("shader_compile_options")
+        replay_path.write_text(json.dumps(replay))
+        receipt_path = directory / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["result"]["replay_json_sha256"] = sha(replay_path.read_bytes())
+        recipe = receipt.pop("recipe")
+        if kind != "no-recipe":
+            recipe["schema"] = "gfx-replay-recipe/v2"
+            recipe.pop("shader_compile_options")
+            recipe["precise_math"] = None
+            if kind == "diagnostic-v2":
+                key = "EU4_FRAME_REPLAY_PRECISE_MATH"
+                recipe.update(diagnostic=True, consumed_env={key: "1"},
+                              effective_env={key: "1"}, precise_math="1")
+            env = {key: recipe[key] for key in ("effective_env", "faults")}
+            payload = dict(env, **{key: recipe[key] for key in
+                                   ("schema", "shader_identity", "policy_sha256")})
+            recipe["environment_sha256"] = sha(json.dumps(
+                env, sort_keys=True, separators=(",", ":")).encode())
+            recipe["sha256"] = sha(json.dumps(
+                payload, sort_keys=True, separators=(",", ":")).encode())
+            receipt["recipe"] = recipe
+        receipt_path.write_text(json.dumps(receipt))
+
+    def test_exact_legacy_replay_does_not_qualify_as_a_control(self):
+        after = self.model.replay_dir("after-with-legacy-control", self.model.reference)
+        control = self.model.replay_dir("legacy-control", self.model.reference)
+        self.make_legacy_compile_receipt(control, "v2")
+        regression = self.model.package(control, "case-legacy-control",
+                                        case_id="legacy-control")
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}),
+            regressions=[regression],
+            qualification_contract=contract("legacy-control"))
+        self.assertTrue(report["pixel_perfect"], report)
+        self.assertFalse(report["authenticated_equivalence"], report)
+        self.assertEqual(report["regressions"][0]["statistics"]["mismatched_pixels"], 0)
+        self.assertIn("regression_compile_mode", json.dumps(report["problems"]))
+
     def test_corrupted_intermediate_cannot_earn_exactness(self):
         # Reproducer from the review: exact final pixels must not cover damage
         # to an authoritative intermediate captured by the same case.
@@ -486,6 +559,7 @@ class CorrectionAcceptanceTests(unittest.TestCase):
             "execution_problems": [],
             "checkpoint_validation": {"status": "ok"},
             "state_coverage": {"status": "complete"},
+            "compile_mode_verified": True,
             "checkpoint_binding": "bound",
             "graph_status": "complete",
             "checkpoint_request": {"required_entries": 1},

@@ -79,6 +79,12 @@ checker, `automation/gfx_prefix_check.py`,
 `automation/gfx_independent_replay.py`, `automation/gfx_observation.py` or
 `automation/m6_frame.py`.
 
+For seal `47590918`, start with the [event-1 investigation index](../../analysis/m7/event1-investigation.md)
+in the infrastructure checkout. From the pinned worktree, use
+`$EU4_DSH_INFRA_ROOT/analysis/m7/event1-investigation.md`. If the variable is
+unset, locate the infrastructure checkout via the parent of
+`git rev-parse --path-format=absolute --git-common-dir`.
+
 At campaign start, inspect previous evidence relevant to the current first
 divergence.  Use a reconstructed OpenGL control only when it can discriminate a
 specific hypothesis.  An unavailable or unsupported reconstructed OpenGL
