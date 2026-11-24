@@ -225,107 +225,99 @@ This campaign targets events 0..3 of the same authentic sealed frame.  It
 reuses `campaigns/eu4-m7-event20/accept.py` with `--target-end 3`; the event-20
 configuration remains the complete-scope target.
 
-Fixed identities:
+Run from the infrastructure checkout after the launcher and objective changes
+are reviewed and merged into the locally fetched `origin/main`. Bash resolves
+paths relative to the script, including when invoked from Fish or from another
+working directory. Set `EU4_DSH_PYTHON` only to select a specific interpreter.
+
+The target machine currently resolves pnpm `12.23.0`. The DSH profile pins
+`12.21.0`. If npm already has the exact version available, open a subshell
+with that version on `PATH`. `--offline --no` refuses a download or install
+and leaves the global pnpm in place. Verify `pnpm --version` reports `12.21.0`
+before running the launcher commands in that subshell. If npm cannot find
+the version, select an existing `12.21.0` installation on `PATH` first.
+[npm exec documentation](https://docs.npmjs.com/cli/v11/commands/npm-exec/)
+
+```bash
+npm exec --offline --no --package=pnpm@12.21.0 -- bash
+pnpm --version
+```
+
+```bash
+bash dsh/scripts/m7-event3.sh preflight
+bash dsh/scripts/m7-event3.sh start
+bash dsh/scripts/m7-event3.sh status
+bash dsh/scripts/m7-event3.sh stop
+bash dsh/scripts/m7-event3.sh finish
+```
+
+- `preflight` checks the reviewed infrastructure, DSH profile, authentic
+  fixture and retained candidate without creating a campaign state, anchor or
+  session. `start` includes preflight and runs the existing interactive DSH
+  launcher with a 60-minute deadline in `autonomous_reconstruction` mode.
+  Start a new DSH session in the registered candidate workspace and paste the
+  launcher's complete printed goal text as one `/goal` message.
+- `status` reads the host marker and prints the active managed campaign's
+  paths, mode, stop reason and remaining time. `stop` records `operator_stop`
+  so the guard refuses new expensive actions. End the DSH session yourself.
+- `finish` requires you to type `stopped` after the DSH session has ended. It
+  checks the marker again, records `operator_stop` when the guard has no stop,
+  releases only that campaign's marker, and prints the retained paths.
+  Finalization receipts remain available to the DSH bridge and checker.
+  A start that fails after creating a guard leaves its
+  fresh records available to inspect and finish. If the marker belongs to a
+  historical or different campaign, its operator must release it using that
+  campaign's verified state after its session ends.
 
 | Item | Path |
 | --- | --- |
-| Campaign | `campaigns/eu4-m7-event3/campaign.json` |
-| Sidecar | `dsh/campaigns/m7-event3.json` |
-| Candidate workspace | `.local/dsh/m7-event3/workspace` (preserve as-is) |
-| Run root | `.local/dsh/m7-event3/run-60m-05` (fresh anchor) |
-| Campaign state | `.local/m7/event3/state-operator-60m-05.json` (fresh file) |
-| Trusted reference | `.local/m7/event20/trusted-copy/47590918` |
+| Source campaign and reusable sidecar template | `campaigns/eu4-m7-event3/campaign.json`, `dsh/campaigns/m7-event3.json` |
+| Retained candidate workspace | `.local/dsh/m7-event3/workspace` |
+| Trusted reference | `.local/m7/event20/trusted-copy/47590918/frame` |
+| Fresh per-run inputs and receipts | `.local/m7/event3/launches/<id>/{sidecar.json,state.json,run/}` |
 
-The previous `run-60m-01`–`run-60m-04` campaigns are historical: preserve their
-identity anchors, validation receipts, candidate modifications and research
-reports, and never reuse or delete them. `run-60m-04` was stopped with reason
-`blocked` and its marker deactivated during `run-60m-05` preparation; that is a
-historical release, not evidence the marker is free at a later launch, which the
-launch command re-checks every time. Release a finished campaign before
-replacing it — never one whose session is still running — and pick the next
-unused suffix: never delete an earlier anchor or reuse an earlier state. Keep the
-candidate workspace untouched; the launcher creates the new anchor in the fresh
-run root.
+Each generated sidecar changes only the campaign ID and run root. The wrapper
+uses the launch directory and its generated `sidecar.json`, `state.json` and
+`run/` paths to identify a managed campaign. The sidecar ID names the launch
+directory. The guard ID is assigned by `run.sh` and binds the host marker to
+the state. Both appear in `status`. The wrapper preserves all candidate edits,
+including allowed uncommitted renderer work.
+Run compatible focused tests inside the candidate and leave tests requiring
+shared Git metadata writes to operator-side verification.
 
-Preflight (read-only; it never launches):
+### Diagnostic starting evidence
 
-```fish
-set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
-set -l TRUSTED $REPO/.local/m7/event20/trusted-copy/47590918
-set -l STATE $REPO/.local/m7/event3/state-operator-60m-05.json
-set -l RUN $REPO/.local/dsh/m7-event3/run-60m-05
-cd $REPO
+The merged PR #293 Metal smoke replay (`.local/m7/pr293-metal-ch0ohkqj/metal/`)
+verified the authentic reference and resource provenance and wrote a verified
+producer receipt. It encoded 283/283 events with zero failures and returned 26
+checkpoints with zero invalid. Event 0 on `tex:433` matched. Event 1 differed
+by 23 pixels with a maximum channel error of 1. The final framebuffer differed
+by 632 of 1,930,176 pixels. The standalone result is `incomplete_diagnostics`
+because there is no verified in-process shadow identity. These measurements
+belong to the merged-main renderer. Check the candidate's renderer-source
+identity and existing reports before deciding whether to validate it again.
+Start with the retained `progress.md` and
+`analysis/m7/reports/event3-prefix-diagnosis.md`, including the precise-math
+and depth experiments and the superseded interpretations in §25. Use
+`eu4_case_inspect` to inspect the event-0 clear and event-1 draw on `tex:433`.
+The event-1 cause remains unresolved. Exact event-3 equivalence requires an
+independent checker pass with `qualified=true`, authentic authority and exact
+prefix `{start: 0, end: 3}`.
 
-# Both the campaign state and the sidecar's run root must be unused. `test -e`
-# also catches a directory or a symlink target; `-L` catches a dangling symlink.
-test -e $STATE -o -L $STATE; and echo "STATE OCCUPIED - pick a new suffix"; or echo "state is free"
-test -e $RUN -o -L $RUN; and echo "RUN ROOT OCCUPIED - pick a new sidecar run_root"; or echo "run root is free"
+### Historical runs
 
-$PY -c "from automation import gfx_prefix_check as g; import json; r = g.preflight_fixture('$TRUSTED/frame', require_end=3, trusted_root='$TRUSTED'); print(json.dumps(r['problems']))"
-```
+`run-60m-01` through `run-60m-05`, their state files, anchors, receipts and
+research reports are historical. The tracked sidecar carries the prior run's
+ID and path as template values. `start` replaces those two values in a fresh
+sidecar and leaves the originals in place. `run-60m-04` ended as `blocked` and
+its marker was released before preparing `run-60m-05`.
 
-The preflight command must print `[]`.  The launcher runs the same check plus the
-candidate policy check and refuses `fixture_ineligible` before starting the
-agent.
-
-Launch (operator action).  The block below is self-contained and refuses to
-launch unless both identities are unused and the host-wide marker is verifiably
-absent; the entry point, safety mode and environment are unchanged.
-
-```fish
-set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
-set -l STATE $REPO/.local/m7/event3/state-operator-60m-05.json
-set -l RUN $REPO/.local/dsh/m7-event3/run-60m-05
-set -l SIDECAR $REPO/dsh/campaigns/m7-event3.json
-cd $REPO
-
-# Read the marker with the inherited EU4_CAMPAIGN_STATE removed for this one
-# read, so an unrelated shell value cannot make it look free.
-set -l marker (env -u EU4_CAMPAIGN_STATE $PY -c 'from automation import campaign_guard
-g = campaign_guard.from_env()
-print("" if g is None else g.path)' 2>&1)
-set -l marker_status $status
-
-if test -e $STATE -o -L $STATE
-    echo "STATE OCCUPIED: $STATE - pick the next unused suffix" >&2; false
-else if test -e $RUN -o -L $RUN
-    echo "RUN ROOT OCCUPIED: $RUN - pick a new sidecar run_root" >&2; false
-else if test $marker_status -ne 0
-    echo "MARKER UNCHECKED: $marker - refusing to launch" >&2; false
-else if test -n "$marker"
-    echo "CAMPAIGN ACTIVE: $marker - stop and deactivate it first" >&2; false
-else
-    env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=$PY EU4_CAMPAIGN_STATE=$STATE \
-        $REPO/dsh/scripts/run.sh --campaign $SIDECAR --campaign-state $STATE \
-          --campaign-mode autonomous_reconstruction
-end
-```
-
-Paste the printed `goal_text` block into a new `/goal`.
-
-Initiating reminder: start `/goal` with the entire launcher-generated goal text
-from the beginning; do not first submit that text as an ordinary chat message.
-
-Operator-specific reminders:
-
-- Candidate-safe focused tests execute entirely inside `.local/dsh/m7-event3/workspace`
-  and may run in-session. Tests that need additional Git worktrees, shared Git
-  metadata writes or other sandbox-unavailable operations are operator-side
-  verification: report them as an environment limitation, not a renderer
-  failure, and do not rerun a test known to fail only because it cannot create
-  `.git/worktrees` entries.
-- Use the configured NumPy-capable `EU4_DSH_PYTHON` (the `$PY` above), not
-  whichever `python3` appears first on `PATH`. Prefer existing `eu4_*` tools and
-  their supported timeouts over custom shell wrappers, and keep diagnostic
-  outputs in stable, authorized locations inside the candidate's writable paths.
-
-The established baseline is `FIRST_DIVERGENCE` at event 1 (`tex:433`).  The
-candidate's only modified replay input is `benchmark/eu4_gfx_frame_replay.mm`
-(file sha256 `a756652c…`, git blob `9a1c53e4`: the 16-line precise-math default);
-the other four replay sources are unmodified, so the shader/build source set
-digests to `026925b7…` now.  The latest trusted result for that source is
+The established baseline before `run-60m-05` was `FIRST_DIVERGENCE` at event 1
+(`tex:433`). The candidate's only modified replay input for that baseline was
+`benchmark/eu4_gfx_frame_replay.mm` (file sha256 `a756652c…`, git blob
+`9a1c53e4`: the 16-line precise-math default). The other four replay sources
+were unmodified, so the shader/build source set
+digested to `026925b7…`.  The latest trusted result for that source is
 `run-60m-03` candidate `dd09494a…` (`fail`, earliest verified divergence event
 1).  A receipt binds a candidate digest over every changed file, not per-source
 digests, so the binding to blob `9a1c53e4` rests on the `run-60m-03` session
@@ -333,16 +325,14 @@ record: the exact rollback diff `749f6ff6..9a1c53e4` at CT 00:33:23 and the same
 16-line diff at 00:34:30 bracket the 00:33:47 → 00:34:27 validation.  The later
 `9d4a9376…` and `c9b101b0…` receipts ran while the temporary depth-readback
 diagnostic was in the renderer source (141-line `.mm` diff at 00:37:56) and are
-excluded; `run-60m-04` recorded no validation at all.  The current candidate
-digest differs from `dd09494a…` only by documentation (`progress.md`,
-`analysis/m7/reports/**`), so no new trusted GPU validation is needed to launch,
-and **no qualified event-3 equivalence is claimed**: a pass requires
-`qualified=true`, authentic authority and the exact prefix `{start: 0, end: 3}`;
-historical diagnostic pixel counts and candidate reports never qualify.
+excluded; `run-60m-04` recorded no validation at all.  At that point the candidate
+digest differed from `dd09494a…` only by documentation (`progress.md` and
+`analysis/m7/reports/**`). The later `run-60m-05` report records its own
+diagnostic variants and limitations in the retained candidate. Reuse a result
+only after checking the renderer-source and replay-input identity it covers.
 
-The deadline claim rule is the same for every campaign: only
-`campaign_guard status --state $STATE` is authoritative.  Do not stop as
-"deadline" merely because a correction may not finish in time.
+Use the guard status printed by `m7-event3.sh status` to establish expiry.
+An estimate that a correction may take too long does not establish expiry.
 
 ## Achievement distinctions
 

@@ -41,9 +41,13 @@ EU4_CAMPAIGN_STATE=<path> ./dsh/scripts/run-campaign.sh <sidecar>  # one-turn ca
 ./dsh/scripts/run.sh --campaign <sidecar> --campaign-state <path> \
   --campaign-mode controlled_capture                                # live-capture campaign (default: autonomous_reconstruction)
 ./dsh/scripts/run-pilot.sh --task-file <path>  # run one evidenced headless pilot turn
+./dsh/scripts/m7-event3.sh preflight # event-3 operator lifecycle (see the runbook below)
 ./dsh/scripts/ghidra-probe.sh       # reproduce the shared-project lock failure
 ./dsh/scripts/ghidra-replica.sh --check|--create  # private Ghidra replica
 ```
+
+The [M7 event-3 runbook](../analysis/m7/m7-operator-runbook.md#c-authentic-event-3-migration-milestone)
+describes `m7-event3.sh` and its retained candidate, fresh sidecar and stop procedure.
 
 `run-pilot.sh` is the evidence-producing counterpart to `run-campaign.sh`: it
 mounts this checkout's tools plugin in the shipped headless profile, runs
