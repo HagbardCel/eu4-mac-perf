@@ -128,6 +128,7 @@ typedef struct {
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *pending_lifecycle;
 @property (nonatomic, strong) NSDictionary *sequence_record;
 @property (nonatomic, strong) NSMutableDictionary *last_frame_identity;
+@property (nonatomic, assign) BOOL shader_fast_math;
 @property (nonatomic, assign) uint64_t frame_sequence;
 @property (nonatomic, assign) uint32_t persistent_history;
 @property (nonatomic, assign) NSUInteger carried_bindings;
@@ -2102,10 +2103,19 @@ static NSData *pack_uniforms(NSDictionary *stage, NSDictionary *program,
    name unchanged while changing the bytes, and a persistent sequence session
    can replay a later frame whose shader directory has a different file under
    the same name. */
-static NSString *shader_compile_options_key(void) {
-    const char *precise_env = getenv("EU4_FRAME_REPLAY_PRECISE_MATH");
-    return (precise_env != NULL && strcmp(precise_env, "1") == 0)
-        ? @"fastmath-off" : @"fastmath-on";
+static const BOOL kDefaultShaderFastMath = YES;
+
+static NSString *resolve_shader_fast_math(const char *value, const char *legacy,
+                                          BOOL *fast_math) {
+    if (legacy != NULL) {
+        return @"EU4_FRAME_REPLAY_PRECISE_MATH was retired; use "
+               @"EU4_FRAME_REPLAY_FAST_MATH=0 for precise math";
+    }
+    if (value != NULL && strcmp(value, "0") != 0 && strcmp(value, "1") != 0) {
+        return @"EU4_FRAME_REPLAY_FAST_MATH must be 0 or 1";
+    }
+    *fast_math = value == NULL ? kDefaultShaderFastMath : value[0] == '1';
+    return nil;
 }
 
 static NSString *shader_source_identity(NSString *path, NSString **source_out,
@@ -2165,7 +2175,8 @@ static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
     if (digest == nil) {
         return nil;
     }
-    NSString *options_key = shader_compile_options_key();
+    BOOL fast_math = g_state.shader_fast_math;
+    NSString *options_key = fast_math ? @"fastmath-on" : @"fastmath-off";
     NSString *key = [NSString stringWithFormat:@"%@#%@#%@#%@", digest, entry,
                                                kind, options_key];
     if (identity_out != NULL) {
@@ -2177,13 +2188,7 @@ static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
     }
     MTLCompileOptions *options = [MTLCompileOptions new];
     options.languageVersion = MTLLanguageVersion2_1;
-    /* Diagnostic A/B: GLSL compilation in the engine does not use Metal's
-       fast-math mode.  This switch lets an offline experiment distinguish a
-       fast-math translation difference from a rendering-state difference. */
-    const char *precise_env = getenv("EU4_FRAME_REPLAY_PRECISE_MATH");
-    if (precise_env != NULL && strcmp(precise_env, "1") == 0) {
-        options.fastMathEnabled = NO;
-    }
+    options.fastMathEnabled = fast_math;
     NSError *read_error = nil;
     id<MTLLibrary> library = [g_device newLibraryWithSource:source
                                                     options:options
@@ -2771,7 +2776,6 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             function_for(shaderDir, vs, &vertex_identity, error);
         id<MTLFunction> fragment_function =
             function_for(shaderDir, fs, &fragment_identity, error);
-        NSString *debug_options = shader_compile_options_key();
         const char *debug_attr_vertex_env = getenv("EU4_FRAME_REPLAY_DEBUG_ATTR_VERTEX");
         if (debug_attr_vertex_env != NULL && debug_attr_vertex_env[0] == '1') {
             if (g_debug_attr_vertex == nil) {
@@ -2783,8 +2787,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_attr_vertex != nil) {
                 vertex_function = g_debug_attr_vertex;
-                vertex_identity = [@"builtin:debug_attr_vertex#"
-                    stringByAppendingString:debug_options];
+                vertex_identity = @"builtin:debug_attr_vertex";
             }
         }
         const char *debug_vertex_env = getenv("EU4_FRAME_REPLAY_DEBUG_VERTEX");
@@ -2798,8 +2801,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_vertex != nil) {
                 vertex_function = g_debug_vertex;
-                vertex_identity = [@"builtin:debug_vertex#"
-                    stringByAppendingString:debug_options];
+                vertex_identity = @"builtin:debug_vertex";
             }
         }
         const char *debug_fragment_env = getenv("EU4_FRAME_REPLAY_DEBUG_FRAGMENT");
@@ -2813,8 +2815,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_texture_fragment != nil) {
                 fragment_function = g_debug_texture_fragment;
-                fragment_identity = [@"builtin:debug_texture_fragment#"
-                    stringByAppendingString:debug_options];
+                fragment_identity = @"builtin:debug_texture_fragment";
             }
         } else if (debug_fragment_env != NULL && strcmp(debug_fragment_env, "uv") == 0) {
             if (g_debug_uv_fragment == nil) {
@@ -2826,8 +2827,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_uv_fragment != nil) {
                 fragment_function = g_debug_uv_fragment;
-                fragment_identity = [@"builtin:debug_uv_fragment#"
-                    stringByAppendingString:debug_options];
+                fragment_identity = @"builtin:debug_uv_fragment";
             }
         } else if (debug_fragment_env != NULL && debug_fragment_env[0] == '1') {
             if (g_debug_fragment == nil) {
@@ -2839,8 +2839,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_fragment != nil) {
                 fragment_function = g_debug_fragment;
-                fragment_identity = [@"builtin:debug_fragment#"
-                    stringByAppendingString:debug_options];
+                fragment_identity = @"builtin:debug_fragment";
             }
         }
         if (vertex_function == nil || fragment_function == nil) {
@@ -5220,6 +5219,15 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                   withIntermediateDirectories:YES
                                                    attributes:nil
                                                         error:NULL];
+        BOOL fast_math = kDefaultShaderFastMath;
+        NSString *compile_error = resolve_shader_fast_math(
+            getenv("EU4_FRAME_REPLAY_FAST_MATH"),
+            getenv("EU4_FRAME_REPLAY_PRECISE_MATH"), &fast_math);
+        state.shader_fast_math = fast_math;
+        NSDictionary *shader_compile_options = compile_error == nil ? @{
+            @"fast_math": @(fast_math),
+            @"default_fast_math": @(kDefaultShaderFastMath),
+        } : nil;
         /* One early-exit path for failures outside the event loop.  It records
            stage, operation, underlying error, timeout classification, counters,
            duration and command status in both replay.json and the C ABI. */
@@ -5279,6 +5287,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 @"readback": @NO,
                 @"history": history_document(),
             } mutableCopy];
+            report[@"shader_compile_options"] = shader_compile_options;
             NSData *json = [NSJSONSerialization dataWithJSONObject:report
                                                            options:
                                                                NSJSONWritingPrettyPrinted
@@ -5307,6 +5316,10 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 stage, operation, kind, error, fallback, code,
                 command != nil ? (NSInteger)command.status : 0);
         };
+        if (compile_error != nil) {
+            return record_failure(@"shader_compile_options", -1, @"frame",
+                                  nil, compile_error, 2, nil);
+        }
         @try {
         NSError *verify_error = nil;
         if (!verify_sealed_inputs(frame_path, shader_path, config, &verify_error)) {
@@ -6039,6 +6052,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         if (g_checkpoints_by_event != nil) {
             result[@"checkpoints"] = g_checkpoint_results;
         }
+        result[@"shader_compile_options"] = shader_compile_options;
         result[@"transfers"] = g_transfer_records;
         result[@"history"] = history_document();
         result[@"targets"] = target_registry_document();

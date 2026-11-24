@@ -25,8 +25,9 @@ Fail-closed rules:
 ``pixel_perfect`` is only reported for zero mismatched pixels with zero maximum
 channel error, complete qualification (verified replay identity, complete
 full-frame execution, clean checkpoint reconciliation and complete captured
-state coverage), exact authoritative checkpoint coverage, and a producer
-receipt that binds the required checkpoint bytes.  ``authenticated_equivalence``
+state coverage and verified shader compile mode), exact authoritative checkpoint
+coverage, and a producer receipt that binds the required checkpoint bytes.
+``authenticated_equivalence``
 additionally requires every configured exact-match regression.
 
 ``observed_checkpoint_equality`` is narrower: it says the recomputed
@@ -259,6 +260,7 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
     checkpoint_binding = "absent"
     recipe = None
     recipe_approved = False
+    compile_mode_verified = False
     if receipt:
         for key in ("session_id", "capture_frame_id", "event_stream_sha256"):
             if str(receipt_capture.get(key)) != str(seal.get(key)):
@@ -267,13 +269,21 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                     f"producer receipt capture.{key} does not match the "
                     "sealed case capture")
         raw_recipe = receipt.get("recipe")
+        if raw_recipe is None and "shader_compile_options" in replay:
+            raise AcceptanceError(
+                "invalid_recipe",
+                "producer receipt is missing the replay's compile-option recipe")
         if raw_recipe is not None and not isinstance(raw_recipe, dict):
             raise AcceptanceError(
                 "invalid_recipe",
                 "producer receipt recipe is present but is not an object")
-        recipe = raw_recipe if isinstance(raw_recipe, dict) else None
-        recipe_approved = False
-        if recipe is not None:
+        recipe = raw_recipe
+        # V2 recorded its environment without establishing the native math mode.
+        # Preserve its observations for comparison and require V3 for qualification.
+        legacy_recipe = (recipe is not None
+                         and recipe.get("schema") == "gfx-replay-recipe/v2"
+                         and "shader_compile_options" not in replay)
+        if recipe is not None and not legacy_recipe:
             if not isinstance(recipe.get("consumed_env"), dict):
                 raise AcceptanceError(
                     "invalid_recipe",
@@ -292,9 +302,22 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                     "invalid_recipe",
                     "producer receipt recipe schema is not the current "
                     "replay recipe")
-            expected_effective = (
-                gfx_independent_replay.effective_replay_environment(
-                    recipe.get("consumed_env")))
+            try:
+                options = gfx_independent_replay.recorded_shader_compile_options(
+                    replay)
+                expected_options = gfx_independent_replay.shader_compile_options(
+                    recipe["consumed_env"],
+                    default_fast_math=options["default_fast_math"])
+            except gfx_independent_replay.ReplayError as exc:
+                raise AcceptanceError("invalid_recipe", exc.detail) from exc
+            if (options != expected_options
+                    or options != recipe.get("shader_compile_options")):
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt shader compile options disagree with replay.json "
+                    "or the consumed environment")
+            expected_effective = gfx_independent_replay.effective_replay_environment(
+                recipe["consumed_env"], options)
             if recipe.get("effective_env") != expected_effective:
                 raise AcceptanceError(
                     "invalid_recipe",
@@ -322,6 +345,7 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                         "a diagnostic variant is never correction evidence "
                         "unless its exact recipe is explicitly approved")
                 recipe_approved = True
+            compile_mode_verified = True
         result = receipt.get("result") if isinstance(
             receipt.get("result"), dict) else {}
         if result.get("replay_json_sha256") != _sha256(
@@ -395,6 +419,7 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
         "producer": producer,
         "recipe": recipe,
         "recipe_approved": recipe_approved,
+        "compile_mode_verified": compile_mode_verified,
         "receipt_present": bool(receipt),
         "checkpoint_binding": checkpoint_binding,
     }
@@ -504,8 +529,11 @@ def _qualification_axes(side: dict, *, allow_final_only: bool) -> dict:
         "checkpoint_producer_binding": binding,
         "checkpoint_producer_bound": producer_bound,
         "state_coverage": str(side["state_coverage"].get("status")),
+        "shader_compile_mode": ("verified" if side["compile_mode_verified"]
+                                else "unverified"),
         "complete": (identity_ok and execution_ok and checkpoints_ok
-                     and state_ok and checkpoints["exact"]),
+                     and state_ok and checkpoints["exact"]
+                     and side["compile_mode_verified"]),
     }
 
 
@@ -936,6 +964,18 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                     f"tested build revision {producer_revision!r}",
                     severity="invalid")
 
+    for label, side in (("baseline", before), ("candidate", after)):
+        if side is None or side["compile_mode_verified"]:
+            continue
+        limitations.append(
+            f"the {label} replay lacks verifiable shader compile mode provenance")
+        recipe = side["recipe"] or {}
+        if (recipe.get("diagnostic") or recipe.get("faults")
+                or recipe.get("effective_env")):
+            problem("diagnostic_recipe",
+                    f"the historical {label} recipe records diagnostic inputs",
+                    severity="invalid")
+
     recomputed_before = _statistics(before["pixels"]) if before else None
     recomputed_after = _statistics(after["pixels"]) if after else None
     if before is not None and recomputed_before is None:
@@ -1127,6 +1167,11 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
             checkpoint_axes = _qualification_axes(
                 replay_side, allow_final_only=allow_final_only)
             row["checkpoints"] = checkpoint_axes["authoritative_checkpoints"]
+            if not replay_side["compile_mode_verified"]:
+                problem("regression_compile_mode",
+                        f"regression {case_id} lacks verifiable shader compile "
+                        "mode provenance",
+                        severity="invalid")
             if not checkpoint_axes["authoritative_checkpoint_exact"]:
                 problem("regression_checkpoints",
                         f"regression {case_id} changed an authoritative "
@@ -1290,7 +1335,8 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
             "pixel_perfect": (
                 "primary candidate evidence is exact: valid evidence, exact "
                 "final image, complete qualification, exact checkpoint "
-                "coverage and producer-bound required observations"),
+                "coverage, verified shader compile mode and producer-bound "
+                "required observations"),
             "authenticated_equivalence": (
                 "pixel_perfect, an accepted result, and either every required "
                 "exact-match regression verified or an explicit "

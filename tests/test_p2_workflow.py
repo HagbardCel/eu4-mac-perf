@@ -52,7 +52,9 @@ class P2WorkflowTests(unittest.TestCase):
         add("replay/replay.json", json.dumps({
             "status": "ok", "stage": "complete", "readback": True,
             "partial": False, "timed_out": False, "failed": 0,
-            "command_status": 4, "events": 3, "encoded": 3}).encode())
+            "command_status": 4, "events": 3, "encoded": 3,
+            "shader_compile_options": {"default_fast_math": True, "fast_math": True},
+        }).encode())
         add("replay/metal-frame.bgra", b"\0" * 16)
         replay_bytes = (case / "replay" / "replay.json").read_bytes()
         metal_bytes = (case / "replay" / "metal-frame.bgra").read_bytes()

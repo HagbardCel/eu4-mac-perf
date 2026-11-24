@@ -216,6 +216,15 @@ def _replay_evidence(replay: Path) -> dict:
     metal = replay / "metal-frame.bgra"
     if not metal.is_file() or metal.stat().st_size == 0:
         raise BaselineError("replay_missing", f"no Metal readback at {metal}")
+    try:
+        recorded = gfx_independent_replay.recorded_shader_compile_options(result)
+        requested = gfx_independent_replay.shader_compile_options(
+            os.environ, default_fast_math=recorded["default_fast_math"])
+    except gfx_independent_replay.ReplayError as exc:
+        raise BaselineError(exc.kind, exc.detail) from exc
+    if requested != recorded:
+        raise BaselineError("shader_compile_mode_mismatch",
+                            "the stored replay used a different shader compile mode")
     return result
 
 

@@ -3860,6 +3860,8 @@ def _sha256_file(path: Path) -> str | None:
 
 
 
+_FAST_MATH_ENV = "EU4_FRAME_REPLAY_FAST_MATH"
+_LEGACY_MATH_ENV = "EU4_FRAME_REPLAY_PRECISE_MATH"
 _CONSUMED_REPLAY_ENV = (
     "EU4_FRAME_REPLAY_COPY_FAULT",
     "EU4_FRAME_REPLAY_DEBUG_ATTR_VERTEX",
@@ -3874,7 +3876,7 @@ _CONSUMED_REPLAY_ENV = (
     "EU4_FRAME_REPLAY_LINEAR_MIN",
     "EU4_FRAME_REPLAY_NEAREST_ALL",
     "EU4_FRAME_REPLAY_NO_CULL",
-    "EU4_FRAME_REPLAY_PRECISE_MATH",
+    _FAST_MATH_ENV,
     "EU4_FRAME_REPLAY_SAMPLER_SHIFT",
     "EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN",
 )
@@ -3899,7 +3901,7 @@ _BOOLEAN_REPLAY_ENV = (
     "EU4_FRAME_REPLAY_NO_CULL",
 )
 
-RECIPE_SCHEMA = "gfx-replay-recipe/v2"
+RECIPE_SCHEMA = "gfx-replay-recipe/v3"
 
 
 def _replay_int(value, default: int = 0) -> int:
@@ -3941,20 +3943,42 @@ def resolve_replay_environment(*, ambient: dict | None = None,
     for key in _SCRUBBED_REPLAY_ENV:
         env.pop(key, None)
     env.update(_fault_environment(faults))
+    shader_compile_options(env)
     return env
 
 
-def _effective_replay_env(consumed: dict) -> dict:
-    """The consumed variables whose values actually change native execution.
+def shader_compile_options(env: dict, *, default_fast_math: bool = True) -> dict:
+    """Resolve the translated shader compile mode using the renderer default."""
+    if _LEGACY_MATH_ENV in env:
+        raise ReplayError(
+            "invalid_shader_compile_options",
+            f"{_LEGACY_MATH_ENV} was retired; use {_FAST_MATH_ENV}=0 for precise math")
+    if _FAST_MATH_ENV in env and env[_FAST_MATH_ENV] not in ("0", "1"):
+        raise ReplayError("invalid_shader_compile_options",
+                          f"{_FAST_MATH_ENV} must be 0 or 1")
+    return {
+        "fast_math": env.get(_FAST_MATH_ENV, str(int(default_fast_math))) == "1",
+        "default_fast_math": default_fast_math,
+    }
 
-    An explicit default (for example ``EU4_FRAME_REPLAY_PRECISE_MATH=0``)
-    resolves to the same behaviour as an absent variable.  Only effective
-    values belong in the recipe identity; the raw values stay inspectable.
-    """
+
+def recorded_shader_compile_options(replay: dict) -> dict:
+    """Require the native host's effective mode and renderer default."""
+    options = replay.get("shader_compile_options")
+    if (not isinstance(options, dict)
+            or set(options) != {"fast_math", "default_fast_math"}
+            or any(type(value) is not bool for value in options.values())):
+        raise ReplayError("invalid_shader_compile_options",
+                          "replay.json lacks a native shader compile mode")
+    return options
+
+
+def effective_replay_environment(consumed: dict, options: dict) -> dict:
+    """Project behavior-changing switches while retaining raw values in the receipt."""
     effective: dict[str, str] = {}
     for key, value in consumed.items():
-        if key == "EU4_FRAME_REPLAY_PRECISE_MATH":
-            active = value == "1"
+        if key == _FAST_MATH_ENV:
+            active = options["fast_math"] != options["default_fast_math"]
         elif key in _BOOLEAN_REPLAY_ENV:
             active = _replay_enabled(value)
         elif key == "EU4_FRAME_REPLAY_DEBUG_FRAGMENT":
@@ -3992,11 +4016,6 @@ def _effective_replay_env(consumed: dict) -> dict:
     return effective
 
 
-def effective_replay_environment(consumed: dict | None) -> dict:
-    """Canonical effective projection of a receipt's consumed environment."""
-    return _effective_replay_env(dict(consumed or {}))
-
-
 def recipe_digest(recipe: dict) -> str:
     """Digest of the execution-relevant fields of a recipe.
 
@@ -4007,6 +4026,7 @@ def recipe_digest(recipe: dict) -> str:
     payload = {
         "schema": RECIPE_SCHEMA,
         "effective_env": dict(sorted((recipe.get("effective_env") or {}).items())),
+        "shader_compile_options": recipe.get("shader_compile_options"),
         "faults": recipe.get("faults") or {},
         "shader_identity": recipe.get("shader_identity") or {},
         "policy_sha256": recipe.get("policy_sha256"),
@@ -4019,7 +4039,8 @@ def replay_recipe(*, env: dict | None = None,
                   ambient: dict | None = None,
                   shaders: Path | str | None = None,
                   policy: Path | str | None = None,
-                  faults: dict | None = None) -> dict:
+                  faults: dict | None = None,
+                  default_fast_math: bool = True) -> dict:
     """The effective, consumed inputs of one replay invocation.
 
     A byte hash of the output proves which bytes were saved; it cannot explain
@@ -4033,11 +4054,13 @@ def replay_recipe(*, env: dict | None = None,
     resolved = dict(os.environ if env is None else env)
     previous = dict(os.environ) if inherited_ambient else (
         None if ambient is None else dict(ambient))
+    options = shader_compile_options(
+        resolved, default_fast_math=default_fast_math)
     consumed = {
         key: resolved[key] for key in _CONSUMED_REPLAY_ENV
         if key in resolved
     }
-    effective = _effective_replay_env(consumed)
+    effective = effective_replay_environment(consumed, options)
     faults = dict(faults or {})
     fault_env = _fault_environment(faults)
     injected = sorted(
@@ -4084,9 +4107,10 @@ def replay_recipe(*, env: dict | None = None,
         "shader_identity": shader_identity,
         "policy_path": str(policy_path),
         "policy_sha256": policy_sha,
-        "precise_math": consumed.get("EU4_FRAME_REPLAY_PRECISE_MATH"),
+        "shader_compile_options": options,
         "environment_sha256": hashlib.sha256(json.dumps({
             "effective_env": dict(sorted(effective.items())),
+            "shader_compile_options": options,
             "faults": faults,
         }, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
     }
@@ -4106,6 +4130,13 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
     trace = _optional_json(frame_dir / "frame-trace.json") or {}
     capture = capture_identity(seal, trace) or {}
     replay = _optional_json(result_path) or {}
+    options = recorded_shader_compile_options(replay)
+    recipe = replay_recipe(
+        env=env, ambient=ambient, shaders=shaders, policy=policy, faults=faults,
+        default_fast_math=options["default_fast_math"])
+    if recipe["shader_compile_options"] != options:
+        raise ReplayError("invalid_shader_compile_options",
+                          "native shader compile mode disagrees with child environment")
     metal = out_dir / "metal-frame.bgra"
     checkpoint_files = []
     seen_checkpoints: set[str] = set()
@@ -4153,9 +4184,7 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
             "source_revision": producer.get("source_revision"),
         },
         "capture": capture,
-        "recipe": replay_recipe(
-            env=env, ambient=ambient, shaders=shaders, policy=policy,
-            faults=faults),
+        "recipe": recipe,
         "result": {
             "replay_json_sha256": _sha256_file(result_path),
             "metal_frame_sha256": (_sha256_file(metal)
@@ -4258,6 +4287,12 @@ def _replay_locked_serialized(
     policy: Path | str | None = None,
     timeout: float = 1800.0,
 ) -> dict:
+    ambient = dict(os.environ)
+    faults = dict(faults or {})
+    # Resolve once and pass the same mapping to the child and to the receipt.
+    # The receipt must describe the environment that actually ran, not the
+    # caller's pre-scrub environment or a sample of known switches.
+    env = resolve_replay_environment(ambient=ambient, faults=faults)
     try:
         trace, seal, trusted = _load_reference(frame_dir)
         graph = gfx_frame_graph.build(frame_dir, trace=trace,
@@ -4291,12 +4326,6 @@ def _replay_locked_serialized(
         "--out", str(out_dir), "--checkpoints",
         str(out_dir / "checkpoint-request.json"),
     ]
-    ambient = dict(os.environ)
-    faults = dict(faults or {})
-    # Resolve once and pass the same mapping to the child and to the receipt.
-    # The receipt must describe the environment that actually ran, not the
-    # caller's pre-scrub environment or a sample of known switches.
-    env = resolve_replay_environment(ambient=ambient, faults=faults)
     try:
         ran = subprocess.run(
             command, capture_output=True, text=True, check=False, env=env,

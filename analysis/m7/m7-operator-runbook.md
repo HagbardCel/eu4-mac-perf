@@ -286,9 +286,8 @@ by 632 of 1,930,176 pixels. The standalone result is `incomplete_diagnostics`
 because there is no verified in-process shadow identity. These measurements
 belong to the merged-main renderer. Check the candidate's renderer-source
 identity and existing reports before deciding whether to validate it again.
-Start with the retained `progress.md` and
-`analysis/m7/reports/event3-prefix-diagnosis.md`, including the precise-math
-and depth experiments and the superseded interpretations in §25. Use
+Start with the [current event-1 investigation index](event1-investigation.md).
+Use
 `eu4_case_inspect` to inspect the event-0 clear and event-1 draw on `tex:433`.
 The event-1 cause remains unresolved. Exact event-3 equivalence requires an
 independent checker pass with `qualified=true`, authentic authority and exact
