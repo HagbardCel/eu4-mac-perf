@@ -28,15 +28,24 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from automation import (gfx_event_evidence, gfx_frame_compare,
-                        gfx_observation)  # noqa: E402
+                        gfx_independent_replay, gfx_observation,
+                        gfx_replay_case)  # noqa: E402
 
 SCHEMA = "gfx-uv2-probe/v1"
 COMPARISON_SCHEMA = "gfx-uv2-probe-comparison/v1"
 NEIGHBORHOOD_MAX = 4
 MAX_MASK_PIXELS = 4096
+EVENT1 = {"event": 1, "program": 310, "framebuffer": 6, "texture": 433}
+STAGES = ("fragment_coverage", "uv2", "texture_samples", "pre_conversion", "rgb8")
+FLOAT_STAGES = ("uv2", "texture_samples", "pre_conversion")
+CONTROL_PIXELS = 8
 
 
 class ProbeError(RuntimeError):
+    pass
+
+
+class MissingObservation(ProbeError):
     pass
 
 
@@ -117,7 +126,7 @@ def post_observation(trace: dict, event_index: int, resource: str) -> dict:
     for record in prefix.get("post_events") or []:
         if record.get("event") == event_index and record.get("resource") == resource:
             return record
-    raise ProbeError(
+    raise MissingObservation(
         f"the capture has no post-event observation for event {event_index} "
         f"({resource}); capture with --prefix-end")
 
@@ -352,6 +361,90 @@ def _json_number(value: float):
     return value if math.isfinite(value) else None
 
 
+def _float_components(gl_bits: dict, metal_bits: dict) -> dict:
+    gl_values = {name: _bits_float(bits) for name, bits in gl_bits.items()}
+    metal_values = {name: _bits_float(bits) for name, bits in metal_bits.items()}
+    finite = [name for name in gl_bits if math.isfinite(gl_values[name])
+              and math.isfinite(metal_values[name])]
+    return {
+        "gl_bits": {name: f"0x{bits:08x}" for name, bits in gl_bits.items()},
+        "metal_bits": {name: f"0x{bits:08x}" for name, bits in metal_bits.items()},
+        "gl_values": {name: _json_number(value) for name, value in gl_values.items()},
+        "metal_values": {name: _json_number(value)
+                         for name, value in metal_values.items()},
+        "signed_differences": {name: (metal_values[name] - gl_values[name]
+                                      if name in finite else None) for name in gl_bits},
+        "ulp_differences": {name: (_ulp(gl_bits[name], metal_bits[name])
+                                   if name in finite else None) for name in gl_bits},
+        "bit_equal": {name: gl_bits[name] == metal_bits[name] for name in gl_bits},
+    }
+
+
+def compare_stages(observations: dict, *, attribution: dict,
+                   provenance_valid: bool, origin: str = "lower_left") -> dict:
+    """Compare verified or explicitly conditional observations for one pixel.
+
+    Callers establish provenance before this projection. The stage walker
+    cannot establish attribution from numerical agreement or coverage flags.
+    """
+    if not provenance_valid or origin != "lower_left":
+        return {"status": "invalid_provenance", "stages": {}}
+    stages = {}
+    verified = attribution.get("verified") is True
+    coverage = observations.get("fragment_coverage", {})
+    original_fragment = coverage.get("opengl") or {}
+    same_fragment = (verified and original_fragment == coverage.get("metal")
+                     and original_fragment.get("covered") is True
+                     and original_fragment.get("primitive") is not None)
+    for stage in STAGES:
+        pair = observations.get(stage, {})
+        left, right = pair.get("opengl"), pair.get("metal")
+        if left is None or right is None:
+            stages[stage] = {"status": "missing_evidence",
+                             "missing": [side for side in ("opengl", "metal")
+                                         if pair.get(side) is None]}
+            continue
+        if not left or left.keys() != right.keys():
+            return {"status": "invalid_provenance", "stages": stages,
+                    "reason": f"{stage} components do not correspond"}
+        associated = verified if stage == "fragment_coverage" else same_fragment
+        observed = stage == "rgb8" or associated
+        values = (_float_components(left, right) if stage in FLOAT_STAGES else {
+            "gl_values": left, "metal_values": right,
+            "signed_differences": {name: int(right[name]) - int(value)
+                                   for name, value in left.items()},
+        })
+        status = "conditional"
+        if observed:
+            status = "exact" if left == right else "different"
+            if stage in FLOAT_STAGES and any(v is None for v in
+                                             values["ulp_differences"].values()):
+                status = "unsupported_value"
+        stages[stage] = {
+            "status": status,
+            "fragment_correspondence_verified": associated,
+            "kind": ({"opengl": "authentic", "metal": "candidate_observed"}
+                     if observed else {"opengl": "diagnostic", "metal": "diagnostic"}),
+            **values,
+        }
+    first = next((stage for stage in STAGES if stages[stage]["status"] == "different"),
+                 None)
+    pending = next((stage for stage in STAGES if stages[stage]["status"] != "exact"), None)
+    localized = first is not None and pending == first
+    if localized:
+        status = "different"
+    elif pending is None:
+        status = "exact_observed_stage_agreement"
+    elif stages[pending]["status"] != "missing_evidence":
+        status = "inconclusive"
+    else:
+        status = "missing_evidence"
+    return {"status": status, "first_observed_difference": first,
+            "first_differing_stage": first if localized else None,
+            "first_unresolved_stage": None if localized else pending,
+            "stages": stages}
+
+
 def fragment_attribution(state: dict | None) -> dict:
     """The isolated probes disable depth/blend and do not prove which fragment
     produced RGB8; attribution stays unverified without direct evidence."""
@@ -359,11 +452,15 @@ def fragment_attribution(state: dict | None) -> dict:
         state = {}
     problems = ["the isolated pass does not prove contributing-fragment identity",
                 "fragment-shader discard effects are not evaluated",
+                "the probe has no primitive or per-sample identity for overlapping fragments",
+                "isolated-pass coverage and attachment/sample behavior can differ",
+                "original GL fragment observations are absent from the frame seal",
                 "colour-mask and logic-op effects on fragment correspondence "
                 "are not evaluated"]
     for key, field, reason in (
-            ("blend", "enabled", "blending can select a different fragment"),
-            ("depth", "test", "depth test can reject or supersede a fragment"),
+            ("blend", "enabled", "blending can combine multiple fragments"),
+            ("depth", "test", "depth test and pre-draw depth contents "
+             "can reject or supersede a fragment"),
             ("alpha_test", "enabled", "alpha test can discard a fragment"),
             ("stencil", "test", "stencil test can reject a fragment")):
         setting = state.get(key)
@@ -386,40 +483,18 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
     if (width, height) != (metal["width"], metal["height"]):
         raise ProbeError("the OpenGL and Metal probe extents differ")
     mask_set = set(mask)
-    components = ["x", "y", "z", "w"]
+    components = ("x", "y", "z", "w")
     entries = []
+    attribution = fragment_attribution(state)
     for x, y in _neighborhood(mask, width, height, neighborhood):
-        gl_bits = _sample(gl, x, y)
-        metal_bits = _sample(metal, x, y)
-        gl_values = [_bits_float(bits) for bits in gl_bits]
-        metal_values = [_bits_float(bits) for bits in metal_bits]
-        bit_equal = {name: gl_bits[i] == metal_bits[i]
-                     for i, name in enumerate(components)}
-        signed = {}
-        for i, name in enumerate(components):
-            difference = metal_values[i] - gl_values[i]
-            signed[name] = (_json_number(difference)
-                            if math.isfinite(gl_values[i])
-                            and math.isfinite(metal_values[i]) else None)
-        entries.append({
-            "x": x, "y": y, "orientation": "lower_left",
-            "mask_pixel": (x, y) in mask_set,
-            "gl_bits": {name: f"0x{gl_bits[i]:08x}"
-                        for i, name in enumerate(components)},
-            "metal_bits": {name: f"0x{metal_bits[i]:08x}"
-                           for i, name in enumerate(components)},
-            "gl_values": {name: _json_number(gl_values[i])
-                          for i, name in enumerate(components)},
-            "metal_values": {name: _json_number(metal_values[i])
-                             for i, name in enumerate(components)},
-            "signed_differences": signed,
-            "ulp_differences": {name: _ulp(gl_bits[i], metal_bits[i])
-                                for i, name in enumerate(components)},
-            "bit_equal": bit_equal,
-            "all_components_bit_equal": all(bit_equal.values()),
-            "covered": {"gl": gl_bits[3] == 0x3F800000,
-                        "metal": metal_bits[3] == 0x3F800000},
-        })
+        left = dict(zip(components, _sample(gl, x, y)))
+        right = dict(zip(components, _sample(metal, x, y)))
+        values = _float_components(left, right)
+        covered = {"gl": left["w"] == 0x3F800000, "metal": right["w"] == 0x3F800000}
+        entry = {"x": x, "y": y, "orientation": "lower_left",
+                 "mask_pixel": (x, y) in mask_set, "covered": covered,
+                 **values, "all_components_bit_equal": left == right}
+        entries.append(entry)
     covered = [e for e in entries if e["mask_pixel"]
                and e["covered"]["gl"] and e["covered"]["metal"]]
     coverage = len(mask)
@@ -436,7 +511,6 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
         "original_shader_control": control.get("match") is True,
         "coverage_complete": complete,
     }
-    attribution = fragment_attribution(state)
     evidence_ok = all(evidence_checks.values())
     conclusive = evidence_ok and complete
     if conclusive:
@@ -450,7 +524,8 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
         status = "inconclusive_partial_coverage"
     else:
         status = "inconclusive_evidence"
-    ulps = [e["ulp_differences"][c] for e in covered for c in ("x", "y")]
+    ulps = [e["ulp_differences"][c] for e in covered for c in ("x", "y")
+            if e["ulp_differences"][c] is not None]
     signed_abs = [abs(e["signed_differences"][c]) for e in covered
                   for c in ("x", "y")
                   if e["signed_differences"][c] is not None]
@@ -463,7 +538,7 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
         "observed_mismatch": observed_mismatch,
         "all_selected_pixels_equal": all_equal,
         "xy_bit_for_bit_equal": all_equal if conclusive else None,
-        "max_ulp_difference_xy": max(ulps) if covered else None,
+        "max_ulp_difference_xy": max(ulps) if ulps else None,
         "max_abs_signed_difference_xy": max(signed_abs) if signed_abs else None,
     }
     return {
@@ -483,6 +558,7 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
             "numerical_comparison_conclusive": conclusive,
             "authenticated_original_gl_observation": False,
             "fragment_attribution_verified": attribution["verified"],
+            "first_unresolved_stage": "fragment_coverage",
             "classification": ("conditional_numerical_comparison"
                                if conclusive
                                else "unverified_diagnostic_observation"),
@@ -495,6 +571,8 @@ def compare(gl: dict, metal: dict, *, identity: dict, control: dict,
 def run(args: argparse.Namespace) -> dict:
     gl = load_probe(Path(args.gl))
     metal = load_probe(Path(args.metal))
+    if gl["side"] != "opengl" or metal["side"] != "metal":
+        raise ProbeError("probe side does not match --gl or --metal")
     event_index = gl["descriptor"].get("event")
     if metal["descriptor"].get("event") != event_index:
         raise ProbeError("the OpenGL and Metal probes name different events")
@@ -569,6 +647,112 @@ def run(args: argparse.Namespace) -> dict:
     return report
 
 
+def _event1_images(frame_dir: Path, trace: dict, event: dict) -> tuple[dict, dict]:
+    target = event.get("target") or {}
+    color = target.get("color_attachment") or {}
+    actual = {"event": event.get("index"), "program": (event.get("program") or {}).get("name"),
+              "framebuffer": target.get("framebuffer"), "texture": color.get("name")}
+    if actual != EVENT1 or color.get("level") != 0:
+        raise ProbeError("the sealed draw does not match the event-1 target")
+    post = post_observation(trace, 1, "tex:433")
+    scope = gfx_observation.format_scope(post)
+    if ((post.get("target") or {}).get("framebuffer") != 6
+            or post.get("origin") != "lower_left"
+            or not scope["supported"] or scope["compared_channels"] != "RGB"):
+        raise ProbeError("the seal does not name the event-1 RGB8 draw and attachment")
+    before = next((item for item in (trace.get("_prefix") or {}).get("post_events", [])
+                   if item.get("event") == 0 and item.get("resource") == "tex:433"
+                   and item.get("kind") == "clear" and item.get("origin") == "lower_left"
+                   and item.get("target") == post.get("target")), {})
+    return observation_image(frame_dir, post), before
+
+
+def _event1_checkpoint(replay_dir: Path, seal: dict, trace: dict,
+                       reference: dict, renderer_sha256: str | None) -> tuple[dict, dict]:
+    verified = gfx_replay_case.verify_replay_producer_receipt(replay_dir, seal)
+    if verified["status"] != "verified":
+        raise ProbeError("; ".join(verified["problems"]) or "missing producer receipt")
+    receipt = verified["receipt"]
+    if any(receipt["capture"].get(k) != seal.get(k) for k in
+           ("manifest_sha256", "reference_sha256")):
+        raise ProbeError("candidate receipt names a different sealed manifest or reference")
+    if receipt["producer"]["executable_sha256"] != renderer_sha256:
+        raise ProbeError("candidate renderer does not match the pinned executable digest")
+    body = (replay_dir / "replay.json").read_bytes()
+    if _sha256(body) != receipt["result"]["replay_json_sha256"]:
+        raise ProbeError("replay.json changed during verification")
+    replay = json.loads(body)
+    if (gfx_independent_replay.full_frame_completion_problems(replay)
+            or replay.get("events") != len(trace["_events"])):
+        raise ProbeError("candidate replay did not complete the sealed frame")
+    matches = [item for item in replay["checkpoints"]
+               if item.get("event") == 1 and item.get("resource") == "tex:433"
+               and item.get("timing") == "post_event"]
+    if len(matches) != 1:
+        raise ProbeError("candidate receipt must bind one post-event tex:433 checkpoint")
+    checkpoint = matches[0]
+    if (checkpoint.get("ok") is not True or checkpoint.get("target") != "433"
+            or checkpoint.get("pixel_format") != "BGRA8"
+            or checkpoint.get("origin", "lower_left") != "lower_left"
+            or checkpoint.get("reference_sha256") != reference["sha256"]
+            or any(checkpoint.get(k) != reference[k] for k in ("width", "height"))):
+        raise ProbeError("candidate checkpoint does not name the sealed RGB8 observation")
+    digest = next(item["sha256"] for item in receipt["result"]["checkpoint_files"]
+                  if item["file"] == checkpoint["file"])
+    return {"path": replay_dir / checkpoint["file"], "sha256": digest}, receipt["producer"]
+
+
+def localize(frame_dir: Path, replay_dir: Path | None = None, *,
+             renderer_sha256: str | None = None) -> dict:
+    """Read the existing event-1 artifacts without executing either renderer."""
+    report = {"schema": "gfx-event1-stage-localization/v1", "identity": dict(EVENT1),
+              "status": "invalid_provenance", "pixels": []}
+    try:
+        trace, seal, event = frame_context(frame_dir, 1)
+        if gfx_observation.authority(trace, seal) != "authentic":
+            raise ProbeError("the source seal does not contain authentic OpenGL evidence")
+        report["capture"] = gfx_independent_replay.capture_identity(seal, trace)
+        reference, before = _event1_images(frame_dir, trace, event)
+        report["fragment_attribution"] = attribution = fragment_attribution(event.get("state"))
+        report["next_observation"] = "contributing_fragment_identity_and_coverage"
+        report["first_unresolved_stage"] = "fragment_coverage"
+        report["opengl"] = {
+            "post_rgb8": {**reference, "path": str(reference["path"])},
+            "pre_color": before.get("color"), "pre_depth": before.get("depth"),
+        }
+        if replay_dir is None:
+            return {**report, "status": "missing_evidence",
+                    "missing": ["candidate_event1_rgb8", report["next_observation"]]}
+        image, producer = _event1_checkpoint(replay_dir, seal, trace, reference,
+                                             renderer_sha256)
+        width, height = reference["width"], reference["height"]
+        left = _image(reference["path"], reference["sha256"], width, height, "sealed RGB8")
+        right = _image(image["path"], image["sha256"], width, height, "candidate RGB8")
+        mask = _differences(left, right)
+        residuals = set(mask)
+        matched = [xy for xy in _neighborhood(mask, width, height, 1)
+                   if xy not in residuals][:CONTROL_PIXELS]
+        for x, y in mask + matched:
+            rgb = {side: dict(zip("RGB", map(int, array[height - 1 - y, x, :3])))
+                   for side, array in (("opengl", left), ("metal", right))}
+            report["pixels"].append({
+                "x": x, "y": y, "origin": "lower_left",
+                "selection": "residual" if (x, y) in residuals else "matched_control",
+                **compare_stages({"rgb8": rgb}, attribution=attribution,
+                                 provenance_valid=True),
+            })
+        report["candidate"] = {**producer, **image, "path": str(image["path"])}
+        report["mask_pixels"] = len(mask)
+        report["matched_control_pixels"] = len(matched)
+        report["status"] = "missing_evidence"
+    except MissingObservation as exc:
+        report.update(status="missing_evidence", missing=["original_event1_rgb8"],
+                      reason=str(exc))
+    except (ProbeError, OSError, ValueError) as exc:
+        report["reason"] = str(exc)
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(prog="gfx_uv2_probe")
@@ -579,7 +763,17 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--frame", required=True)
     command.add_argument("--neighborhood", type=int, default=1)
     command.add_argument("--out", default=None)
+    offline = sub.add_parser("localize", help="inspect sealed event-1 numerical evidence")
+    offline.add_argument("--frame", type=Path, required=True)
+    offline.add_argument("--replay", type=Path)
+    offline.add_argument("--renderer-sha256")
     args = parser.parse_args(argv)
+    if args.command == "localize":
+        if bool(args.replay) != bool(args.renderer_sha256):
+            parser.error("--replay and --renderer-sha256 must be supplied together")
+        report = localize(args.frame, args.replay, renderer_sha256=args.renderer_sha256)
+        print(json.dumps(report, indent=2, allow_nan=False))
+        return int(report["status"] == "invalid_provenance")
     if not 0 <= args.neighborhood <= NEIGHBORHOOD_MAX:
         parser.error("--neighborhood is out of range")
     try:
