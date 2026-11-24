@@ -8,6 +8,29 @@ The configured target comes from the campaign's acceptance command
 (`--target-end N`); this objective is shared by every successive prefix
 milestone.  The independent checker owns the verdict.
 
+## Starting evidence for the event-3 milestone
+
+Review `progress.md` and `analysis/m7/reports/event3-prefix-diagnosis.md` in the
+retained candidate first, especially the precise-math and depth experiments
+and the superseded interpretations in §25. Check renderer-source identity
+before reusing a receipt or deciding another validation is justified. The
+trusted candidate comparison first diverged at event 1. The separate merged
+PR #293 smoke replay in the infrastructure checkout
+(`.local/m7/pr293-metal-ch0ohkqj/metal/`) is standalone diagnostic evidence
+for the merged-main renderer. Keep its measurements tied to that renderer.
+
+Use `eu4_case_inspect` on the `tex:433` transition from the event-0 clear to
+the event-1 draw. Compare original observations and Metal evidence for the
+attachment format, state, channel precision, resource lineage and readback
+semantics. Use original-binary research when it can test a specific prediction.
+Treat dither, multisampling, UV interpolation and channel-local differences as
+hypotheses or observations until evidence discriminates their roles. State a
+falsifiable prediction before new GPU work and preserve negative results.
+After a supported correction and focused tests, use the trusted checker and
+continue through events 2 and 3 as the earlier prefix verifies. When an
+essential original-side observation is missing, identify it precisely for the
+operator and specify what a separately authorized capture would discriminate.
+
 ## Governance
 
 There is no replay, correction, validation or goal-round quota. Live EU4
