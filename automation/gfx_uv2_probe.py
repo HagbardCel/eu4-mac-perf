@@ -190,7 +190,13 @@ def _differences(left, right,
         raise ProbeError(
             f"divergent mask has {count} pixels; the diagnostic budget is "
             f"{limit}; refusing an unbounded report")
-    height = int(left.shape[0])
+    return _lower_left_pixels(mask)
+
+
+def _lower_left_pixels(mask) -> list[tuple[int, int]]:
+    import numpy as np
+
+    height = mask.shape[0]
     return [(int(x), height - 1 - int(y)) for y, x in np.argwhere(mask)]
 
 
@@ -941,7 +947,7 @@ def _read_bound_depth(frame_dir: Path, plane: dict | None) -> bytes | None:
 
 def _sparse_localization(report, frame_dir, replay_dir, trace, seal, event,
                          reference, before, replay, checkpoint_files, left, right,
-                         mask, matched):
+                         residual_mask, residual_count, matched):
     width, height = reference["width"], reference["height"]
     index_sha = (event.get("indices") or {}).get("sha256")
     gl, gl_rows = load_sparse(frame_dir, trace["uv2_fragments"], "opengl", seal,
@@ -978,13 +984,16 @@ def _sparse_localization(report, frame_dir, replay_dir, trace, seal, event,
     pre_depth, post_depth = (
         _read_bound_depth(frame_dir, plane) for plane in (before.get("depth"), post_plane))
     triangles = _sparse_state(event)
-    residuals, controls = set(mask), set(matched)
+    controls = set(matched)
+    selected_residuals = 0
     for x, y in gl["selection"]:
         if not (0 <= x < width and 0 <= y < height):
             report["pixels"].append({"x": x, "y": y, "origin": "lower_left",
                                      "status": "inconclusive",
                                      "reason": "coordinate_outside_target"})
             continue
+        is_residual = bool(residual_mask[height - 1 - y, x])
+        selected_residuals += is_residual
         rgb = {side: list(map(int, image[height - 1 - y, x, :3]))
                for side, image in (("opengl", left), ("metal", right))}
         prior = {side: list(map(int, image[height - 1 - y, x, :3]))
@@ -1014,7 +1023,7 @@ def _sparse_localization(report, frame_dir, replay_dir, trace, seal, event,
         }
         report["pixels"].append({
             "x": x, "y": y, "origin": "lower_left",
-            "selection": ("residual" if (x, y) in residuals else
+            "selection": ("residual" if is_residual else
                           "rgb_match_control" if (x, y) in controls else "saved_coordinate"),
             **comparison,
             "original_gl_depth": {"authority": "sealed_attachment", "float32_bits": original_depth},
@@ -1023,7 +1032,7 @@ def _sparse_localization(report, frame_dir, replay_dir, trace, seal, event,
     verified = sum(row.get("fragment_correspondence", {}).get("verified", False)
                    for row in report["pixels"])
     selected = len(gl["selection"])
-    outside = len(residuals - set(map(tuple, gl["selection"])))
+    outside = residual_count - selected_residuals
     all_selected_verified = verified == selected
     all_residuals_selected = outside == 0
     event_verified = all_selected_verified and all_residuals_selected
@@ -1126,22 +1135,31 @@ def localize(frame_dir: Path, replay_dir: Path | None = None, *,
         width, height = reference["width"], reference["height"]
         left = _image(reference["path"], reference["sha256"], width, height, "sealed RGB8")
         right = _image(image["path"], image["sha256"], width, height, "candidate RGB8")
-        mask = _differences(left, right)
+        sparse = "uv2_fragments" in trace
+        if sparse:
+            # Count the whole attachment even when the historical report limit
+            # prevents enumerating every divergent coordinate.
+            residual_mask = _diff_mask(left, right)
+            residual_count = int(residual_mask.sum())
+            mask = _lower_left_pixels(residual_mask) if residual_count <= MAX_MASK_PIXELS else []
+        else:
+            mask = _differences(left, right)
+            residual_count = len(mask)
         residuals = set(mask)
         matched = []
-        if pre_color is not None:
+        if pre_color is not None and mask:
             before_rgb = _image(pre_color["path"], pre_color["sha256"], width, height,
                                 "sealed predecessor RGB8")
             changed = _diff_mask(before_rgb, left)
             matched = [(x, y) for x, y in _neighborhood(mask, width, height, 1)
                        if (x, y) not in residuals and changed[height - 1 - y, x]][:CONTROL_PIXELS]
         report["candidate"] = {**producer, **image, "path": str(image["path"])}
-        report["mask_pixels"] = len(mask)
+        report["mask_pixels"] = residual_count
         report["matched_control_pixels"] = len(matched)
-        if "uv2_fragments" in trace:
+        if sparse:
             report["status"] = _sparse_localization(
                 report, frame_dir, replay_dir, trace, seal, event, reference, before,
-                replay, checkpoint_files, left, right, mask, matched)
+                replay, checkpoint_files, left, right, residual_mask, residual_count, matched)
             return report
         for x, y in mask + matched:
             rgb = {side: dict(zip("RGB", map(int, array[height - 1 - y, x, :3])))

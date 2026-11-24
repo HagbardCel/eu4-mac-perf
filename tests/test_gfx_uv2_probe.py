@@ -650,6 +650,17 @@ class Event1ArtifactLocalizationTests(unittest.TestCase):
         self.assertEqual(report["next_observation"],
                          "fragment_correspondence_at_unobserved_residuals")
 
+    def test_large_residual_mask_keeps_sparse_results_and_counts_unselected_pixels(self):
+        self.setup_sparse()
+        self.set_candidate_blue(2, 3, 3)
+        self.publish_sparse()
+        with mock.patch.object(gfx_uv2_probe, "MAX_MASK_PIXELS", 1):
+            report = self.localize()
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertEqual(report["mask_pixels"], 2)
+        self.assertEqual(report["sparse_observations"]["fresh_residuals_outside_selection"], 1)
+        self.assertTrue(report["pixels"][0]["fragment_correspondence"]["verified"])
+
     def test_every_residual_in_a_multi_pixel_selection_can_verify(self):
         self.setup_sparse()
         self.set_candidate_blue(2, 3, 3)

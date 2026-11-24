@@ -291,7 +291,8 @@ per-side writer decisions and corresponding fragment identity for each selected
 pixel. Event-level attribution requires every selected coordinate to verify
 and the selection to cover every current RGB residual. A positive
 `fresh_residuals_outside_selection` blocks the event-level result, even when
-all selected coordinates verify.
+all selected coordinates verify. Sparse reports count the full mask even
+when it exceeds the historical per-pixel report budget.
 
 The observation can narrow the numerical hypotheses. A corresponding
 UV2 difference in the instrumented variants motivates examination of vertex
