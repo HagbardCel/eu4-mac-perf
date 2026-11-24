@@ -2766,14 +2766,26 @@ def diagnosis_exit_code(report: dict) -> int:
 
 def _minimal_diagnosis(frame_dir: Path, metal_dir: Path, *, message: str,
                        classification: str) -> dict:
+    capture_validity = {"incomplete_capture": "incomplete",
+                        "incomplete_diagnostics": "valid",
+                        "gpu_execution_failure": "valid"}.get(
+                            classification, "invalid")
+    execution = "failed" if classification == "gpu_execution_failure" else "missing"
+    classification, qualification = classify_diagnosis(
+        capture_validity=capture_validity, identity="unknown", execution=execution,
+        provenance="incomplete", operation_coverage="incomplete",
+        state_cov="invalid", pixels="unavailable", divergence="inconclusive",
+        checkpoint_validation={"status": "incomplete"})
     value = {
         "schema": DIAGNOSIS_SCHEMA,
         "frame_dir": str(frame_dir),
         "metal_result_dir": str(metal_dir),
         "status": classification,
-        "capture": {"validity": "invalid", "error": message},
+        "classification": classification,
+        "qualification": qualification,
+        "capture": {"validity": capture_validity, "error": message},
         "identity": {"status": "unknown", "problems": [message]},
-        "execution": {"status": "missing"},
+        "execution": {"status": execution},
         "provenance": {"status": "incomplete"},
         "operation_coverage": {"status": "incomplete"},
         "state_coverage": {"status": "invalid"},
@@ -2789,49 +2801,34 @@ def _minimal_diagnosis(frame_dir: Path, metal_dir: Path, *, message: str,
             "reason": message,
         },
     }
-    if classification == "incomplete_diagnostics":
-        value["capture"] = {"validity": "valid", "error": message}
-        classification_value, qualification = classify_diagnosis(
-            capture_validity="valid",
-            identity="unknown",
-            execution="missing",
-            provenance="incomplete",
-            operation_coverage="incomplete",
-            state_cov="invalid",
-            pixels="unavailable",
-            divergence="inconclusive",
-            checkpoint_validation={"status": "incomplete"},
-        )
-    elif classification == "incomplete_capture":
-        value["capture"] = {"validity": "incomplete", "error": message}
-        classification_value, qualification = classify_diagnosis(
-            capture_validity="incomplete",
-            identity="unknown",
-            execution="missing",
-            provenance="incomplete",
-            operation_coverage="incomplete",
-            state_cov="invalid",
-            pixels="unavailable",
-            divergence="inconclusive",
-            checkpoint_validation={"status": "incomplete"},
-        )
-    else:
-        value["capture"] = {"validity": "invalid", "error": message}
-        classification_value, qualification = classify_diagnosis(
-            capture_validity="invalid",
-            identity="unknown",
-            execution="missing",
-            provenance="incomplete",
-            operation_coverage="incomplete",
-            state_cov="invalid",
-            pixels="unavailable",
-            divergence="inconclusive",
-            checkpoint_validation={"status": "incomplete"},
-        )
-    value["status"] = classification
-    value["classification"] = classification_value
-    value["qualification"] = qualification
     return value
+
+
+def _load_reference(frame_dir: Path, trace: dict | None = None
+                    ) -> tuple[dict, dict | None, dict | None]:
+    from automation import gfx_prefix_check
+
+    try:
+        trusted = gfx_prefix_check.verify_adjacent_trusted_evidence(frame_dir)
+    except gfx_prefix_check.PrefixCheckError as exc:
+        raise ReplayError("invalid_provenance", str(exc)) from exc
+    if trace is None:
+        try:
+            trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
+        except m6_frame.FrameError as exc:
+            kind = ("invalid_provenance" if trusted is not None
+                    or _capture_error_class(str(exc)) == "invalid"
+                    else "incomplete_capture")
+            raise ReplayError(kind, str(exc)) from exc
+    seal = None
+    seal_path = frame_dir / "frame-seal.json"
+    if trusted is not None or seal_path.exists() or seal_path.is_symlink():
+        try:
+            seal = m6_frame.load_seal(frame_dir, trace=trace,
+                                      trusted_evidence=trusted)
+        except m6_frame.FrameError as exc:
+            raise ReplayError("invalid_provenance", f"frame seal: {exc}") from exc
+    return trace, seal, trusted
 
 
 def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
@@ -2841,7 +2838,9 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
                   request_source: str | None = None,
                   require_seal: bool = False,
                   shaders: Path | str | None = None,
-                  faults: dict | None = None) -> dict:
+                  faults: dict | None = None,
+                  host_returncode: int | None = None,
+                  receipt_error: str | None = None) -> dict:
     """Diagnose already-produced Metal results without executing Metal again.
 
     This is the reusable analysis half of :func:`replay`.  It validates the
@@ -2863,31 +2862,27 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
                 state_evidence[str(item["state"])] = item
     state_evidence.update(_state_evidence(frame_dir))
 
-    if trace is None:
+    trusted = None
+    if trace is None or (seal is None and graph is None):
         try:
-            trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
-        except m6_frame.FrameError as exc:
-            classification = ("invalid_provenance"
-                              if _capture_error_class(str(exc)) == "invalid"
-                              else "incomplete_capture")
-            return _minimal_diagnosis(frame_dir, metal_dir, message=str(exc),
-                                      classification=classification)
-    seal_error = None
-    if seal is None:
-        seal_path = frame_dir / "frame-seal.json"
-        if seal_path.is_file():
-            try:
-                seal = m6_frame.load_seal(frame_dir, trace=trace)
-            except m6_frame.FrameError as exc:
-                seal_error = str(exc)
+            trace, seal, trusted = _load_reference(frame_dir, trace)
+        except ReplayError as exc:
+            return _minimal_diagnosis(frame_dir, metal_dir, message=exc.detail,
+                                      classification=exc.kind)
     if graph is None:
-        graph = gfx_frame_graph.build(frame_dir, trace=trace)
+        graph = gfx_frame_graph.build(frame_dir, trace=trace,
+                                      trusted_evidence=trusted)
+    if graph.get("status") == "invalid":
+        return _minimal_diagnosis(
+            frame_dir, metal_dir, classification="invalid_provenance",
+            message="; ".join(graph.get("reasons") or ["invalid frame graph"]))
     replay = _optional_json(metal_dir / "replay.json")
     if replay is None:
         value = _minimal_diagnosis(
             frame_dir, metal_dir,
             message="Metal result directory has no replay.json",
-            classification="incomplete_diagnostics")
+            classification=("incomplete_diagnostics" if host_returncode is None
+                            else "gpu_execution_failure"))
         value["capture"] = {
             "validity": "valid",
             "graph_status": graph.get("status"),
@@ -2916,10 +2911,6 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
             identity, status="unverified_session",
             problems=list(identity.get("problems") or []) + [
                 "shader receipt has no frame seal to verify"])
-    if seal_error:
-        identity = dict(identity, status="mismatch",
-                        problems=list(identity.get("problems") or [])
-                        + [f"frame seal: {seal_error}"])
     evaluation = gfx_frame_graph.evaluate_replay(graph, replay)
     if request_problems:
         plan = request.get("checkpoints")
@@ -3017,7 +3008,8 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     command_status = replay.get("command_status")
     readback = bool(replay.get("readback"))
     execution_ok = (
-        replay.get("status") == "ok"
+        host_returncode in (None, 0)
+        and replay.get("status") == "ok"
         and isinstance(encoded, int) and isinstance(replay.get("events"), int)
         and encoded == replay.get("events")
         and failed == 0
@@ -3057,8 +3049,6 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         capture_validity = "incomplete"
     else:
         capture_validity = "valid"
-    if seal_error:
-        capture_validity = "invalid"
     if identity.get("status") == "mismatch":
         capture_validity = "invalid"
     if final.get("status") not in ("match", "divergent"):
@@ -3066,6 +3056,8 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     else:
         pixels = final["status"]
     provenance = _provenance_axis(evaluation)
+    if receipt_error is not None:
+        provenance = dict(provenance, status="invalid", error=receipt_error)
     classification, qualification = classify_diagnosis(
         capture_validity=capture_validity,
         identity=str(identity.get("status")),
@@ -3105,9 +3097,8 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
             "validity": capture_validity,
             "identity": capture,
             "seal": {
-                "status": "verified" if seal is not None and not seal_error
-                else ("invalid" if seal_error else "absent"),
-                "error": seal_error,
+                "status": "verified" if seal is not None else "absent",
+                "error": None,
                 "path": str(frame_dir / "frame-seal.json"),
             },
             "graph_status": graph_status,
@@ -3572,6 +3563,8 @@ def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
     fault_injection = bool(faults)
     invalid_verdict = (
         not execution_ok
+        or identity == "mismatch" or capture_validity == "invalid"
+        or provenance == "invalid"
         or coverage not in ("complete", "partial")
         or pixels not in ("match", "divergent")
         or semantic not in ("match", "divergent")
@@ -3630,6 +3623,9 @@ def qualification_exit_code(report: dict) -> int:
     1  invalid execution, invalid checkpoint evidence or unusable report
     """
     outcome = report.get("outcome") or {}
+    canonical = classification_outcome(report) if report.get("classification") else {}
+    if canonical.get("diagnostic") in ("invalid", "failed"):
+        return 1
     execution = outcome.get("execution")
     if execution != "ok":
         return 1
@@ -3643,7 +3639,7 @@ def qualification_exit_code(report: dict) -> int:
         return 1
     if outcome.get("state_coverage") not in ("complete", "partial"):
         return 1
-    if outcome.get("qualified"):
+    if outcome.get("qualified") and canonical.get("qualified", True):
         return 0
     if outcome.get("fault_injection"):
         return 3
@@ -3677,32 +3673,34 @@ def classification_outcome(report: dict) -> dict:
     The projection never infers qualification from the legacy replay status.
     A completed comparison is a completed diagnostic even when it reports a
     difference; only execution/evidence failures are tool failures.  Fault
-    experiments remain explicit and non-qualifying.
+    experiments remain explicit and non-qualifying. A returned report means
+    the tool ran; the Metal host's outcome is in ``axes.gpu_execution``.
     """
     classification = str(report.get("classification")
                          or report.get("status") or "")
     qualification = report.get("qualification") or {}
     axes = qualification.get("axes") or {}
     if classification == "fault_experiment":
-        execution, diagnostic, verdict, evidence, qualified = (
+        status, diagnostic, verdict, evidence, qualified = (
             "ok", "partial", None, "valid", False)
         verdict = ("different" if axes.get("pixel_comparison") == "divergent"
                    else "unverified")
         base = str(axes.get("base_classification") or "")
         if base in ("incomplete_capture", "incomplete_diagnostics"):
-            execution, diagnostic, verdict, evidence = (
+            status, diagnostic, verdict, evidence = (
                 "incomplete", "incomplete", None, "unverified")
     elif classification in _OUTCOME_BY_CLASSIFICATION:
-        execution, diagnostic, verdict, evidence, qualified = (
+        status, diagnostic, verdict, evidence, qualified = (
             _OUTCOME_BY_CLASSIFICATION[classification])
     else:
         # Unknown/future classifications fail closed: they are not a
         # successful comparison and cannot be promoted to equivalence.
-        execution, diagnostic, verdict, evidence, qualified = (
+        status, diagnostic, verdict, evidence, qualified = (
             "incomplete", "incomplete", None, "unverified", False)
     return {
         "classification": classification or None,
-        "execution": execution,
+        "status": status,
+        "execution": "ok",
         "diagnostic": diagnostic,
         "diagnostic_complete": diagnostic == "complete",
         "verdict": verdict,
@@ -3761,10 +3759,13 @@ def diagnose_main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
     qualification = report.get("qualification") or {}
+    diagnostic_outcome = classification_outcome(report)
     print(json.dumps({
         "schema": report.get("schema"),
         "status": report.get("status"),
         "classification": report.get("classification"),
+        "outcome": diagnostic_outcome,
+        "diagnostic_outcome": diagnostic_outcome,
         "axes": qualification.get("axes"),
         "first_divergence": {
             "kind": (report.get("first_divergence") or {}).get("kind"),
@@ -3812,10 +3813,15 @@ def main(argv: list[str] | None = None) -> int:
     except ReplayError as exc:
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
+    outcome = report.get("outcome")
+    diagnostic_outcome = classification_outcome(report)
     print(json.dumps({
         "status": report.get("status"),
-        "outcome": report.get("outcome"),
-        "qualified": (report.get("outcome") or {}).get("qualified"),
+        "classification": report.get("classification"),
+        # Preserve the standalone CLI's Metal execution and qualification fields.
+        "outcome": outcome,
+        "diagnostic_outcome": diagnostic_outcome,
+        "qualified": (outcome or {}).get("qualified") and diagnostic_outcome["qualified"],
         "graph": (report.get("graph") or {}).get("status"),
         "evaluation": (report.get("evaluation") or {}).get("status"),
         "final": (report.get("final") or {}).get("status"),
@@ -4232,8 +4238,6 @@ def _replay_locked(
 
     frame_dir = Path(frame_dir).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
-    shader_dir = _shader_dir(frame_dir, shaders)
-    out_dir = prepare_replay_output(out_dir, [frame_dir, shader_dir])
     with launch_lease.gpu_execution():
         try:
             campaign_guard.require_active_from_env()
@@ -4241,20 +4245,40 @@ def _replay_locked(
             raise ReplayError("campaign_refused",
                               f"{exc.kind}: {exc.detail}") from exc
         return _replay_locked_serialized(
-            frame_dir, out_dir, shader_dir, faults=faults, policy=policy,
+            frame_dir, out_dir, shaders, faults=faults, policy=policy,
             timeout=timeout)
 
 
 def _replay_locked_serialized(
     frame_dir: Path,
     out_dir: Path,
-    shader_dir: Path,
+    shaders: Path | str | None,
     *,
     faults: dict | None = None,
     policy: Path | str | None = None,
     timeout: float = 1800.0,
 ) -> dict:
-    graph = gfx_frame_graph.build(frame_dir)
+    try:
+        trace, seal, trusted = _load_reference(frame_dir)
+        graph = gfx_frame_graph.build(frame_dir, trace=trace,
+                                      trusted_evidence=trusted)
+        if graph.get("status") == "invalid":
+            raise ReplayError("invalid_provenance", "; ".join(
+                graph.get("reasons") or ["invalid frame graph"]))
+    except ReplayError as exc:
+        shader_input = (Path(shaders) if shaders is not None
+                        else frame_dir.parent / "translated")
+        out_dir = prepare_replay_output(out_dir, [frame_dir, shader_input])
+        diagnosis = _minimal_diagnosis(frame_dir, out_dir, message=exc.detail,
+                                      classification=exc.kind)
+        return _write_replay_report(out_dir, {
+            "schema": SCHEMA, "frame_dir": str(frame_dir), "out_dir": str(out_dir),
+            "status": "invalid", "classification": diagnosis["classification"],
+            "qualification": diagnosis["qualification"], "diagnosis": diagnosis,
+            "first_divergence": diagnosis["first_divergence"],
+        })
+    shader_dir = _shader_dir(frame_dir, shaders)
+    out_dir = prepare_replay_output(out_dir, [frame_dir, shader_dir])
     request = gfx_frame_graph.write_checkpoint_request(
         graph, out_dir / "checkpoint-request.json")
     host = m6_frame.build_replay_host()
@@ -4303,56 +4327,10 @@ def _replay_locked_serialized(
             snapshot.unlink()
         except FileNotFoundError:
             pass
-    if receipt_error is not None:
-        diagnosis = analyse_frame(
-            frame_dir, out_dir, policy, graph=graph, request=request,
-            request_source="published", faults=faults)
-        report = {
-            "schema": SCHEMA,
-            "frame_dir": str(frame_dir),
-            "out_dir": str(out_dir),
-            "status": "invalid",
-            "receipt_error": receipt_error,
-            "faults": faults,
-            "command": command,
-            "returncode": ran.returncode,
-            "stderr": (ran.stderr or "")[-4000:],
-            "graph": graph,
-            "diagnosis": diagnosis,
-            "classification": diagnosis.get("classification"),
-            "qualification": diagnosis.get("qualification"),
-            "first_divergence": diagnosis.get("first_divergence"),
-            "execution": diagnosis.get("execution"),
-        }
-        (out_dir / "replay-report.json").write_text(
-            json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        return report
-    if ran.returncode != 0 or not result_path.is_file():
-        diagnosis = analyse_frame(
-            frame_dir, out_dir, policy, graph=graph, request=request,
-            request_source="published", faults=faults)
-        report = {
-            "schema": SCHEMA,
-            "frame_dir": str(frame_dir),
-            "out_dir": str(out_dir),
-            "status": "invalid",
-            "faults": faults,
-            "command": command,
-            "returncode": ran.returncode,
-            "stderr": (ran.stderr or "")[-4000:],
-            "graph": graph,
-            "diagnosis": diagnosis,
-            "classification": diagnosis.get("classification"),
-            "qualification": diagnosis.get("qualification"),
-            "first_divergence": diagnosis.get("first_divergence"),
-            "execution": diagnosis.get("execution"),
-        }
-        (out_dir / "replay-report.json").write_text(
-            json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        return report
     diagnosis = analyse_frame(
-        frame_dir, out_dir, policy, graph=graph, request=request,
-        request_source="published", faults=faults)
+        frame_dir, out_dir, policy, trace=trace, seal=seal, graph=graph,
+        request=request, request_source="published", faults=faults,
+        host_returncode=ran.returncode, receipt_error=receipt_error)
     replay_result = _optional_json(result_path) or {}
     evaluation = diagnosis.get("evaluation") or {}
     checkpoints = diagnosis.get("checkpoints") or []
@@ -4383,6 +4361,8 @@ def _replay_locked_serialized(
         "out_dir": str(out_dir),
         "status": status,
         "outcome": outcome,
+        "receipt_error": receipt_error,
+        "execution": diagnosis.get("execution"),
         "command": command,
         "returncode": ran.returncode,
         "stderr": (ran.stderr or "")[-4000:],
@@ -4413,6 +4393,10 @@ def _replay_locked_serialized(
             "producer_receipt": str(out_dir / "producer-receipt.json"),
         },
     }
+    return _write_replay_report(out_dir, report)
+
+
+def _write_replay_report(out_dir: Path, report: dict) -> dict:
     (out_dir / "replay-report.json").write_text(
         json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report

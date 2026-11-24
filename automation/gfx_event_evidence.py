@@ -42,23 +42,17 @@ def _optional_json(path: Path) -> dict:
 
 
 def _load_frame(frame_dir: Path):
+    try:
+        trusted = gfx_prefix_check.verify_adjacent_trusted_evidence(frame_dir)
+    except gfx_prefix_check.PrefixCheckError as exc:
+        raise EventEvidenceError("invalid_trusted_evidence", str(exc)) from exc
     trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
-    record = frame_dir.parent / "trusted-evidence.json"
-    trusted = None
-    if record.is_file():
-        from automation import gfx_prefix_check
-        try:
-            trusted = gfx_prefix_check.verify_trusted_evidence(
-                frame_dir.parent, frame_dir)
-        except Exception as exc:  # noqa: BLE001 - report, never promote
-            raise EventEvidenceError("invalid_trusted_evidence",
-                                     f"{record}: {exc}") from exc
     trace["_trusted_evidence"] = trusted
     try:
         seal = m6_frame.load_seal(frame_dir, trace=trace,
                                   trusted_evidence=trusted)
     except m6_frame.FrameError as exc:
-        if (frame_dir / "frame-seal.json").is_file():
+        if trusted is not None or (frame_dir / "frame-seal.json").is_file():
             raise EventEvidenceError("invalid_seal",
                                      f"{frame_dir}: {exc}") from exc
         seal = None

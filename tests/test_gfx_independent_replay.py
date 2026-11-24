@@ -7,8 +7,11 @@ describe that exact resolved environment, not the caller's ambient one.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -21,7 +24,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_independent_replay  # noqa: E402
+from automation import (agent_tools, campaign_guard, gfx_independent_replay,  # noqa: E402
+                        gfx_prefix_check)
 from tests.test_m7_diagnosis import DiagnosisFixture  # noqa: E402
 
 
@@ -171,6 +175,7 @@ class ProducerReceiptEnvironmentTests(unittest.TestCase):
             "first_divergence": None,
         }
         with mock.patch.dict(os.environ, ambient, clear=True), \
+                mock.patch.object(campaign_guard, "require_active_from_env"), \
                 mock.patch.object(
                     gfx_independent_replay.m6_frame, "build_replay_host",
                     return_value=Path("/tmp/fake-replay")), \
@@ -216,8 +221,192 @@ class ProducerReceiptEnvironmentTests(unittest.TestCase):
         self.assertNotEqual(recipe["sha256"], alternative["sha256"])
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TrustedReferenceTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.fixture = DiagnosisFixture(self.root / "original")
+        self.enterContext(mock.patch.object(campaign_guard, "require_active_from_env"))
+        self.trusted = self.root / "trusted"
+        self.record = self.trusted / "trusted-evidence.json"
+        self.frame = self.trusted / "frame"
+        gfx_prefix_check.prepare_trusted_evidence(
+            self.fixture.frame, self.trusted, read_only=False)
+
+    def analyse(self, frame):
+        return gfx_independent_replay.analyse_frame(frame, self.fixture.metal)
+
+    def change_record(self, **changes):
+        value = json.loads(self.record.read_text())
+        self.record.write_text(json.dumps(dict(value, **changes)))
+
+    def test_original_and_verified_copy_keep_the_same_capture_authority(self):
+        original = self.analyse(self.fixture.frame)
+        verify = gfx_prefix_check.verify_trusted_evidence
+        with mock.patch.object(gfx_prefix_check, "verify_trusted_evidence",
+                               wraps=verify) as checked:
+            copied = self.analyse(self.frame)
+        checked.assert_called_once_with(self.trusted.resolve(), self.frame.resolve())
+        self.assertEqual(original["classification"], "qualified_match")
+        self.assertEqual(copied["classification"], original["classification"])
+        self.assertEqual(copied["capture"]["identity"], original["capture"]["identity"])
+        self.assertEqual(copied["graph"]["capture"]["source"], "seal")
+
+    def test_invalid_trusted_reference_rejected_by_diagnosis_and_replay(self):
+        original_record = self.record.read_bytes()
+        blob = next((self.frame / "blobs").iterdir())
+        payload = blob.read_bytes()
+        for scenario, reason in (
+            ("tampered", "file manifest changed"),
+            ("missing", "capture directory does not match"),
+            ("other_frame", "not the trusted-evidence frame"),
+            ("wrong_original", "does not name the sealed capture directory"),
+            ("malformed", "unreadable JSON"),
+        ):
+            with self.subTest(scenario=scenario):
+                self.record.write_bytes(original_record)
+                blob.write_bytes(payload)
+                if scenario == "tampered":
+                    blob.write_bytes(payload + b"invalid")
+                elif scenario == "missing":
+                    self.record.unlink()
+                elif scenario == "other_frame":
+                    self.change_record(frame_path=str(self.fixture.frame))
+                elif scenario == "wrong_original":
+                    self.change_record(original_capture_dir=str(self.root))
+                else:
+                    self.record.write_text("broken")
+                diagnosis = self.analyse(self.frame)
+                self.assertEqual(diagnosis["classification"], "invalid_provenance")
+                self.assertIn(reason, diagnosis["capture"]["error"])
+                with mock.patch.object(gfx_independent_replay.m6_frame,
+                                       "build_replay_host") as build_host:
+                    replay = gfx_independent_replay.replay(
+                        self.frame, self.root / scenario)
+                build_host.assert_not_called()
+                self.assertEqual(replay["classification"], diagnosis["classification"])
+                self.assertFalse(replay["qualification"]["qualified"])
+                self.assertFalse((self.root / scenario / "metal-frame.bgra").exists())
+
+    def test_unsealed_fixture_keeps_its_classification(self):
+        (self.fixture.frame / "frame-seal.json").unlink()
+        (self.fixture.metal / "shadow-report.json").unlink()
+        diagnosis = self.analyse(self.fixture.frame)
+        self.assertEqual(diagnosis["identity"]["status"], "unsealed")
+        self.assertEqual(diagnosis["classification"], "incomplete_diagnostics")
+
+    def test_standalone_replay_keeps_legacy_outcome_and_reports_diagnostic(self):
+        verify = gfx_prefix_check.verify_trusted_evidence
+        replay = gfx_independent_replay
+        host = self.root / "replay-host"
+        rationale = json.dumps({
+            "question": "Do replay CLI statuses retain their meaning?",
+            "evidence": [str(self.record)],
+            "gap": "CLI replay presentation was changed",
+            "hypothesis": "The legacy and diagnostic outcomes stay independent",
+            "action": "Run replay with fixture host output",
+            "expected_information": "Legacy exit and both outcome fields",
+            "cheaper_alternatives_checked": True,
+        })
+
+        def fake_run(command, **kwargs):
+            output = Path(command[command.index("--out") + 1])
+            if scenario != "missing_output":
+                for artifact in self.fixture.metal.iterdir():
+                    if artifact.name != "checkpoint-request.json":
+                        shutil.copyfile(artifact, output / artifact.name)
+            if scenario == "invalid_receipt":
+                result = json.loads((output / "replay.json").read_text())
+                (output / result["checkpoints"][0]["file"]).unlink()
+            return subprocess.CompletedProcess(command, int(scenario == "host_failed"))
+
+        for scenario, exit_code, status, execution, diagnostic, classification in (
+            ("match", 0, "qualified", "ok", "complete", "qualified_match"),
+            ("difference", 2, "confirmed_rendering_difference", "ok", "complete",
+             "qualified_difference"),
+            ("host_failed", 1, "invalid", "failed", "failed", "gpu_execution_failure"),
+            ("missing_output", 1, "invalid", "failed", "failed", "gpu_execution_failure"),
+            ("invalid_receipt", 1, "invalid", "ok", "invalid", "invalid_provenance"),
+            ("fault", 3, "partial", "ok", "partial", "fault_experiment"),
+        ):
+            with self.subTest(scenario=scenario):
+                if scenario == "difference":
+                    self.fixture.alter_candidate()
+                else:
+                    self.fixture.write_metal()
+                out = self.root / scenario
+                args = ["--frame", str(self.frame), "--out", str(out),
+                        "--shaders", str(self.fixture.shaders), "--rationale", rationale]
+                if scenario == "fault":
+                    args.append("--disable-render-target-vflip")
+                stdout = io.StringIO()
+                with mock.patch.object(gfx_prefix_check, "verify_trusted_evidence",
+                                       wraps=verify) as checked, \
+                        mock.patch.object(replay.m6_frame, "build_replay_host"), \
+                        mock.patch.object(replay.m6_frame, "snapshot_replay_host",
+                                          return_value=(host, {})), \
+                        mock.patch.object(replay.subprocess, "run", side_effect=fake_run), \
+                        contextlib.redirect_stdout(stdout):
+                    self.assertEqual(replay.main(args), exit_code)
+                checked.assert_called_once()
+                result = json.loads(stdout.getvalue())
+                report = json.loads((out / "replay-report.json").read_text())
+                self.assertEqual(result["outcome"], report["outcome"])
+                self.assertEqual(result["outcome"]["execution"], execution)
+                self.assertEqual(result["status"], status)
+                self.assertEqual(result["classification"], classification)
+                self.assertIs(result["qualified"], scenario == "match")
+                canonical = result["diagnostic_outcome"]
+                self.assertEqual(canonical["execution"], "ok")
+                self.assertEqual(canonical["diagnostic"], diagnostic)
+                self.assertEqual(canonical["axes"]["capture_validity"], "valid")
+                self.assertEqual(canonical["axes"]["gpu_execution"], execution)
+                if scenario == "host_failed":
+                    self.assertTrue((out / "metal-frame.bgra").is_file())
+                if scenario == "invalid_receipt":
+                    self.assertIn("invalid_checkpoint_binding", report["receipt_error"])
+                    self.assertFalse((out / "producer-receipt.json").exists())
+
+    def test_minimal_diagnoses_share_the_qualification_classification(self):
+        for classification, validity in (
+            ("invalid_provenance", "invalid"),
+            ("incomplete_capture", "incomplete"),
+            ("incomplete_diagnostics", "valid"),
+            ("gpu_execution_failure", "valid"),
+        ):
+            with self.subTest(classification=classification):
+                report = gfx_independent_replay._minimal_diagnosis(
+                    self.frame, self.fixture.metal, message="original reason",
+                    classification=classification)
+                self.assertEqual(report["classification"], classification)
+                self.assertEqual(report["qualification"]["classification"], classification)
+                self.assertEqual(report["capture"], {"validity": validity,
+                                                     "error": "original reason"})
+                self.assertEqual(report["first_divergence"]["reason"], "original reason")
+
+    def test_completed_difference_agrees_in_core_cli_and_tool_envelope(self):
+        self.fixture.alter_candidate()
+        report = self.analyse(self.frame)
+        core = gfx_independent_replay.classification_outcome(report)
+        args = ["--frame", str(self.frame), "--metal", str(self.fixture.metal)]
+        cli = io.StringIO()
+        with contextlib.redirect_stdout(cli):
+            cli_code = gfx_independent_replay.diagnose_main(
+                [*args, "--out", str(self.root / "cli")])
+        tool = io.StringIO()
+        with contextlib.redirect_stdout(tool):
+            tool_code = agent_tools.main([
+                "eu4_replay", "diagnose", *args, "--out", str(self.root / "tool")])
+        self.assertEqual(cli_code, 2)
+        self.assertEqual(tool_code, 0)
+        expected = {"execution": "ok", "diagnostic": "complete", "evidence": "valid",
+                    "verdict": "different", "qualified": False}
+        cli_result = json.loads(cli.getvalue())
+        self.assertEqual(cli_result["outcome"], cli_result["diagnostic_outcome"])
+        for outcome in (core, cli_result["diagnostic_outcome"],
+                        json.loads(tool.getvalue())["outcome"]):
+            self.assertEqual({key: outcome[key] for key in expected}, expected)
 
 class R32FComparisonTests(unittest.TestCase):
     def test_negative_float_ulp_distance_is_ordered(self):
@@ -257,3 +446,7 @@ class R32FComparisonTests(unittest.TestCase):
         self.assertGreater(different["max_ulp_error"], 0)
         self.assertEqual(different["max_channel_error"], 0)
         self.assertEqual(different["alpha_different_pixels"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

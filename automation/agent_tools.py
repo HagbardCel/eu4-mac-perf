@@ -241,6 +241,9 @@ def _classify_failure(status: str, reason: str, diagnostic: str,
                     "detail": reason or "a required dependency is unavailable"}
         return {"kind": "unavailable", "class": "blocker",
                 "detail": reason or "the operation is unavailable"}
+    if status == "incomplete" and diagnostic in ("incomplete", "unverified"):
+        return {"kind": "evidence_missing", "class": "blocker",
+                "detail": reason or "required evidence is unverified or missing"}
     if nested == "incomplete" or diagnostic in ("incomplete", "unverified"):
         return {"kind": "evidence_invalid", "class": "failure",
                 "detail": reason or "evidence did not qualify"}
@@ -2533,8 +2536,7 @@ def _diagnosis_outcome(report: dict, *, verification_ok: bool = True,
     if not reproduction_complete:
         return "incomplete", "incomplete", None, "unverified", False
     canonical = gfx_independent_replay.classification_outcome(report)
-    execution = canonical["execution"]
-    status = "ok" if execution == "ok" else execution
+    status = canonical["status"]
     if status not in ("ok", "invalid", "failed", "incomplete"):
         status = "incomplete"
     return (status, canonical["diagnostic"], canonical["verdict"],
@@ -3402,6 +3404,15 @@ def _replay_rationale(args: argparse.Namespace):
             reason=str(exc))
 
 
+def _replay_reason(report: dict) -> str:
+    diagnosis = report.get("diagnosis") or report
+    capture = diagnosis.get("capture") or {}
+    identity = diagnosis.get("identity") or {}
+    return (capture.get("error") or report.get("receipt_error")
+            or "; ".join(identity.get("problems") or [])
+            or "; ".join((report.get("evaluation") or {}).get("reasons") or []))
+
+
 def eu4_replay(args: argparse.Namespace) -> dict:
     if args.replay_op == "independent":
         if not args.frame or not args.replay_out:
@@ -3418,7 +3429,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             faults["sampler_shift_min"] = args.sampler_shift_min
         report = gfx_independent_replay.replay(
             Path(args.frame), Path(args.replay_out), shaders=args.shaders,
-            faults=faults, rationale=rationale)
+            faults=faults, policy=getattr(args, "policy", None),
+            rationale=rationale)
         status, diagnostic, verdict, evidence, qualified = (
             _diagnosis_outcome(report))
         if bool(getattr(args, "full", False)):
@@ -3430,8 +3442,7 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 report, str(Path(args.replay_out) / "replay-report.json"))
         envelope = _envelope(
             "eu4_replay", status, result,
-            reason="; ".join((report.get("evaluation") or {}).get("reasons")
-                             or []),
+            reason=_replay_reason(report),
             diagnostic=diagnostic, verdict=verdict, evidence=evidence,
             qualified=qualified)
         if not bool(getattr(args, "full", False)):
@@ -3492,8 +3503,7 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             "eu4_replay", status, result,
             diagnostic=diagnostic, verdict=verdict, evidence=evidence,
             qualified=qualified,
-            reason="; ".join((report.get("evaluation") or {}).get("reasons")
-                             or []))
+            reason=_replay_reason(report))
         if not bool(getattr(args, "full", False)):
             envelope = _bound_replay_compact(envelope)
         return envelope

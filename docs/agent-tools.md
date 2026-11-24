@@ -424,6 +424,10 @@ python3 -m automation.agent_tools eu4_replay verify --case <case-dir>
 python3 -m automation.agent_tools eu4_replay case --case <case-dir> \
   --out <replay-dir>
 
+# Run the Metal host on a stored frame, then analyse the result.
+python3 -m automation.agent_tools eu4_replay independent --frame <frame-dir> \
+  --shaders <shader-dir> --out <replay-dir> --rationale <rationale.json>
+
 # Diagnose already-produced Metal evidence without executing Metal again.
 python3 -m automation.agent_tools eu4_replay diagnose --frame <frame-dir> \
   --metal <metal-result-dir> --out <diagnosis-dir> --require-seal
@@ -455,9 +459,28 @@ successful diagnostic; a successful comparison with a difference verdict is
 incomplete, or whose verification finds digest/identity/path problems, is
 `incomplete` or `invalid` and is never replayed or marked qualified. An
 unknown `gfx-strategy-b-case/*` version is `invalid`; only the recognized
-legacy image-comparison schema reaches the older comparator. The `sequence`
-and `diagnose` operations are M7 operations; they are not the older
-two-process `eu4_diff_run` workflow.
+legacy image-comparison schema reaches the older comparator.
+
+`independent` and `diagnose` accept an original sealed frame or a copy bound
+by an adjacent `trusted-evidence.json`. They verify the record, the original
+capture-directory binding and the frame seal. The resulting capture validity
+is separate from Metal identity, checkpoint coverage and exact-prefix
+qualification. Use `result.axes.capture_validity` and `result.axes.gpu_execution`
+to inspect those axes of a replay diagnosis. A valid reference can accompany an
+unverified Metal comparison.
+
+The standalone `python3 -m automation.gfx_independent_replay` keeps the Metal
+host result in `outcome.execution`. Read `diagnostic_outcome` for the canonical
+diagnosis, where `execution` describes whether the tool returned a result.
+The standalone `diagnose` subcommand exposes those same fields under
+`diagnostic_outcome` and retains `outcome` as an alias. The `eu4_replay` tool
+envelope continues to report tool execution in `outcome.execution`.
+
+For a shell fallback, check the subprocess exit status and parse its JSON
+envelope before using the comparison. The agent CLI can return zero for a
+completed difference. Inspect `outcome.diagnostic`, `outcome.evidence`,
+`outcome.verdict` and `outcome.qualified`. A framebuffer on disk cannot validate
+an invalid or unverified comparison.
 
 `--out` after `eu4_replay` names the replay/diagnosis output directory.
 `--envelope-out` is the separate JSON-envelope file and may appear anywhere:

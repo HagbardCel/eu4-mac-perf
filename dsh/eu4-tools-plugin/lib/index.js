@@ -61,9 +61,8 @@ export function definitions(run) {
   return [
     tool(
       'eu4_re_query',
-      'Fast indexed lookups over existing Ghidra/corpus knowledge: symbols, ' +
-        'function relationships, call xrefs, pseudocode, ABI and struct ' +
-        'layouts, provenance. Query before disassembling.',
+      'First choice for cheap indexed lookups of known original-engine functions, ' +
+        'callers, symbols, ABI, layouts and corpus provenance.',
       {
         op: { type: 'string', enum: ['resolve', 'function', 'callers', 'callees', 'decompile', 'xrefs', 'abi', 'struct', 'provenance'], description: 'query operation' },
         target: string('name, RVA, or struct/layout name'),
@@ -76,12 +75,10 @@ export function definitions(run) {
     ),
     tool(
       'eu4_research',
-      'Read the sealed renderer snapshot: machine instructions, detailed ' +
-        'decompiler output and paginated static cross-references for one ' +
-        'function, with provenance and explicit unavailable/not_found/' +
-        'identity_error/ambiguous status. Use eu4_re_query first for fast ' +
-        'indexed symbols and relationships; use eu4_research for the ' +
-        'instruction and decompilation evidence the index does not carry.',
+      'Follow up on eu4_re_query when instructions, detailed decompilation or ' +
+        'static cross-references from the sealed renderer snapshot can ' +
+        'distinguish competing hypotheses. Returns provenance and explicit ' +
+        'unavailable/not_found/identity_error/ambiguous status.',
       {
         op: { type: 'string', enum: ['status', 'resolve', 'function', 'xrefs'], description: 'sealed-snapshot research operation' },
         target: string('RVA for function/xrefs, or an RVA/symbol for resolve'),
@@ -195,13 +192,15 @@ export function definitions(run) {
     ),
     tool(
       'eu4_replay',
-      'Run a stored reproduction or a bounded M7 same-session sequence: packaged v1/v2 case ' +
-        'comparison, case verification, diagnosis of already-produced Metal results, or ordered ' +
-        'sequence execution. This is not the two-process eu4_diff_run workflow.',
+      'independent runs the Metal host on a captured frame, then analyses the result; ' +
+        'it requires an experiment rationale. diagnose compares existing Metal artifacts ' +
+        'with the frame without executing Metal. Also supports cases and bounded sequences. ' +
+        'Read outcome.execution, outcome.diagnostic, outcome.evidence and outcome.qualified ' +
+        'together; completed execution and saved pixels alone cannot qualify evidence.',
       {
         op: { type: 'string', enum: ['case', 'frame', 'independent', 'sequence', 'diagnose', 'verify'], description: 'replay/verification kind' },
         case: string('case directory (case/verify)'),
-        frame: string('frame trace directory (frame/diagnose)'),
+        frame: string('captured frame directory (frame/independent/diagnose)'),
         frame_dirs: { type: 'array', items: { type: 'string' }, description: 'ordered M7 frame directories (sequence)' },
         metal: string('already-produced Metal result directory (diagnose)'),
         shaders: string('shader directory'),
@@ -229,7 +228,10 @@ export function definitions(run) {
     ),
     tool(
       'eu4_case_inspect',
-      'Inspect a diagnostic case. With --event, returns one captured event\'s original GL inputs, exact uniform FP32 bits, Metal correspondence, first divergence and missing evidence; add --pixel X,Y for a pixel read. Without --event, returns the bounded case summary.',
+      'First choice for one divergent event in a sealed frame or existing case. ' +
+        'Set event to inspect original GL state, shader and resource correspondence, exact ' +
+        'uniform representations (FP32 bits), Metal evidence and missing information. ' +
+        'Optionally set pixel to X,Y. Omit event for a bounded case summary.',
       {
         case: string('case directory or sealed frame directory'),
         event: integer('captured event stream index to inspect'),
