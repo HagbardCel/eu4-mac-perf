@@ -230,18 +230,8 @@ are reviewed and merged into the locally fetched `origin/main`. Bash resolves
 paths relative to the script, including when invoked from Fish or from another
 working directory. Set `EU4_DSH_PYTHON` only to select a specific interpreter.
 
-The target machine currently resolves pnpm `12.23.0`. The DSH profile pins
-`12.21.0`. If npm already has the exact version available, open a subshell
-with that version on `PATH`. `--offline --no` refuses a download or install
-and leaves the global pnpm in place. Verify `pnpm --version` reports `12.21.0`
-before running the launcher commands in that subshell. If npm cannot find
-the version, select an existing `12.21.0` installation on `PATH` first.
-[npm exec documentation](https://docs.npmjs.com/cli/v11/commands/npm-exec/)
-
-```bash
-npm exec --offline --no --package=pnpm@12.21.0 -- bash
-pnpm --version
-```
+Check that `pnpm --version` matches the pin in [the DSH runtime manifest](../../dsh/runtime.json).
+If it differs, select the pinned installation on `PATH` before running preflight.
 
 ```bash
 bash dsh/scripts/m7-event3.sh preflight
