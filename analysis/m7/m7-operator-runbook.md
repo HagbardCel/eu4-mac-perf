@@ -230,6 +230,19 @@ are reviewed and merged into the locally fetched `origin/main`. Bash resolves
 paths relative to the script, including when invoked from Fish or from another
 working directory. Set `EU4_DSH_PYTHON` only to select a specific interpreter.
 
+The target machine currently resolves pnpm `12.23.0`. The DSH profile pins
+`12.21.0`. If npm already has the exact version available, open a subshell
+with that version on `PATH`. `--offline --no` refuses a download or install
+and leaves the global pnpm in place. Verify `pnpm --version` reports `12.21.0`
+before running the launcher commands in that subshell. If npm cannot find
+the version, select an existing `12.21.0` installation on `PATH` first.
+[npm exec documentation](https://docs.npmjs.com/cli/v11/commands/npm-exec/)
+
+```bash
+npm exec --offline --no --package=pnpm@12.21.0 -- bash
+pnpm --version
+```
+
 ```bash
 bash dsh/scripts/m7-event3.sh preflight
 bash dsh/scripts/m7-event3.sh start
@@ -248,8 +261,10 @@ bash dsh/scripts/m7-event3.sh finish
   paths, mode, stop reason and remaining time. `stop` records `operator_stop`
   so the guard refuses new expensive actions. End the DSH session yourself.
 - `finish` requires you to type `stopped` after the DSH session has ended. It
-  records a stop if needed, releases only that campaign's marker, and prints
-  the retained paths. A start that fails after creating a guard leaves its
+  checks the marker again, records `operator_stop` when the guard has no stop,
+  releases only that campaign's marker, and prints the retained paths.
+  Finalization receipts remain available to the DSH bridge and checker.
+  A start that fails after creating a guard leaves its
   fresh records available to inspect and finish. If the marker belongs to a
   historical or different campaign, its operator must release it using that
   campaign's verified state after its session ends.
@@ -262,7 +277,11 @@ bash dsh/scripts/m7-event3.sh finish
 | Fresh per-run inputs and receipts | `.local/m7/event3/launches/<id>/{sidecar.json,state.json,run/}` |
 
 Each generated sidecar changes only the campaign ID and run root. The wrapper
-preserves all candidate edits, including allowed uncommitted renderer work.
+uses the launch directory and its generated `sidecar.json`, `state.json` and
+`run/` paths to identify a managed campaign. The sidecar ID names the launch
+directory. The guard ID is assigned by `run.sh` and binds the host marker to
+the state. Both appear in `status`. The wrapper preserves all candidate edits,
+including allowed uncommitted renderer work.
 Run compatible focused tests inside the candidate and leave tests requiring
 shared Git metadata writes to operator-side verification.
 
@@ -277,6 +296,10 @@ by 632 of 1,930,176 pixels. The standalone result is `incomplete_diagnostics`
 because there is no verified in-process shadow identity. These measurements
 belong to the merged-main renderer. Check the candidate's renderer-source
 identity and existing reports before deciding whether to validate it again.
+Start with the retained `progress.md` and
+`analysis/m7/reports/event3-prefix-diagnosis.md`, including the precise-math
+and depth experiments and the superseded interpretations in §25. Use
+`eu4_case_inspect` to inspect the event-0 clear and event-1 draw on `tex:433`.
 The event-1 cause remains unresolved. Exact event-3 equivalence requires an
 independent checker pass with `qualified=true`, authentic authority and exact
 prefix `{start: 0, end: 3}`.

@@ -6,14 +6,12 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 case $1 in preflight|start|status|stop|finish) ;; *) fail "unknown operation: $1" ;; esac
 repo=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 cd -- "$repo"
-unset EU4_CAMPAIGN_STATE EU4_CAMPAIGN_ADMIN_TOKEN EU4_CAMPAIGN_AUTHORIZATION \
+unset EU4_CAMPAIGN_STATE EU4_CAMPAIGN_ADMIN_TOKEN EU4_CAMPAIGN_AUTHORIZATION EU4_CAMPAIGN_RESERVATION \
     EU4_M7_CANDIDATE_SIDECAR EU4_M7_EVENT20_TRUSTED_ROOT EU4_DSH_WORKSPACE EU4_DSH_SIDECAR
 export EU4_OFFLINE_ONLY=1 EU4_TEST_PROFILE=offline PYTHONDONTWRITEBYTECODE=1 GIT_OPTIONAL_LOCKS=0
 export EU4_DSH_INFRA_ROOT="$repo" EU4_DSH_SKILL_ROOT="$repo/.opencode/skills"
 
 if [[ $1 == preflight || $1 == start ]]; then
-    git merge-base --is-ancestor f0a3f35eca4c28d9fe939e62d68e0745e78e4dd7 HEAD ||
-        fail 'infrastructure HEAD must include merged PR #293'
     trusted_paths=(automation benchmark campaigns dsh .opencode/skills)
     changed=$(git diff --name-only origin/main -- "${trusted_paths[@]}") || fail 'cannot compare trusted files with origin/main'
     dirty=$(git status --porcelain --untracked-files=all -- "${trusted_paths[@]}") || fail 'cannot inspect trusted files'
@@ -28,7 +26,7 @@ exec "$EU4_DSH_PYTHON" - "$1" 3<&0 <<'PY'
 import json, os, stat, subprocess, sys, tempfile
 from dataclasses import replace
 from pathlib import Path
-from automation import campaign_guard, dsh_bridge, dsh_campaign, dsh_receipts, gfx_prefix_check
+from automation import campaign_guard, dsh_bridge, dsh_campaign, gfx_prefix_check
 
 repo = Path.cwd()
 launches = repo / '.local/m7/event3/launches'
@@ -56,15 +54,26 @@ def active():
     return guard
 
 
-def finalized(sidecar):
-    for root in dsh_bridge._campaign_validation_roots(sidecar.run_root):
-        path = root / 'finalization.json'
-        record = {} if path.is_symlink() else dsh_receipts.read_json(path) or {}
-        if (record.get('schema') == 'eu4-dsh-finalization/v1'
-                and record.get('campaign_id') == sidecar.campaign_id
-                and record.get('session_root') == str(root)):
-            return True
-    return False
+def managed(guard):
+    require(guard is not None, 'no host-wide campaign is active')
+    state = guard.path
+    launch = state.parent
+    sidecar_path, run = launch / 'sidecar.json', launch / 'run'
+    require(launch.parent == launches and launch.name.startswith('m7-event3.')
+            and state.name == 'state.json' and not sidecar_path.is_symlink() and not run.is_symlink(),
+            f'active campaign was not created by this launcher: {state}')
+    sidecar = dsh_campaign.load_sidecar(sidecar_path)
+    status = guard.status()
+    marker = json.loads(campaign_guard._marker_path().read_text(encoding='utf-8'))
+    require(sidecar.campaign_id == launch.name and sidecar.run_root == run
+            and sidecar.source_campaign == source and sidecar.workspace == workspace
+            and sidecar.mode == 'worktree' and sidecar.require_checker_pass and not sidecar.live_capture_enabled
+            and isinstance(marker, dict) and marker.get('schema') == campaign_guard.MARKER_SCHEMA
+            and marker.get('state') == str(state) and status['campaign_id']
+            and marker.get('campaign_id') == status['campaign_id']
+            and status['mode'] == campaign_guard.MODE_AUTONOMOUS and not status['live_capture'],
+            f'active campaign identity does not match the generated sidecar: {sidecar_path}')
+    return sidecar, status
 
 
 def main(operation):
@@ -73,8 +82,7 @@ def main(operation):
     if operation in ('preflight', 'start'):
         require(guard is None, f'host-wide campaign marker is occupied by {guard.path}' if guard else '')
         sidecar = dsh_campaign.load_sidecar(template)
-        config = dsh_receipts.read_json(template)
-        campaign = dsh_receipts.read_json(source)
+        config, campaign = (json.loads(path.read_text(encoding='utf-8')) for path in (template, source))
         require(sidecar.source_campaign == source and sidecar.workspace == workspace
                 and sidecar.mode == 'worktree', 'template source or retained worktree changed')
         require(sidecar.accept[2:] == ('--target-end', str(target))
@@ -114,30 +122,22 @@ def main(operation):
         os.execv(launcher, [str(launcher), '--campaign', str(sidecar_path), '--campaign-state',
                             str(state), '--campaign-mode', campaign_guard.MODE_AUTONOMOUS])
 
-    require(guard is not None, 'no host-wide campaign is active')
+    sidecar, status = managed(guard)
     state = guard.path
-    launch = state.parent
-    sidecar_path, run = launch / 'sidecar.json', launch / 'run'
-    require(launch.parent == launches and launch.name.startswith('m7-event3.')
-            and state.name == 'state.json' and not sidecar_path.is_symlink() and not run.is_symlink(),
-            f'active campaign was not created by this launcher: {state}')
-    sidecar = dsh_campaign.load_sidecar(sidecar_path)
-    status = guard.status()
-    marker = dsh_receipts.read_json(campaign_guard._marker_path()) or {}
-    require(sidecar.campaign_id == launch.name and sidecar.run_root == run
-            and sidecar.source_campaign == source and sidecar.workspace == workspace
-            and marker.get('state') == str(state) and marker.get('campaign_id') == status['campaign_id']
-            and status['mode'] == campaign_guard.MODE_AUTONOMOUS and not status['live_capture'],
-            f'active campaign identity does not match the generated sidecar: {sidecar_path}')
+    sidecar_path, run = sidecar.sidecar_path, sidecar.run_root
     if operation == 'finish':
         print('Type stopped to confirm the DSH session has ended: ', end='', file=sys.stderr, flush=True)
         with os.fdopen(3) as confirmation:
             require(confirmation.readline().strip() == 'stopped', 'DSH session stop was not confirmed')
         current = active()
         require(current is not None and current.path == state, 'active campaign changed during confirmation')
-        if not guard.status()['stop'] and not finalized(sidecar):
-            guard.stop('operator_stop')
-        require(guard.deactivate() and active() is None, 'host-wide marker could not be released or is still active')
+        current_sidecar, current_status = managed(current)
+        require(current_status['campaign_id'] == status['campaign_id']
+                and current_sidecar.sidecar_sha256 == sidecar.sidecar_sha256,
+                'active campaign identity changed during confirmation')
+        if not current_status['stop']:
+            current.stop('operator_stop')
+        require(current.deactivate() and active() is None, 'host-wide marker could not be released or is still active')
         print(f'Campaign finished. Retained evidence: {run}\nState: {state}\nSidecar: {sidecar_path}')
     else:
         if operation == 'stop':

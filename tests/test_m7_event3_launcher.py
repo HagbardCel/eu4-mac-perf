@@ -3,7 +3,7 @@
 import json
 import os
 from pathlib import Path
-import shutil
+import select
 import subprocess
 import sys
 import tempfile
@@ -96,7 +96,7 @@ assert os.environ['EU4_CAMPAIGN_STATE'] == str(state)
 assert os.environ['EU4_OFFLINE_ONLY'] == '1' and os.environ['EU4_TEST_PROFILE'] == 'offline'
 assert str(Path.cwd()) == os.environ['EU4_DSH_INFRA_ROOT']
 assert not any(key in os.environ for key in ('EU4_CAMPAIGN_ADMIN_TOKEN',
-    'EU4_CAMPAIGN_AUTHORIZATION', 'EU4_M7_CANDIDATE_SIDECAR', 'EU4_M7_EVENT20_TRUSTED_ROOT',
+    'EU4_CAMPAIGN_AUTHORIZATION', 'EU4_CAMPAIGN_RESERVATION', 'EU4_M7_CANDIDATE_SIDECAR', 'EU4_M7_EVENT20_TRUSTED_ROOT',
     'EU4_DSH_WORKSPACE', 'EU4_DSH_SIDECAR'))
 if os.environ.get('TEST_OPERATOR_INPUT'):
     assert sys.stdin.readline().strip() == os.environ['TEST_OPERATOR_INPUT']
@@ -111,20 +111,12 @@ run.mkdir()
 (run / 'identity.json').write_text('new mock anchor')
 print('authoritative goal from run.sh')
 ''')
-        self.bin = self.root / 'bin'
-        self.bin.mkdir()
-        # Only the hardcoded merged-commit ancestry check is synthetic here.
-        # Git policy and the linked-worktree checks use real repository state.
-        self.write(self.bin / 'git', '''#!/bin/sh
-if [ "$1" = merge-base ] && [ "$2" = --is-ancestor ]; then exit 0; fi
-exec "$TEST_REAL_GIT" "$@"
-''', executable=True)
         self.env = dict(os.environ, PYTHONPATH=os.pathsep.join(map(str, (self.root, ROOT))),
-                        PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
-                        TEST_REAL_GIT=shutil.which('git'), TEST_ROOT=str(self.root),
+                        TEST_ROOT=str(self.root),
                         TEST_REPO=str(self.repo), EU4_DSH_PYTHON=sys.executable,
                         EU4_CAMPAIGN_STATE='/stale/shell/state.json',
                         EU4_CAMPAIGN_ADMIN_TOKEN='stale', EU4_CAMPAIGN_AUTHORIZATION='stale',
+                        EU4_CAMPAIGN_RESERVATION='stale',
                         EU4_M7_CANDIDATE_SIDECAR='stale', EU4_M7_EVENT20_TRUSTED_ROOT='stale',
                         EU4_DSH_WORKSPACE='stale', EU4_DSH_SIDECAR='stale',
                         EU4_DSH_INFRA_ROOT='stale', RUN='stale', PY='stale', FRAME='stale', OUT='stale')
@@ -243,6 +235,8 @@ exec "$TEST_REAL_GIT" "$@"
         active = self.start()
         status = json.loads(self.invoke('status').stdout)
         self.assertEqual(status['run_root'], active['run'])
+        self.assertEqual(status['campaign_id'], Path(active['state']).parent.name)
+        self.assertNotEqual(status['campaign_id'], status['guard']['campaign_id'])
         self.assertEqual(status['guard']['mode'], campaign_guard.MODE_AUTONOMOUS)
         self.assertFalse(status['guard']['live_capture'])
         self.assertGreater(status['guard']['seconds_remaining'], 0)
@@ -266,21 +260,58 @@ exec "$TEST_REAL_GIT" "$@"
         self.assertEqual(state.read_bytes(), stopped_state)
         self.assertTrue((Path(active['run']) / 'identity.json').is_file())
 
-    def test_finish_preserves_a_finalized_campaign_without_adding_a_stop(self):
+    def test_finish_records_operator_stop_and_preserves_finalization_receipts(self):
+        for kind in ('abbreviated', 'unrelated', 'complete'):
+            with self.subTest(kind=kind):
+                active = self.start()
+                state = Path(active['state'])
+                session = Path(active['run']) / 'sessions/session-example'
+                session.mkdir(parents=True)
+                receipt = {'schema': 'eu4-dsh-finalization/v1',
+                           'campaign_id': state.parent.name, 'session_root': str(session)}
+                if kind == 'unrelated':
+                    receipt['campaign_id'] = 'another-campaign'
+                if kind == 'complete':
+                    receipt.update(identity_digest='e' * 64, frozen_candidate={}, replay={},
+                                   ignored_inputs=[], fresh_verdict='pass', duration_ms=1,
+                                   session={'session_id': session.name}, session_layout='session',
+                                   created_at='2026-11-24T00:00:00Z')
+                finalization = session / 'finalization.json'
+                finalization.write_text(json.dumps(receipt))
+                before = finalization.read_bytes()
+                result = self.invoke('finish', answer='stopped\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(state.read_text())['stop']['reason'], 'operator_stop')
+                self.assertFalse(self.marker.exists())
+                self.assertEqual(finalization.read_bytes(), before)
+
+    def test_finish_rechecks_marker_after_confirmation(self):
         active = self.start()
         state = Path(active['state'])
         before = state.read_bytes()
-        session = Path(active['run']) / 'sessions/session-example'
-        session.mkdir(parents=True)
-        finalization = session / 'finalization.json'
-        finalization.write_text(json.dumps({'schema': 'eu4-dsh-finalization/v1',
-                                            'campaign_id': state.parent.name,
-                                            'session_root': str(session)}))
-        result = self.invoke('finish', answer='stopped\n')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(self.marker.exists())
+        prompt = 'Type stopped to confirm the DSH session has ended: '
+        with subprocess.Popen(['bash', str(self.script), 'finish'], cwd=self.root, env=self.env,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True) as process:
+            try:
+                self.assertTrue(select.select([process.stderr], [], [], 10)[0])
+                self.assertEqual(process.stderr.read(len(prompt)), prompt)
+                foreign = self.write(self.root / 'foreign-state.json',
+                                     json.dumps(dict(json.loads(before), campaign_id='foreign')))
+                marker = dict(json.loads(self.marker.read_text()), state=str(foreign), campaign_id='foreign')
+                self.marker.write_text(json.dumps(marker))
+                _, stderr = process.communicate('stopped\n', timeout=10)
+                self.assertNotEqual(process.returncode, 0)
+                self.assertIn('active campaign changed during confirmation', stderr)
+            finally:
+                if process.poll() is None:
+                    process.kill()
         self.assertEqual(state.read_bytes(), before)
-        self.assertTrue(finalization.is_file())
+        self.assertEqual(json.loads(self.marker.read_text()), marker)
+        foreign_before = foreign.read_bytes()
+        for op in ('status', 'stop', 'finish'):
+            self.assert_refused(self.invoke(op, answer='stopped\n'), 'not created by this launcher')
+        self.assertEqual(foreign.read_bytes(), foreign_before)
 
     def test_historical_marker_is_never_treated_as_managed(self):
         self.marker.write_text(json.dumps({'schema': campaign_guard.MARKER_SCHEMA,
