@@ -268,84 +268,19 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                     "replay_capture_mismatch",
                     f"producer receipt capture.{key} does not match the "
                     "sealed case capture")
-        raw_recipe = receipt.get("recipe")
-        if raw_recipe is None and "shader_compile_options" in replay:
-            raise AcceptanceError(
-                "invalid_recipe",
-                "producer receipt is missing the replay's compile-option recipe")
-        if raw_recipe is not None and not isinstance(raw_recipe, dict):
-            raise AcceptanceError(
-                "invalid_recipe",
-                "producer receipt recipe is present but is not an object")
-        recipe = raw_recipe
-        # V2 recorded its environment without establishing the native math mode.
-        # Preserve its observations for comparison and require V3 for qualification.
-        legacy_recipe = (recipe is not None
-                         and recipe.get("schema") == "gfx-replay-recipe/v2"
-                         and "shader_compile_options" not in replay)
-        if recipe is not None and not legacy_recipe:
-            if not isinstance(recipe.get("consumed_env"), dict):
+        recipe = receipt.get("recipe")
+        try:
+            compile_mode_verified = gfx_independent_replay.validate_replay_recipe(recipe, replay)
+        except gfx_independent_replay.ReplayError as exc:
+            raise AcceptanceError(exc.kind, exc.detail) from exc
+        if compile_mode_verified and recipe["diagnostic"]:
+            if recipe["sha256"] not in (approved_recipes or set()):
                 raise AcceptanceError(
-                    "invalid_recipe",
-                    "producer receipt consumed_env is not an object")
-            if not isinstance(recipe.get("effective_env"), dict):
-                raise AcceptanceError(
-                    "invalid_recipe",
-                    "producer receipt effective_env is not an object")
-            if recipe.get("faults") is not None and not isinstance(
-                    recipe.get("faults"), dict):
-                raise AcceptanceError(
-                    "invalid_recipe",
-                    "producer receipt faults are not an object")
-            if recipe.get("schema") != gfx_independent_replay.RECIPE_SCHEMA:
-                raise AcceptanceError(
-                    "invalid_recipe",
-                    "producer receipt recipe schema is not the current "
-                    "replay recipe")
-            try:
-                options = gfx_independent_replay.recorded_shader_compile_options(
-                    replay)
-                expected_options = gfx_independent_replay.shader_compile_options(
-                    recipe["consumed_env"],
-                    default_fast_math=options["default_fast_math"])
-            except gfx_independent_replay.ReplayError as exc:
-                raise AcceptanceError("invalid_recipe", exc.detail) from exc
-            if (options != expected_options
-                    or options != recipe.get("shader_compile_options")):
-                raise AcceptanceError(
-                    "invalid_recipe",
-                    "producer receipt shader compile options disagree with replay.json "
-                    "or the consumed environment")
-            expected_effective = gfx_independent_replay.effective_replay_environment(
-                recipe["consumed_env"], options)
-            if recipe.get("effective_env") != expected_effective:
-                raise AcceptanceError(
-                    "invalid_recipe",
-                    "producer receipt effective environment disagrees with "
-                    "the consumed environment it records")
-            if recipe.get("sha256") != gfx_independent_replay.recipe_digest(
-                    recipe):
-                raise AcceptanceError(
-                    "invalid_recipe",
-                    "producer receipt recipe digest does not match its "
-                    "recorded inputs")
-            expected_diagnostic = bool(
-                recipe.get("faults")) or bool(recipe.get("effective_env"))
-            if bool(recipe.get("diagnostic")) is not expected_diagnostic:
-                raise AcceptanceError(
-                    "invalid_recipe",
-                    "producer receipt diagnostic flag disagrees with its "
-                    "recorded effective inputs")
-            if recipe.get("diagnostic") is True:
-                digest = str(recipe.get("sha256") or "")
-                if not digest or digest not in (approved_recipes or set()):
-                    raise AcceptanceError(
-                        "diagnostic_recipe",
-                        "producer receipt records a diagnostic replay recipe; "
-                        "a diagnostic variant is never correction evidence "
-                        "unless its exact recipe is explicitly approved")
-                recipe_approved = True
-            compile_mode_verified = True
+                    "diagnostic_recipe",
+                    "producer receipt records a diagnostic replay recipe; "
+                    "a diagnostic variant is never correction evidence "
+                    "unless its exact recipe is explicitly approved")
+            recipe_approved = True
         result = receipt.get("result") if isinstance(
             receipt.get("result"), dict) else {}
         if result.get("replay_json_sha256") != _sha256(

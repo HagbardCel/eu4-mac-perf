@@ -142,6 +142,19 @@ Outputs: `$OUT/uv2-probe/{uv2-probe.json,uv2-probe.rgba32f,uv2-control.bgra}`,
 `$OUT/metal/uv2-probe/uv2-probe.rgba32f`, `$OUT/metal/uv2-color.bgra` and
 `$OUT/uv2-probe/comparison.json`.
 
+For existing artifacts, run `python3.14 -m automation.gfx_uv2_probe localize
+--frame <sealed-frame> --replay <producer-receipt-directory>
+--renderer-sha256 <expected-executable-digest>` offline. The JSON report lists
+the first observed difference and the earliest unresolved stage for each
+residual and up to eight nearby RGB-match controls in the observed GL
+color-change region. The supplied executable digest is checked against the
+producer receipt. Source-closure verification belongs to the independent
+checker. A historical receipt remains diagnostic with
+`compile_mode_provenance=unverified`. A current v3 recipe must agree with
+`replay.json`. A matching RGB8 checkpoint or isolated UV2 value cannot
+verify contributing-fragment correspondence. [Event-1
+evidence and operator request](../analysis/m7/event1-investigation.md#numerical-observation-coverage).
+
 `comparison.json` separates the isolated numerical result
 (`numerical_comparison_conclusive`, classified `conditional_numerical_comparison`)
 from the always-false authenticated original-GL claim.

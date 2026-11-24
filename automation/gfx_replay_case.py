@@ -2501,14 +2501,14 @@ def _case_capture_seal(case_dir: Path, manifest: dict) -> dict:
 
 
 def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
-    """Validate a producer receipt and bind it to the packaged replay output.
+    """Verify the packaged replay against its selected capture seal."""
+    return verify_replay_producer_receipt(
+        case_dir / "replay", _case_capture_seal(case_dir, manifest))
 
-    A legacy case without a receipt remains historical evidence; it is not
-    claimed to be a result from any current renderer.  A present receipt is
-    verified structurally, against the packaged replay/readback digests and
-    against the captured frame identity.
-    """
-    path = case_dir / "replay" / "producer-receipt.json"
+
+def verify_replay_producer_receipt(replay_dir: Path, seal: dict) -> dict:
+    """Bind a standalone or packaged producer receipt to outputs and a seal."""
+    path = replay_dir / "producer-receipt.json"
     if not path.is_file():
         return {"status": "legacy_missing", "problems": [], "receipt": None}
     problems: list[str] = []
@@ -2529,20 +2529,30 @@ def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
         problems.append("producer receipt has no build fingerprint")
     result = receipt.get("result") if isinstance(
         receipt.get("result"), dict) else {}
-    replay_path = case_dir / "replay" / "replay.json"
-    metal_path = case_dir / "replay" / "metal-frame.bgra"
+    replay_path = replay_dir / "replay.json"
+    metal_path = replay_dir / "metal-frame.bgra"
     replay_exists = replay_path.is_file()
     if not replay_exists:
         replay = {}
         problems.append("producer receipt has no replay.json")
     else:
         try:
-            replay = _json(replay_path)
+            replay_bytes = replay_path.read_bytes()
+            replay = json.loads(replay_bytes.decode("utf-8"))
+            if not isinstance(replay, dict):
+                raise CaseError("invalid_json", str(replay_path))
         except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
             replay = {}
             problems.append("producer receipt has no readable replay.json")
-        if result.get("replay_json_sha256") != _sha(replay_path):
-            problems.append("producer receipt does not bind replay.json")
+        else:
+            if result.get("replay_json_sha256") != hashlib.sha256(replay_bytes).hexdigest():
+                problems.append("producer receipt does not bind replay.json")
+    compile_mode_verified = False
+    try:
+        compile_mode_verified = gfx_independent_replay.validate_replay_recipe(
+            receipt.get("recipe"), replay)
+    except gfx_independent_replay.ReplayError as exc:
+        problems.append(str(exc))
     metal_sha = _sha(metal_path) if metal_path.is_file() else None
     if result.get("metal_frame_sha256") != metal_sha:
         problems.append("producer receipt does not bind the Metal readback")
@@ -2552,7 +2562,11 @@ def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
             problems.append(
                 f"producer receipt result.{key} disagrees with replay.json")
     declared = []
-    for item in replay.get("checkpoints") or []:
+    checkpoints = replay.get("checkpoints") or []
+    if not isinstance(checkpoints, list):
+        problems.append("replay.json checkpoints are not a list")
+        checkpoints = []
+    for item in checkpoints:
         name = Path(str(item.get("file"))).name if isinstance(item, dict) else ""
         if not name or Path(str(item.get("file"))).name != str(
                 item.get("file")) or name in declared:
@@ -2573,7 +2587,7 @@ def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
                                          if isinstance(item, dict) else None)):
                 problems.append("producer receipt checkpoint file entry is invalid")
                 continue
-            path = case_dir / "replay" / name
+            path = replay_dir / name
             if not path.is_file():
                 problems.append(
                     f"producer receipt checkpoint file is missing: {name}")
@@ -2585,7 +2599,6 @@ def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
             problems.append(
                 "producer receipt checkpoint files do not match replay.json")
 
-    seal = _case_capture_seal(case_dir, manifest)
     capture = receipt.get("capture") if isinstance(
         receipt.get("capture"), dict) else {}
     for key in ("session_id", "capture_frame_id", "event_stream_sha256"):
@@ -2597,12 +2610,15 @@ def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
     return {
         "status": status,
         "problems": problems,
+        "compile_mode_provenance": ("verified" if not problems and compile_mode_verified
+                                    else "unverified"),
         "receipt": {
             "schema": receipt.get("schema"),
             "producer": {
                 "executable_sha256": executable_sha,
                 "build_fingerprint": fingerprint,
                 "build_stamp_sha256": producer.get("build_stamp_sha256"),
+                "source_revision": producer.get("source_revision"),
             },
             "capture": capture,
             "result": result,

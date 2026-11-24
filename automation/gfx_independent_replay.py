@@ -4035,6 +4035,50 @@ def recipe_digest(recipe: dict) -> str:
         payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _recipe_environment_digest(recipe: dict) -> str:
+    return hashlib.sha256(json.dumps({
+        key: recipe[key] for key in ("effective_env", "shader_compile_options", "faults")
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def validate_replay_recipe(recipe, replay: dict) -> bool:
+    """Validate the native compile mode and its recipe, or identify legacy evidence."""
+    has_native_mode = "shader_compile_options" in replay
+    if recipe is None or (isinstance(recipe, dict)
+                          and recipe.get("schema") == "gfx-replay-recipe/v2"):
+        if not has_native_mode:
+            return False
+        raise ReplayError("invalid_recipe", "native compile options require a v3 recipe")
+    if not isinstance(recipe, dict) or recipe.get("schema") != RECIPE_SCHEMA:
+        raise ReplayError("invalid_recipe", "unexpected producer receipt recipe schema")
+    for key in ("consumed_env", "effective_env", "faults", "shader_identity"):
+        if not isinstance(recipe.get(key), dict):
+            raise ReplayError("invalid_recipe", f"recipe {key} is not an object")
+    try:
+        options = recorded_shader_compile_options(replay)
+        recorded = recorded_shader_compile_options(recipe)
+        expected = shader_compile_options(
+            recipe["consumed_env"], default_fast_math=options["default_fast_math"])
+    except ReplayError as exc:
+        raise ReplayError("invalid_recipe", exc.detail) from exc
+    if options != recorded or options != expected:
+        raise ReplayError("invalid_recipe",
+                          "shader compile options disagree with replay.json or consumed_env")
+    consumed = recipe["consumed_env"]
+    if any(key not in _CONSUMED_REPLAY_ENV or not isinstance(value, str)
+           for key, value in consumed.items()):
+        raise ReplayError("invalid_recipe", "consumed_env has an invalid switch or value")
+    effective = effective_replay_environment(consumed, options)
+    if recipe["effective_env"] != effective:
+        raise ReplayError("invalid_recipe", "effective_env disagrees with consumed_env")
+    if recipe.get("diagnostic") is not (bool(recipe["faults"]) or bool(effective)):
+        raise ReplayError("invalid_recipe", "diagnostic flag disagrees with effective inputs")
+    if (recipe.get("sha256") != recipe_digest(recipe)
+            or recipe.get("environment_sha256") != _recipe_environment_digest(recipe)):
+        raise ReplayError("invalid_recipe", "recipe digest disagrees with recorded inputs")
+    return True
+
+
 def replay_recipe(*, env: dict | None = None,
                   ambient: dict | None = None,
                   shaders: Path | str | None = None,
@@ -4108,12 +4152,8 @@ def replay_recipe(*, env: dict | None = None,
         "policy_path": str(policy_path),
         "policy_sha256": policy_sha,
         "shader_compile_options": options,
-        "environment_sha256": hashlib.sha256(json.dumps({
-            "effective_env": dict(sorted(effective.items())),
-            "shader_compile_options": options,
-            "faults": faults,
-        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
     }
+    recipe["environment_sha256"] = _recipe_environment_digest(recipe)
     recipe["sha256"] = recipe_digest(recipe)
     return recipe
 

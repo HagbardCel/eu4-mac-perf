@@ -9,7 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-from automation import case_baseline, replay_host_dependencies
+from automation import (case_baseline, gfx_independent_replay,
+                        replay_host_dependencies)
 
 
 def _write_case(root: Path, *, legacy: bool = False) -> Path:
@@ -50,6 +51,7 @@ def _write_case(root: Path, *, legacy: bool = False) -> Path:
     metal_bytes = (case / "replay" / "metal-frame.bgra").read_bytes()
     add("replay/producer-receipt.json", json.dumps({
         "schema": "gfx-replay-producer-receipt/v1",
+        **({} if legacy else {"recipe": gfx_independent_replay.replay_recipe(env={})}),
         "producer": {
             "executable": "/tmp/gfx_frame_replay",
             "executable_sha256": "c" * 64,

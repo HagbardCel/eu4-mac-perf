@@ -104,6 +104,88 @@ the clamp, decode, discard, offset and lowering sweeps, or the unqualified
 control, until an input or stage observable changes.
 [Validation reuse audit](run-60m03-evidence-audit.md#trusted-validation-audit).
 
+## Numerical observation coverage
+
+This assessment applies to seal `47590918`. The offscreen color and depth
+observations are in the sealed prefix file. The default-framebuffer GL
+control qualifier serves a different interface. [Sealed observations][gl] ·
+[prefix loader](../../automation/m6_frame.py) · [GL control qualifier](../../automation/gfx_gl_control_qualification.py).
+
+| Observation | In the authenticated capture? | Can be obtained offline? | Needs a new controlled capture? |
+| --- | --- | --- | --- |
+| Event-1 final RGB8 output | Yes, post-event `tex:433` | Yes, digest-bound GL color and receipt-bound Metal checkpoint | No. [Observation][gl] · [candidate receipt][canonical] |
+| Original pre-event color | Yes, event-0 clear on the same attachment | Yes, last observed contents before the event-1 draw | No. [Observation][gl] · [sealed observation loader](../../automation/m6_frame.py) |
+| Original pre-event depth | Yes, event-0 post-clear depth for renderbuffer 3 | Yes, sealed float32 depth plane | No. [Observation][gl] · [sealed observation loader](../../automation/m6_frame.py) |
+| Original fragment coverage | No contributing-fragment record | Color and depth changes give a derived lower bound on writes | Yes for contributing coverage. [Checkpoint accounting](#checkpoint-accounting) · [GL observer](../../benchmark/eu4_gfx_frame_trace.c) |
+| Original fragment UV2 | No | Isolated GL sidecars give conditional values if available. The sidecar bytes sit outside the seal and the pass bypasses depth and original discard | Yes for attributable UV2. [GL observer](../../benchmark/eu4_gfx_frame_trace.c) · [probe](../../automation/gfx_uv2_probe.py) |
+| Metal fragment UV2 | Candidate-side only. No event-1 probe payload is preserved with the canonical replay | Existing opt-in replay probe can produce conditional values in an isolated pass | No GL capture for the Metal probe. Matching contributing fragments requires additional evidence. [Metal replay](../../benchmark/eu4_gfx_frame_replay.mm) · [harness](../../docs/harness.md#event-1-uv2-diagnostic-probe) |
+| Individual sampled texture values | No. Captured textures and sampler state are inputs | A reconstruction can produce derived values | Yes for values from original GL, if UV2 and correspondence agree. [Event evidence](../../automation/gfx_event_evidence.py) · [GL replay inputs](../../automation/gfx_gl_replay_input.py) |
+| Pre-quantization fragment color | No | The seal contains converted RGB8 | Yes if comparison reaches this stage. [Observation format scope](../../automation/gfx_observation.py) · [sealed observations][gl] |
+
+The probe's `localize` command reads the preserved evidence directly. Invoke
+from the infrastructure checkout.
+
+```sh
+python3.14 -m automation.gfx_uv2_probe localize \
+  --frame .local/m7/event20/trusted-copy/47590918/frame \
+  --replay .local/dsh/m7-event3/workspace/.local/m7/event3/exp-canonical-check/ind-canonical \
+  --renderer-sha256 787670d93816de787b513289388107b5f4e3615844e58b13343c029362dd15c7
+```
+
+The command verifies the original seal and the producer receipt's checkpoint
+binding. `--renderer-sha256` compares an independently supplied expected
+executable digest with the producer receipt. The command uses the recorded
+build identity and does not rebuild or independently verify the renderer source
+closure. Current v3 receipts must agree with the native compile options in
+`replay.json` and pass recipe validation. The cited historical replay remains
+usable for RGB8 comparison with `compile_mode_provenance=unverified`.
+
+The report gives the 20 existing residuals and up to eight nearby
+`rgb_match_control` pixels, selected in lower-left row order within the
+observed GL RGB-change region. The region comes from the bound event-0 and
+event-1 color snapshots. It supplies no primitive or sample correspondence.
+Missing or unbound predecessor planes are listed explicitly. Without bound
+pre-draw color the report omits the controls. Signed differences are Metal
+minus OpenGL. RGB8 is the first observed difference. The contributing-fragment
+stage remains unresolved, and the existing `compare` command reports isolated
+coverage and UV2 conditionally. [Producer receipt][canonical] ·
+[offline harness](../../docs/harness.md#event-1-uv2-diagnostic-probe).
+
+### Operator request for the next observation
+
+- Capture one draw, event **1**, program **310**, framebuffer **6**, RGB8
+  texture **433** level **0**. Use one controlled authorization and bound
+  prefix observations to events **0–1**. Preserve the unmodified original GL
+  post-draw color plus the pre-draw color and depth, draw inputs, attachment
+  sample count and write state. [Controlled capture workflow](../../docs/harness.md#event-1-uv2-diagnostic-probe).
+- Before spending the authorization, extend and review the existing probe to
+  observe which primitive and sample contributes color, with coverage,
+  pre-draw depth and test decision, original discard, write mask, blend and
+  logic state accounted for. Retain enough fragment order to disambiguate
+  overlap. Report UV2 float32 bits for the attributable fragment at the
+  residual coordinates and up to eight RGB-match controls. Extend the opt-in
+  branch in the existing GL observer and keep the original draw and readback
+  as the reference. The existing `--uv2-probe` produces a control and
+  isolated UV2 sidecar. Its depth bypass, replacement fragment shader and
+  unsealed sidecars leave this request
+  unsupported today. [GL probe implementation](../../benchmark/eu4_gfx_frame_trace.c).
+- Expect a fresh `frame-seal.json`, the prefix observation manifest and blobs,
+  and digest-bound sparse observation records containing seal, event and target
+  identities, sample/primitive labels and raw UV2 bits. Independently recheck
+  the new seal, observation payload digests, original-shader behavior and
+  readback layout. Pair observations only within the new seal and pin the Metal
+  renderer identity before recomputing the residual and control coordinates.
+  Diagnostic re-execution stays conditional if fragment correspondence or
+  attachment behavior remains unproven. The independent exact-prefix checker
+  continues to use the sealed original color.
+
+Once fragment correspondence is established, compare UV2 first. A difference
+directs investigation to vertex outputs, interpolation and perspective
+precision. Agreement advances to sampled values, then pre-conversion color,
+then RGB8 conversion. A coverage or contributing-primitive difference directs
+investigation to rasterization, depth and discard. Missing evidence leaves the
+next comparison unresolved.
+
 ## Compile-option identity and the retained candidate
 
 For translated shaders, `EU4_FRAME_REPLAY_FAST_MATH` accepts exactly `0`

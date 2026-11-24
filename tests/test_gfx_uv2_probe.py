@@ -25,7 +25,8 @@ BENCH = ROOT / "benchmark"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_uv2_probe, m6_frame, native_build  # noqa: E402
+from automation import (gfx_independent_replay, gfx_uv2_probe, m6_frame,  # noqa: E402
+                        native_build)
 
 WIDTH = HEIGHT = 4
 VERTEX_SHA = "v" * 64
@@ -393,6 +394,267 @@ class ComparisonTests(unittest.TestCase):
                 gfx_uv2_probe._differences(gl, metal)
         self.assertIn("4225", str(caught.exception))
         self.assertIn("4096", str(caught.exception))
+
+
+class StageLocalizationTests(unittest.TestCase):
+    def observations(self):
+        values = {"fragment_coverage": {"covered": True, "primitive": 5},
+                  "uv2": {"x": 0x3f800000, "y": 0x3f000000},
+                  "texture_samples": {"tex0.r": 0x3f000000},
+                  "pre_conversion": {"R": 0x3f000000, "G": 0, "B": 0},
+                  "rgb8": {"R": 128, "G": 0, "B": 0}}
+        return {stage: {"opengl": dict(data), "metal": dict(data)}
+                for stage, data in values.items()}
+
+    def compare(self, observations, *, verified=True, provenance=True, origin="lower_left"):
+        return gfx_uv2_probe.compare_stages(
+            observations, attribution={"verified": verified},
+            provenance_valid=provenance, origin=origin)
+
+    def test_first_observable_stage_distinguishes_numerical_mechanisms(self):
+        for stage, channel in (("uv2", "x"), ("texture_samples", "tex0.r"),
+                               ("pre_conversion", "R"), ("rgb8", "R")):
+            with self.subTest(stage=stage):
+                values = self.observations()
+                values[stage]["metal"][channel] += 1
+                values["rgb8"]["metal"]["R"] = 129
+                result = self.compare(values)
+                self.assertEqual(result["status"], "different")
+                self.assertEqual(result["first_observed_difference"], stage)
+                self.assertEqual(result["first_differing_stage"], stage)
+                if stage != "rgb8":
+                    row = result["stages"][stage]
+                    self.assertEqual(row["ulp_differences"][channel], 1)
+                    self.assertGreater(row["signed_differences"][channel], 0)
+                    self.assertEqual(row["metal_bits"][channel],
+                                     f"0x{values[stage]['metal'][channel]:08x}")
+
+    def test_fragment_mismatch_precedes_numerical_stages(self):
+        values = self.observations()
+        values["fragment_coverage"]["metal"]["primitive"] = 6
+        result = self.compare(values)
+        self.assertEqual(result["first_differing_stage"], "fragment_coverage")
+        self.assertEqual(result["stages"]["uv2"]["status"], "conditional")
+
+    def test_ambiguous_fragments_leave_uv2_conditional(self):
+        values = self.observations()
+        values["uv2"]["metal"]["x"] += 1
+        values["rgb8"]["metal"]["R"] += 1
+        attribution = gfx_uv2_probe.fragment_attribution({"depth": {"test": True}})
+        result = gfx_uv2_probe.compare_stages(
+            values, attribution=attribution, provenance_valid=True)
+        self.assertIn("discard", " ".join(attribution["problems"]))
+        self.assertIn("depth test", " ".join(attribution["problems"]))
+        self.assertEqual(result["status"], "inconclusive")
+        self.assertEqual(result["first_observed_difference"], "rgb8")
+        self.assertIsNone(result["first_differing_stage"])
+        self.assertEqual(result["stages"]["uv2"]["status"], "conditional")
+
+    def test_valid_exact_observed_agreement(self):
+        result = self.compare(self.observations())
+        self.assertEqual(result["status"], "exact_observed_stage_agreement")
+        self.assertIsNone(result["first_observed_difference"])
+        self.assertNotIn("qualified", result)
+
+    def test_missing_original_uv2_does_not_promote_later_rgb8(self):
+        values = self.observations()
+        values["uv2"].pop("opengl")
+        values["rgb8"]["metal"]["R"] += 1
+        result = self.compare(values)
+        self.assertEqual(result["status"], "missing_evidence")
+        self.assertEqual(result["first_observed_difference"], "rgb8")
+        self.assertEqual(result["first_unresolved_stage"], "uv2")
+        self.assertEqual(result["stages"]["uv2"]["missing"], ["opengl"])
+        self.assertIsNone(result["first_differing_stage"])
+
+    def test_invalid_comparison_origin_fails_closed(self):
+        result = self.compare(self.observations(), origin="upper_left")
+        self.assertEqual(result, {"status": "invalid_provenance", "stages": {}})
+
+
+class Event1ArtifactLocalizationTests(unittest.TestCase):
+    def setUp(self):
+        tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.frame = Path(tmp) / "frame"
+        self.replay = Path(tmp) / "replay"
+        (self.frame / "blobs").mkdir(parents=True)
+        self.replay.mkdir()
+        self.renderer = "b" * 64
+        self.seal = {**_seal(), "event_stream_sha256": "c" * 64}
+        event = _event()
+        event["target"]["color_attachment"].update(type="texture", level=0)
+        event["target"]["depth_attachment"] = {"type": "renderbuffer", "name": 3}
+        clear_target = {**event["target"], "viewport": [0, 0, 2, 2]}
+        self.trace = {"_events": [{"kind": "clear", "target": clear_target}, event]}
+        original = bytes([2, 10, 20, 255]) * (WIDTH * HEIGHT)
+        candidate = bytearray(original)
+        # B at x=1, lower-left y=2. Alpha-only changes remain outside RGB8.
+        candidate[(2 * WIDTH + 1) * 4] += 1
+        candidate[3] = 5
+        name = "event1.bgra"
+        (self.frame / "blobs" / name).write_bytes(original)
+        (self.replay / name).write_bytes(candidate)
+        (self.frame / "frame-seal.json").write_text(json.dumps(self.seal))
+        self.post = {
+            "event": 1, "resource": "tex:433", "timing": "post_event",
+            "target": event["target"], "target_identity": {"internal_format": 0x8051},
+            "origin": "lower_left",
+            "pixel_format": "BGRA8", "width": WIDTH, "height": HEIGHT,
+            "color": {"file": name, "sha256": hashlib.sha256(original).hexdigest()},
+        }
+        prior = bytearray(bytes([1, 1, 1, 255]) * (WIDTH * HEIGHT))
+        # One matching neighbor keeps RGB unchanged across the draw. Its alpha differs.
+        neighbor = (WIDTH + 0) * 4
+        prior[neighbor:neighbor + 4] = bytes([*original[neighbor:neighbor + 3], 7])
+        depth = struct.pack("<f", 1.0) * (WIDTH * HEIGHT)
+        (self.frame / "blobs" / "pre.bgra").write_bytes(prior)
+        (self.frame / "blobs" / "pre-depth.f32").write_bytes(depth)
+        self.pre = {
+            **self.post, "event": 0, "kind": "clear", "target": clear_target,
+            "color": {"file": "pre.bgra", "sha256": hashlib.sha256(prior).hexdigest(),
+                      "bytes": len(prior)},
+            "depth": {"status": "captured", "file": "pre-depth.f32", "format": "f32",
+                      "sha256": hashlib.sha256(depth).hexdigest(), "bytes": len(depth),
+                      "width": WIDTH, "height": HEIGHT},
+        }
+        self.trace["_prefix"] = {"post_events": [self.pre, self.post]}
+        self.result = {
+            "status": "ok", "stage": "complete", "failed": 0, "partial": False,
+            "timed_out": False, "encoded": 2, "events": 2, "readback": True,
+            "command_status": 4, "checkpoints": [{
+                "event": 1, "resource": "tex:433", "target": "433",
+                "timing": "post_event", "file": name, "ok": True,
+                "pixel_format": "BGRA8", "width": WIDTH, "height": HEIGHT,
+                "reference_sha256": self.post["color"]["sha256"],
+            }],
+        }
+        self.publish_candidate()
+        self.enterContext(mock.patch.object(
+            gfx_uv2_probe, "frame_context", return_value=(self.trace, self.seal, event)))
+
+    def publish_candidate(self):
+        result_path = self.replay / "replay.json"
+        self.result["shader_compile_options"] = {"default_fast_math": True, "fast_math": False}
+        result_path.write_text(json.dumps(self.result))
+        gfx_independent_replay.write_producer_receipt(self.replay, self.frame, {
+            "executable_sha256": self.renderer, "build_fingerprint": "a" * 64,
+        }, result_path, env={"EU4_FRAME_REPLAY_FAST_MATH": "0"})
+
+    def localize(self):
+        return gfx_uv2_probe.localize(self.frame, self.replay, renderer_sha256=self.renderer)
+
+    def test_receipt_bound_rgb_and_controls_preserve_lower_left_order(self):
+        report = self.localize()
+        self.assertEqual(report["status"], "missing_evidence", report)
+        self.assertEqual(report["mask_pixels"], 1)
+        self.assertEqual(report["candidate"]["compile_mode_provenance"], "verified")
+        self.assertEqual(report["opengl"]["predecessor"]["status"], "observed")
+        self.assertEqual(report["opengl"]["pre_depth"], self.pre["depth"])
+        self.assertEqual(report["opengl"]["pre_color"]["sha256"], self.pre["color"]["sha256"])
+        controls = [row for row in report["pixels"] if row["selection"] == "rgb_match_control"]
+        self.assertEqual(report["matched_control_pixels"], 7)
+        self.assertEqual(len(controls), 7)
+        self.assertNotIn((0, 1), {(row["x"], row["y"]) for row in controls})
+        self.assertTrue(all(row["stages"]["rgb8"]["status"] == "exact" and not
+                            row["stages"]["rgb8"]["fragment_correspondence_verified"]
+                            for row in controls))
+        pixel = report["pixels"][0]
+        self.assertEqual((pixel["x"], pixel["y"], pixel["origin"]), (1, 2, "lower_left"))
+        self.assertEqual(pixel["first_observed_difference"], "rgb8")
+        self.assertIsNone(pixel["first_differing_stage"])
+        self.assertEqual(pixel["stages"]["rgb8"]["signed_differences"],
+                         {"R": 0, "G": 0, "B": 1})
+        self.assertFalse(pixel["stages"]["rgb8"]["fragment_correspondence_verified"])
+        self.assertEqual(self.localize()["pixels"], report["pixels"])
+
+    def test_missing_predecessor_reports_missing_planes_and_keeps_rgb8(self):
+        self.trace["_prefix"]["post_events"].remove(self.pre)
+        report = self.localize()
+        self.assertEqual(report["opengl"]["predecessor"]["status"], "missing_evidence")
+        self.assertEqual(report["opengl"]["predecessor"]["missing"],
+                         ["original_pre_color", "original_pre_depth"])
+        self.assertEqual(report["matched_control_pixels"], 0)
+        self.assertEqual(report["pixels"][0]["first_observed_difference"], "rgb8")
+        self.assertIsNone(report["opengl"]["pre_depth"])
+
+    def test_unbound_depth_does_not_hide_bound_pre_color(self):
+        self.pre["target"] = {**self.pre["target"],
+                              "depth_attachment": {"type": "texture", "name": 3}}
+        report = self.localize()
+        self.assertEqual(report["opengl"]["predecessor"]["missing"], ["original_pre_depth"])
+        self.assertEqual(report["matched_control_pixels"], 7)
+
+    def test_inconsistent_current_recipe_is_rejected(self):
+        path = self.replay / "producer-receipt.json"
+        original = path.read_text()
+        for field, value in (("sha256", "0" * 64),
+                             ("environment_sha256", "0" * 64),
+                             ("diagnostic", False), ("effective_env", {})):
+            with self.subTest(field=field):
+                receipt = json.loads(original)
+                receipt["recipe"][field] = value
+                path.write_text(json.dumps(receipt))
+                report = self.localize()
+                self.assertEqual(report["status"], "invalid_provenance", report)
+                self.assertEqual(report["pixels"], [])
+
+    def test_self_consistent_recipe_conflicting_with_native_mode_is_rejected(self):
+        path = self.replay / "producer-receipt.json"
+        receipt = json.loads(path.read_text())
+        receipt["recipe"] = gfx_independent_replay.replay_recipe(
+            env={"EU4_FRAME_REPLAY_FAST_MATH": "1"})
+        path.write_text(json.dumps(receipt))
+        report = self.localize()
+        self.assertEqual(report["status"], "invalid_provenance")
+        self.assertIn("compile options disagree", report["reason"])
+
+    def test_recipe_with_both_compile_switches_is_rejected(self):
+        path = self.replay / "producer-receipt.json"
+        receipt = json.loads(path.read_text())
+        receipt["recipe"]["consumed_env"]["EU4_FRAME_REPLAY_PRECISE_MATH"] = "1"
+        path.write_text(json.dumps(receipt))
+        report = self.localize()
+        self.assertEqual(report["status"], "invalid_provenance")
+        self.assertIn("retired", report["reason"])
+
+    def test_missing_recipe_is_only_accepted_for_historical_rgb8(self):
+        path = self.replay / "producer-receipt.json"
+        receipt = json.loads(path.read_text())
+        receipt.pop("recipe")
+        path.write_text(json.dumps(receipt))
+        self.assertEqual(self.localize()["status"], "invalid_provenance")
+        result_path = self.replay / "replay.json"
+        result = json.loads(result_path.read_text())
+        result.pop("shader_compile_options")
+        result_path.write_text(json.dumps(result))
+        receipt["result"]["replay_json_sha256"] = hashlib.sha256(
+            result_path.read_bytes()).hexdigest()
+        path.write_text(json.dumps(receipt))
+        report = self.localize()
+        self.assertEqual(report["candidate"]["compile_mode_provenance"], "unverified")
+        self.assertEqual(report["pixels"][0]["first_observed_difference"], "rgb8")
+        self.assertFalse(report["fragment_attribution"]["verified"])
+
+    def test_missing_original_post_observation_is_reported(self):
+        self.trace["_prefix"]["post_events"].clear()
+        report = self.localize()
+        self.assertEqual(report["status"], "missing_evidence", report)
+        self.assertEqual(report["missing"], ["original_event1_rgb8"])
+
+    def test_altered_seal_candidate_renderer_and_checkpoint_fail_closed(self):
+        expected = gfx_uv2_probe.localize(self.frame, self.replay, renderer_sha256="a" * 64)
+        self.assertEqual(expected["status"], "invalid_provenance")
+        self.assertIn("renderer", expected["reason"])
+        with mock.patch.dict(self.seal, {"manifest_sha256": "d" * 64}):
+            report = self.localize()
+            self.assertEqual(report["status"], "invalid_provenance")
+            self.assertIn("sealed manifest", report["reason"])
+        self.result["checkpoints"][0]["resource"] = "tex:432"
+        self.publish_candidate()
+        report = self.localize()
+        self.assertEqual(report["status"], "invalid_provenance")
+        self.assertEqual(report["pixels"], [])
+        self.assertIn("tex:433", report["reason"])
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the native probe host is macOS")
