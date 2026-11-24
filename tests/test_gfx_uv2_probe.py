@@ -25,7 +25,8 @@ BENCH = ROOT / "benchmark"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_uv2_probe, m6_frame, native_build  # noqa: E402
+from automation import (gfx_independent_replay, gfx_uv2_probe, m6_frame,  # noqa: E402
+                        native_build)
 
 WIDTH = HEIGHT = 4
 VERTEX_SHA = "v" * 64
@@ -481,8 +482,10 @@ class Event1ArtifactLocalizationTests(unittest.TestCase):
         self.renderer = "b" * 64
         self.seal = {**_seal(), "event_stream_sha256": "c" * 64}
         event = _event()
-        event["target"]["color_attachment"]["level"] = 0
-        self.trace = {"_events": [{"kind": "clear"}, event]}
+        event["target"]["color_attachment"].update(type="texture", level=0)
+        event["target"]["depth_attachment"] = {"type": "renderbuffer", "name": 3}
+        clear_target = {**event["target"], "viewport": [0, 0, 2, 2]}
+        self.trace = {"_events": [{"kind": "clear", "target": clear_target}, event]}
         original = bytes([2, 10, 20, 255]) * (WIDTH * HEIGHT)
         candidate = bytearray(original)
         # B at x=1, lower-left y=2. Alpha-only changes remain outside RGB8.
@@ -499,7 +502,22 @@ class Event1ArtifactLocalizationTests(unittest.TestCase):
             "pixel_format": "BGRA8", "width": WIDTH, "height": HEIGHT,
             "color": {"file": name, "sha256": hashlib.sha256(original).hexdigest()},
         }
-        self.trace["_prefix"] = {"post_events": [self.post]}
+        prior = bytearray(bytes([1, 1, 1, 255]) * (WIDTH * HEIGHT))
+        # One matching neighbor keeps RGB unchanged across the draw. Its alpha differs.
+        neighbor = (WIDTH + 0) * 4
+        prior[neighbor:neighbor + 4] = bytes([*original[neighbor:neighbor + 3], 7])
+        depth = struct.pack("<f", 1.0) * (WIDTH * HEIGHT)
+        (self.frame / "blobs" / "pre.bgra").write_bytes(prior)
+        (self.frame / "blobs" / "pre-depth.f32").write_bytes(depth)
+        self.pre = {
+            **self.post, "event": 0, "kind": "clear", "target": clear_target,
+            "color": {"file": "pre.bgra", "sha256": hashlib.sha256(prior).hexdigest(),
+                      "bytes": len(prior)},
+            "depth": {"status": "captured", "file": "pre-depth.f32", "format": "f32",
+                      "sha256": hashlib.sha256(depth).hexdigest(), "bytes": len(depth),
+                      "width": WIDTH, "height": HEIGHT},
+        }
+        self.trace["_prefix"] = {"post_events": [self.pre, self.post]}
         self.result = {
             "status": "ok", "stage": "complete", "failed": 0, "partial": False,
             "timed_out": False, "encoded": 2, "events": 2, "readback": True,
@@ -510,8 +528,6 @@ class Event1ArtifactLocalizationTests(unittest.TestCase):
                 "reference_sha256": self.post["color"]["sha256"],
             }],
         }
-        from automation import gfx_independent_replay
-        self.receipt_writer = gfx_independent_replay.write_producer_receipt
         self.publish_candidate()
         self.enterContext(mock.patch.object(
             gfx_uv2_probe, "frame_context", return_value=(self.trace, self.seal, event)))
@@ -520,7 +536,7 @@ class Event1ArtifactLocalizationTests(unittest.TestCase):
         result_path = self.replay / "replay.json"
         self.result["shader_compile_options"] = {"default_fast_math": True, "fast_math": False}
         result_path.write_text(json.dumps(self.result))
-        self.receipt_writer(self.replay, self.frame, {
+        gfx_independent_replay.write_producer_receipt(self.replay, self.frame, {
             "executable_sha256": self.renderer, "build_fingerprint": "a" * 64,
         }, result_path, env={"EU4_FRAME_REPLAY_FAST_MATH": "0"})
 
@@ -531,7 +547,17 @@ class Event1ArtifactLocalizationTests(unittest.TestCase):
         report = self.localize()
         self.assertEqual(report["status"], "missing_evidence", report)
         self.assertEqual(report["mask_pixels"], 1)
-        self.assertEqual(report["matched_control_pixels"], 8)
+        self.assertEqual(report["candidate"]["compile_mode_provenance"], "verified")
+        self.assertEqual(report["opengl"]["predecessor"]["status"], "observed")
+        self.assertEqual(report["opengl"]["pre_depth"], self.pre["depth"])
+        self.assertEqual(report["opengl"]["pre_color"]["sha256"], self.pre["color"]["sha256"])
+        controls = [row for row in report["pixels"] if row["selection"] == "rgb_match_control"]
+        self.assertEqual(report["matched_control_pixels"], 7)
+        self.assertEqual(len(controls), 7)
+        self.assertNotIn((0, 1), {(row["x"], row["y"]) for row in controls})
+        self.assertTrue(all(row["stages"]["rgb8"]["status"] == "exact" and not
+                            row["stages"]["rgb8"]["fragment_correspondence_verified"]
+                            for row in controls))
         pixel = report["pixels"][0]
         self.assertEqual((pixel["x"], pixel["y"], pixel["origin"]), (1, 2, "lower_left"))
         self.assertEqual(pixel["first_observed_difference"], "rgb8")
@@ -540,6 +566,74 @@ class Event1ArtifactLocalizationTests(unittest.TestCase):
                          {"R": 0, "G": 0, "B": 1})
         self.assertFalse(pixel["stages"]["rgb8"]["fragment_correspondence_verified"])
         self.assertEqual(self.localize()["pixels"], report["pixels"])
+
+    def test_missing_predecessor_reports_missing_planes_and_keeps_rgb8(self):
+        self.trace["_prefix"]["post_events"].remove(self.pre)
+        report = self.localize()
+        self.assertEqual(report["opengl"]["predecessor"]["status"], "missing_evidence")
+        self.assertEqual(report["opengl"]["predecessor"]["missing"],
+                         ["original_pre_color", "original_pre_depth"])
+        self.assertEqual(report["matched_control_pixels"], 0)
+        self.assertEqual(report["pixels"][0]["first_observed_difference"], "rgb8")
+        self.assertIsNone(report["opengl"]["pre_depth"])
+
+    def test_unbound_depth_does_not_hide_bound_pre_color(self):
+        self.pre["target"] = {**self.pre["target"],
+                              "depth_attachment": {"type": "texture", "name": 3}}
+        report = self.localize()
+        self.assertEqual(report["opengl"]["predecessor"]["missing"], ["original_pre_depth"])
+        self.assertEqual(report["matched_control_pixels"], 7)
+
+    def test_inconsistent_current_recipe_is_rejected(self):
+        path = self.replay / "producer-receipt.json"
+        original = path.read_text()
+        for field, value in (("sha256", "0" * 64),
+                             ("environment_sha256", "0" * 64),
+                             ("diagnostic", False), ("effective_env", {})):
+            with self.subTest(field=field):
+                receipt = json.loads(original)
+                receipt["recipe"][field] = value
+                path.write_text(json.dumps(receipt))
+                report = self.localize()
+                self.assertEqual(report["status"], "invalid_provenance", report)
+                self.assertEqual(report["pixels"], [])
+
+    def test_self_consistent_recipe_conflicting_with_native_mode_is_rejected(self):
+        path = self.replay / "producer-receipt.json"
+        receipt = json.loads(path.read_text())
+        receipt["recipe"] = gfx_independent_replay.replay_recipe(
+            env={"EU4_FRAME_REPLAY_FAST_MATH": "1"})
+        path.write_text(json.dumps(receipt))
+        report = self.localize()
+        self.assertEqual(report["status"], "invalid_provenance")
+        self.assertIn("compile options disagree", report["reason"])
+
+    def test_recipe_with_both_compile_switches_is_rejected(self):
+        path = self.replay / "producer-receipt.json"
+        receipt = json.loads(path.read_text())
+        receipt["recipe"]["consumed_env"]["EU4_FRAME_REPLAY_PRECISE_MATH"] = "1"
+        path.write_text(json.dumps(receipt))
+        report = self.localize()
+        self.assertEqual(report["status"], "invalid_provenance")
+        self.assertIn("retired", report["reason"])
+
+    def test_missing_recipe_is_only_accepted_for_historical_rgb8(self):
+        path = self.replay / "producer-receipt.json"
+        receipt = json.loads(path.read_text())
+        receipt.pop("recipe")
+        path.write_text(json.dumps(receipt))
+        self.assertEqual(self.localize()["status"], "invalid_provenance")
+        result_path = self.replay / "replay.json"
+        result = json.loads(result_path.read_text())
+        result.pop("shader_compile_options")
+        result_path.write_text(json.dumps(result))
+        receipt["result"]["replay_json_sha256"] = hashlib.sha256(
+            result_path.read_bytes()).hexdigest()
+        path.write_text(json.dumps(receipt))
+        report = self.localize()
+        self.assertEqual(report["candidate"]["compile_mode_provenance"], "unverified")
+        self.assertEqual(report["pixels"][0]["first_observed_difference"], "rgb8")
+        self.assertFalse(report["fragment_attribution"]["verified"])
 
     def test_missing_original_post_observation_is_reported(self):
         self.trace["_prefix"]["post_events"].clear()

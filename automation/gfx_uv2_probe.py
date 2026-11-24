@@ -647,24 +647,56 @@ def run(args: argparse.Namespace) -> dict:
     return report
 
 
+def _attachment(target: dict, plane: str) -> tuple | None:
+    attachment = target.get(f"{plane}_attachment") or {}
+    if attachment.get("name") is None:
+        return None
+    return (target.get("framebuffer"), attachment.get("type"),
+            attachment["name"], attachment.get("level"))
+
+
 def _event1_images(frame_dir: Path, trace: dict, event: dict) -> tuple[dict, dict]:
     target = event.get("target") or {}
-    color = target.get("color_attachment") or {}
-    actual = {"event": event.get("index"), "program": (event.get("program") or {}).get("name"),
-              "framebuffer": target.get("framebuffer"), "texture": color.get("name")}
-    if actual != EVENT1 or color.get("level") != 0:
+    color = _attachment(target, "color")
+    if (event.get("index") != 1 or (event.get("program") or {}).get("name") != 310
+            or color != (6, "texture", 433, 0)):
         raise ProbeError("the sealed draw does not match the event-1 target")
     post = post_observation(trace, 1, "tex:433")
     scope = gfx_observation.format_scope(post)
-    if ((post.get("target") or {}).get("framebuffer") != 6
+    if (_attachment(post.get("target") or {}, "color") != color
             or post.get("origin") != "lower_left"
             or not scope["supported"] or scope["compared_channels"] != "RGB"):
         raise ProbeError("the seal does not name the event-1 RGB8 draw and attachment")
+    reference = observation_image(frame_dir, post)
+    clear = trace["_events"][0]
+    prior_target = clear.get("target") or {}
     before = next((item for item in (trace.get("_prefix") or {}).get("post_events", [])
-                   if item.get("event") == 0 and item.get("resource") == "tex:433"
-                   and item.get("kind") == "clear" and item.get("origin") == "lower_left"
-                   and item.get("target") == post.get("target")), {})
-    return observation_image(frame_dir, post), before
+                   if item.get("event") == 0 and item.get("resource") == "tex:433"), {})
+    before_target = before.get("target") or {}
+    if (clear.get("kind") != "clear" or before.get("kind") != "clear"
+            or before.get("timing") != "post_event" or before.get("origin") != "lower_left"
+            or _attachment(prior_target, "color") != color
+            or _attachment(before_target, "color") != color
+            or any(before.get(k) != post[k] for k in ("width", "height"))):
+        return reference, {}
+    scope = gfx_observation.format_scope(before)
+    predecessor = {}
+    if (scope["supported"] and scope["compared_channels"] == "RGB"
+            and (before.get("color") or {}).get("file")):
+        predecessor["color"] = observation_image(frame_dir, before)
+    depth = _attachment(target, "depth")
+    plane = before.get("depth") or {}
+    if (depth is not None and _attachment(prior_target, "depth") == depth
+            and _attachment(before_target, "depth") == depth
+            and plane.get("status") == "captured" and plane.get("format") == "f32"
+            and plane.get("bytes") == reference["width"] * reference["height"] * 4
+            and all(plane.get(k, reference[k]) == reference[k] for k in ("width", "height"))
+            and plane.get("file") and plane.get("sha256")):
+        path = frame_dir / "blobs" / plane["file"]
+        if (path.is_file() and path.stat().st_size == plane["bytes"]
+                and gfx_independent_replay._sha256_file(path) == plane["sha256"]):
+            predecessor["depth"] = plane
+    return reference, predecessor
 
 
 def _event1_checkpoint(replay_dir: Path, seal: dict, trace: dict,
@@ -699,7 +731,9 @@ def _event1_checkpoint(replay_dir: Path, seal: dict, trace: dict,
         raise ProbeError("candidate checkpoint does not name the sealed RGB8 observation")
     digest = next(item["sha256"] for item in receipt["result"]["checkpoint_files"]
                   if item["file"] == checkpoint["file"])
-    return {"path": replay_dir / checkpoint["file"], "sha256": digest}, receipt["producer"]
+    producer = {**receipt["producer"],
+                "compile_mode_provenance": verified["compile_mode_provenance"]}
+    return {"path": replay_dir / checkpoint["file"], "sha256": digest}, producer
 
 
 def localize(frame_dir: Path, replay_dir: Path | None = None, *,
@@ -713,16 +747,26 @@ def localize(frame_dir: Path, replay_dir: Path | None = None, *,
             raise ProbeError("the source seal does not contain authentic OpenGL evidence")
         report["capture"] = gfx_independent_replay.capture_identity(seal, trace)
         reference, before = _event1_images(frame_dir, trace, event)
-        report["fragment_attribution"] = attribution = fragment_attribution(event.get("state"))
+        attribution = fragment_attribution(event.get("state"))
+        report["fragment_attribution"] = attribution
+        report["fragment_attribution_verified"] = attribution["verified"]
         report["next_observation"] = "contributing_fragment_identity_and_coverage"
         report["first_unresolved_stage"] = "fragment_coverage"
+        pre_color = before.get("color")
+        missing_predecessor = [f"original_pre_{plane}" for plane in ("color", "depth")
+                               if plane not in before]
+        report["missing"] = [*missing_predecessor, report["next_observation"]]
         report["opengl"] = {
             "post_rgb8": {**reference, "path": str(reference["path"])},
-            "pre_color": before.get("color"), "pre_depth": before.get("depth"),
+            "pre_color": {**pre_color, "path": str(pre_color["path"])} if pre_color else None,
+            "pre_depth": before.get("depth"),
+            "predecessor": {"event": 0, "resource": "tex:433",
+                            "status": "missing_evidence" if missing_predecessor else "observed",
+                            "missing": missing_predecessor},
         }
         if replay_dir is None:
-            return {**report, "status": "missing_evidence",
-                    "missing": ["candidate_event1_rgb8", report["next_observation"]]}
+            report["missing"].append("candidate_event1_rgb8")
+            return {**report, "status": "missing_evidence"}
         image, producer = _event1_checkpoint(replay_dir, seal, trace, reference,
                                              renderer_sha256)
         width, height = reference["width"], reference["height"]
@@ -730,14 +774,19 @@ def localize(frame_dir: Path, replay_dir: Path | None = None, *,
         right = _image(image["path"], image["sha256"], width, height, "candidate RGB8")
         mask = _differences(left, right)
         residuals = set(mask)
-        matched = [xy for xy in _neighborhood(mask, width, height, 1)
-                   if xy not in residuals][:CONTROL_PIXELS]
+        matched = []
+        if pre_color is not None:
+            before_rgb = _image(pre_color["path"], pre_color["sha256"], width, height,
+                                "sealed predecessor RGB8")
+            changed = _diff_mask(before_rgb, left)
+            matched = [(x, y) for x, y in _neighborhood(mask, width, height, 1)
+                       if (x, y) not in residuals and changed[height - 1 - y, x]][:CONTROL_PIXELS]
         for x, y in mask + matched:
             rgb = {side: dict(zip("RGB", map(int, array[height - 1 - y, x, :3])))
                    for side, array in (("opengl", left), ("metal", right))}
             report["pixels"].append({
                 "x": x, "y": y, "origin": "lower_left",
-                "selection": "residual" if (x, y) in residuals else "matched_control",
+                "selection": "residual" if (x, y) in residuals else "rgb_match_control",
                 **compare_stages({"rgb8": rgb}, attribution=attribution,
                                  provenance_valid=True),
             })
@@ -766,7 +815,8 @@ def main(argv: list[str] | None = None) -> int:
     offline = sub.add_parser("localize", help="inspect sealed event-1 numerical evidence")
     offline.add_argument("--frame", type=Path, required=True)
     offline.add_argument("--replay", type=Path)
-    offline.add_argument("--renderer-sha256")
+    offline.add_argument("--renderer-sha256",
+                         help="expected executable digest to compare with the producer receipt")
     args = parser.parse_args(argv)
     if args.command == "localize":
         if bool(args.replay) != bool(args.renderer_sha256):

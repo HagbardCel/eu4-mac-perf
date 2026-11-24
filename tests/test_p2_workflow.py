@@ -14,7 +14,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from automation import agent_tools, case_baseline, gfx_replay_case
+from automation import (agent_tools, case_baseline, gfx_independent_replay,
+                        gfx_replay_case)
 
 
 class P2WorkflowTests(unittest.TestCase):
@@ -60,6 +61,7 @@ class P2WorkflowTests(unittest.TestCase):
         metal_bytes = (case / "replay" / "metal-frame.bgra").read_bytes()
         add("replay/producer-receipt.json", json.dumps({
             "schema": "gfx-replay-producer-receipt/v1",
+            "recipe": gfx_independent_replay.replay_recipe(env={}),
             "producer": {
                 "executable": "/tmp/gfx_frame_replay",
                 "executable_sha256": "c" * 64,

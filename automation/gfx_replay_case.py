@@ -2537,12 +2537,22 @@ def verify_replay_producer_receipt(replay_dir: Path, seal: dict) -> dict:
         problems.append("producer receipt has no replay.json")
     else:
         try:
-            replay = _json(replay_path)
+            replay_bytes = replay_path.read_bytes()
+            replay = json.loads(replay_bytes.decode("utf-8"))
+            if not isinstance(replay, dict):
+                raise CaseError("invalid_json", str(replay_path))
         except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
             replay = {}
             problems.append("producer receipt has no readable replay.json")
-        if result.get("replay_json_sha256") != _sha(replay_path):
-            problems.append("producer receipt does not bind replay.json")
+        else:
+            if result.get("replay_json_sha256") != hashlib.sha256(replay_bytes).hexdigest():
+                problems.append("producer receipt does not bind replay.json")
+    compile_mode_verified = False
+    try:
+        compile_mode_verified = gfx_independent_replay.validate_replay_recipe(
+            receipt.get("recipe"), replay)
+    except gfx_independent_replay.ReplayError as exc:
+        problems.append(str(exc))
     metal_sha = _sha(metal_path) if metal_path.is_file() else None
     if result.get("metal_frame_sha256") != metal_sha:
         problems.append("producer receipt does not bind the Metal readback")
@@ -2600,6 +2610,8 @@ def verify_replay_producer_receipt(replay_dir: Path, seal: dict) -> dict:
     return {
         "status": status,
         "problems": problems,
+        "compile_mode_provenance": ("verified" if not problems and compile_mode_verified
+                                    else "unverified"),
         "receipt": {
             "schema": receipt.get("schema"),
             "producer": {

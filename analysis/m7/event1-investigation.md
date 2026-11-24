@@ -132,13 +132,23 @@ python3.14 -m automation.gfx_uv2_probe localize \
   --renderer-sha256 787670d93816de787b513289388107b5f4e3615844e58b13343c029362dd15c7
 ```
 
-The command verifies the seal, executable identity from the cited historical
-producer, and receipt-bound checkpoint. The report gives the 20 existing
-residuals and up to eight exact-RGB neighbors, selected in lower-left row
-order. Signed differences are Metal minus OpenGL. RGB8 is the first observed
-difference. The earlier fragment stage is unresolved. The existing `compare`
-command labels isolated coverage and UV2 numbers conditional even if the
-diagnostic control RGB is exact. [Producer receipt][canonical] ·
+The command verifies the original seal and the producer receipt's checkpoint
+binding. `--renderer-sha256` compares an independently supplied expected
+executable digest with the producer receipt. The command uses the recorded
+build identity and does not rebuild or independently verify the renderer source
+closure. Current v3 receipts must agree with the native compile options in
+`replay.json` and pass recipe validation. The cited historical replay remains
+usable for RGB8 comparison with `compile_mode_provenance=unverified`.
+
+The report gives the 20 existing residuals and up to eight nearby
+`rgb_match_control` pixels, selected in lower-left row order within the
+observed GL RGB-change region. The region comes from the bound event-0 and
+event-1 color snapshots. It supplies no primitive or sample correspondence.
+Missing or unbound predecessor planes are listed explicitly. Without bound
+pre-draw color the report omits the controls. Signed differences are Metal
+minus OpenGL. RGB8 is the first observed difference. The contributing-fragment
+stage remains unresolved, and the existing `compare` command reports isolated
+coverage and UV2 conditionally. [Producer receipt][canonical] ·
 [offline harness](../../docs/harness.md#event-1-uv2-diagnostic-probe).
 
 ### Operator request for the next observation
@@ -153,9 +163,11 @@ diagnostic control RGB is exact. [Producer receipt][canonical] ·
   pre-draw depth and test decision, original discard, write mask, blend and
   logic state accounted for. Retain enough fragment order to disambiguate
   overlap. Report UV2 float32 bits for the attributable fragment at the
-  residual coordinates and eight matched control pixels. The existing
-  `--uv2-probe` can produce a control and isolated UV2 sidecar. Its depth bypass,
-  replacement fragment shader and unsealed sidecars leave this request
+  residual coordinates and up to eight RGB-match controls. Extend the opt-in
+  branch in the existing GL observer and keep the original draw and readback
+  as the reference. The existing `--uv2-probe` produces a control and
+  isolated UV2 sidecar. Its depth bypass, replacement fragment shader and
+  unsealed sidecars leave this request
   unsupported today. [GL probe implementation](../../benchmark/eu4_gfx_frame_trace.c).
 - Expect a fresh `frame-seal.json`, the prefix observation manifest and blobs,
   and digest-bound sparse observation records containing seal, event and target
