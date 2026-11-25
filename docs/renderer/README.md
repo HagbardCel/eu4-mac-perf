@@ -56,10 +56,9 @@ The six dossier families describe 92 functions at the static semantic level.
   [Recorded-original certificate](../../results/20261025T155406Z-gfx-live-cert/tier1-certificate.json) ·
   [Coverage audit](../../results/20261025T155406Z-gfx-live-analysis/e1-coverage-audit.md)
 
-  All 64 raw transcripts were unavailable at their recorded path during R0.
-  R1b owns recovery and validation from operator archive
+  All 64 raw transcripts remain outstanding from operator archive
   `pr-d-gfx-live-20261025T155406Z`.
-  [R0 recovery obligation](../../plans/repository-refactor/r0-evidence.md#protected-evidence) ·
+  [Recovery status](../evidence-retention.md#protected-collections-and-recovery-status) ·
   [Archive identity](../../results/20261025T155406Z-gfx-live-publication/publication-summary.md#operator-archive)
 
 - **`_GfxForceWireframe` · RVA `0x15ed175`.** The static contract establishes
