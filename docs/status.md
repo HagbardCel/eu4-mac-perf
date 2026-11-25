@@ -18,25 +18,10 @@ history and must be read with its original run/seal identity.
 
 ### Earlier harness review
 
-The 19 November review reproduced a false-equivalence verdict from a differing
-intermediate checkpoint. It also found incomplete sampler keys, unbound replay
-overrides, lost local evidence, a mismatched campaign sidecar, and a long
-capture tail after the sealed result was ready. It recommended retaining the
-single-process shadow, portable case, and independent checker. It found
-evidence retrieval and experiment design cost more time than replay. The
-storage review measured 36.99 GiB of duplicate local readback bytes in one run
-and recommended preserving the order and one verified payload. The later
-[remediation closure](../analysis/harness-remediation/closure.md) tracks the
-fixes and remaining scientific work.
-
-On present 616 the first differing writer was terrain draw 14, with 607
-differing pixels at checkpoint 15. The sampler collision's contribution,
-effective LOD and intermediate GL arithmetic remained unresolved. The review
-rejected whole-frame readback at every draw, a second process for each test,
-an all-game IR, and a replacement agent loop. It deferred an optimized
-backend pending a measured workload and a verified contract.
-[Historical assessment](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/plans/closed/harness-review/assessment.md) ·
-[Implementation record](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/plans/closed/harness-review/implementation.md)
+The 19 November review established a false-equivalence verdict at an
+intermediate checkpoint and localized the first mismatch in present 616.
+Its subsequent fixes and scientific limits are recorded in the
+[earlier review disposition](../analysis/harness-remediation/closure.md#19-november-review-disposition).
 
 ### Capability snapshot
 
@@ -1395,7 +1380,7 @@ Future **targeted** measurements (including further R0-M work) remain possible w
 - **Trace and fixture stage (2026-10-26).** Offline **TR0**, **TR1**, and **INV** may start from the contract amendment; **TR2** composition follows TR1, and its QBDI-to-fixture integration follows a supported TR0 result. The schema is [`execution-observation/v1`](oracle/TRACE_V1.md). **Historical TR3 preflight gate:** live EU IV instrumentation was not authorized by that gate. Its preflight passed on 2026-10-29 at `0a24c90` (zero-skip macOS run of the two TR2 modules). The preflight-only work order is [work-orders/TR3.md](oracle/work-orders/TR3.md). The work order records prerequisites and a proposed later experiment. That pass authorizes no implementation, EU4 launch, injection, live trace, or replacement. The implementation scope is [work-orders/TR3-IMPL.md](oracle/work-orders/TR3-IMPL.md). Writing its named paths waits for that work order to merge. That gate left an EU4 run unauthorized. See [Oracle plan of record](oracle/PLAN_OF_RECORD.md).
 - **Function-agnostic tracing (GEN0, 2026-10-30).** The next trace milestone is one preselected function, described by [`trace-target/v1`](oracle/GENERIC_TRACE_V1.md). The [plan of record](oracle/PLAN_OF_RECORD.md) records an operator report of the first EU4 interception: 15 instructions, eight memory operations, natural return boundary, no sealed digest, no qualified fixture. **GEN1** is the native tracer ([work-orders/GEN1.md](oracle/work-orders/GEN1.md)). **GEN2** may start offline from [work-orders/GEN2.md](oracle/work-orders/GEN2.md). **GEN3-A** may be written from [work-orders/GEN3.md](oracle/work-orders/GEN3.md); after it merges, **GEN3-B** may repair the launcher. One live EU4 launch stays separately authorized.
 - **Next phase (primary capability):** ground-truth acquisition + agent-driven C++ reconstruction of the graphics stack, per the [Oracle plan of record](oracle/PLAN_OF_RECORD.md) ([program index](oracle/README.md)). The Oracle **P3** slice is complete and released (`oracle-v2-p3b-20261017`), and so is **P4/P4b** — the offline recorder plus synthetic target, then the synthetic graphics replay — released as annotated tag `oracle-v2-p4b-20261018`. **P4r-A**, **P4r-B** and **P4r-C** (the record schema and immutable evidence store; exact capture accounting, a declared capture policy, offline finalization, concurrency and bounded capture; the resource registry/closure verifier and offline R0-M protocol compatibility) and **P4b** (the independent synthetic graphics replay) are all merged. No EU IV launch is authorized until P4/P4b pass **and the applicable offline half-gate passes**; passing P4/P4b does not satisfy that gate. That gate is sliced **P4.9-P4.11** ([P4_INTEGRATION.md](oracle/P4_INTEGRATION.md)): **P4.9** — bounded resource-content capture, whole-version content semantics, content provenance, fail-closed malformed declarations and the versioned observation export — is implemented. The remaining gate is split by acquisition scope (see above): the function-oriented **P4.10** authorizes **P5a**, and **P4.11** authorizes **P5b**. **PR D** P5a acceptance evidence exists for the session above; no CI job launches EU IV.
-- Consolidated rendering knowledge: [macOS rendering findings](eu4_macos_rendering_findings.md), [alternatives ranking](eu4_rendering_alternatives_ranked.md).
+- Consolidated rendering knowledge · [Renderer index](renderer/README.md), [macOS rendering findings](eu4_macos_rendering_findings.md), [alternatives ranking](eu4_rendering_alternatives_ranked.md).
 
 ## Reverse engineering (PR D tooling)
 

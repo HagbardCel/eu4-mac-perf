@@ -489,12 +489,14 @@ The current source-level dependency inventory, native DSH hook behavior, actual 
 
 ### Repository starting points for R0
 
-- [Current status and historical observations](https://github.com/HagbardCel/eu4-mac-perf/blob/main/docs/status.md)
+For current renderer knowledge, see the [renderer index](../../docs/renderer/README.md).
+
+- [Current status and historical observations](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/docs/status.md)
 - [Existing canonical strategy](https://github.com/HagbardCel/eu4-mac-perf/blob/main/docs/eu4_recommended_strategy.md)
 - [Pinned executable](https://github.com/HagbardCel/eu4-mac-perf/blob/main/reverse_engineering/target.json)
 - [Function reconstruction and differential validation charter](https://github.com/HagbardCel/eu4-mac-perf/blob/main/docs/renderer-reconstruction-and-differential-validation.md)
-- [Original renderer knowledge](../../docs/renderer/eu4_renderer.md) and [Metal documentation](../../docs/renderer/metal.md)
-- [Agent instructions](https://github.com/HagbardCel/eu4-mac-perf/blob/main/AGENTS.md), [existing skill](https://github.com/HagbardCel/eu4-mac-perf/blob/main/.opencode/skills/opengl-metal-reconstruction/SKILL.md), [tools](https://github.com/HagbardCel/eu4-mac-perf/blob/main/docs/agent-tools.md)
+- [Original renderer knowledge](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/docs/eu4_renderer.md) and [Metal documentation](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/docs/metal.md)
+- [Agent instructions](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/AGENTS.md), [existing skill](https://github.com/HagbardCel/eu4-mac-perf/blob/main/.opencode/skills/opengl-metal-reconstruction/SKILL.md), [tools](https://github.com/HagbardCel/eu4-mac-perf/blob/main/docs/agent-tools.md)
 - [DSH runtime documentation](https://github.com/HagbardCel/eu4-mac-perf/blob/main/dsh/README.md), [ordinary workspace overlay](https://github.com/HagbardCel/eu4-mac-perf/blob/main/dsh/profile/offline-reconstruction.patch.yml), [launcher](https://github.com/HagbardCel/eu4-mac-perf/blob/main/dsh/scripts/run.sh)
 - [Governance](https://github.com/HagbardCel/eu4-mac-perf/blob/main/docs/governance.md), [harness](https://github.com/HagbardCel/eu4-mac-perf/blob/main/docs/harness.md), [prefix checker](https://github.com/HagbardCel/eu4-mac-perf/blob/main/automation/gfx_prefix_check.py), [campaign guard](https://github.com/HagbardCel/eu4-mac-perf/blob/main/automation/campaign_guard.py)
 - [Representative legacy campaign](https://github.com/HagbardCel/eu4-mac-perf/blob/main/campaigns/eu4-m7-autonomy-offline/campaign.json), [sidecar](https://github.com/HagbardCel/eu4-mac-perf/blob/main/dsh/campaigns/m7-autonomy-offline.json), [acceptance wrapper](https://github.com/HagbardCel/eu4-mac-perf/blob/main/campaigns/eu4-m7-autonomy-offline/accept.py)

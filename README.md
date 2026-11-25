@@ -3,6 +3,7 @@
 This repository measures and profiles the **GOG** macOS build of Europa Universalis IV (pinned x86-64 under Rosetta) and investigates rendering cost on Apple Silicon. It combines live measurement, static reverse engineering, and controlled experiments toward validated optimizations.
 
 - **Current state:** [docs/status.md](docs/status.md)
+- **Renderer knowledge** · [Components, functions, and findings](docs/renderer/README.md)
 - **Strategy (canonical):** [docs/eu4_recommended_strategy.md](docs/eu4_recommended_strategy.md) ([navigation index](docs/roadmap.md))
 - **Live graphics experiments:** [docs/live-gfx-experiments.md](docs/live-gfx-experiments.md)
 - **OpenCode campaigns:** [automation/README.md](automation/README.md)
