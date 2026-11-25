@@ -1,6 +1,6 @@
 > **Archived 21 November 2026.** This plan is closed. Definitive disposition:
 > [closure.md](../../../analysis/harness-remediation/closure.md). Earlier
-> archived review: [harness-review](../harness-review/implementation.md).
+> archived review: [harness-review](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/plans/closed/harness-review/implementation.md).
 > Post-archive reliability correction #276 (`ce6f8b2f`, merged `0e9447f8`)
 > keeps the worktree lock with a surviving test child; current `main` and the
 > full commit sequence are in [docs/status.md](../../../docs/status.md) and the

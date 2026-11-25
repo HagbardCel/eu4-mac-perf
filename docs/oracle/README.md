@@ -55,9 +55,8 @@ consumes. The project's power/heat objective is the downstream consumer of that 
 | [BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md) | Preserved v2 blueprint bytes, hashes and tag (historical reference) |
 | [../repo-map.md](../repo-map.md) | Tracked-path inventory and lifecycle labels (P1 audit) |
 | [../repo-audit-context.json](../repo-audit-context.json) | Audit identity triple (source snapshot, policy, tools); governs `docs/repo-{inventory,edges,lifecycle}.csv` |
-The blueprint that this program refines is preserved verbatim at
-`docs/proposals/EU4_Oracle_v2/` (annotated tag `oracle-v2-blueprint-20261016`, provenance in
-[BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md)). Its executable seed now lives in the
+The original blueprint and its recovery instructions are recorded in
+[BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md). Its executable seed lives in the
 `oracle/` package (`oracle/core.py`, byte-identical to the preserved prototype) with tests in
 `tests/test_oracle_core.py`. See [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md) for the phase sequence.
 
@@ -83,8 +82,6 @@ remains the per-function lifecycle and does not define the recorder.
 2. **Canonical Mission update — done:** `../eu4_recommended_strategy.md` names the gated
    RE0–RE3 workstream in its Mission, and `../status.md` records ground-truth acquisition
    plus reconstruction as the primary next-phase capability.
-3. **Seed migration (P2) — done:** the original `../proposals/EU4_Oracle_v2/` bytes are
-   preserved verbatim and tagged (see [BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md)); the
-   prototype is copied byte-identically into `oracle/` and its tests join `tests/`. The blueprint
-   stays the historical reference while `docs/oracle/` remains authoritative; see
-   [REUSE_MAP.md](REUSE_MAP.md).
+3. **Seed migration (P2) — done:** the prototype was copied byte-identically into
+   `oracle/` and its tests joined `tests/`. See the
+   [blueprint provenance](BLUEPRINT_PROVENANCE.md) and [reuse map](REUSE_MAP.md).

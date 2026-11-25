@@ -10,13 +10,18 @@ history and must be read with its original run/seal identity.
 
 | Question | Canonical document |
 |---|---|
-| What does the original EU4 renderer do, and how was it observed? | [EU4 renderer](eu4_renderer.md) |
-| How does the faithful Metal backend work and what is qualified? | [Metal backend](metal.md) |
-| What is planned for the optimized backend? | [Metal optimized](metal_optimized.md) |
+| Where are renderer components, functions, backends, and findings documented? | [Renderer knowledge](renderer/README.md) |
 | How is evidence retained and restored? | [Evidence retention](evidence-retention.md) |
 | Which command should I run, and how do I recover? | [Harness operations](harness.md) |
 | What is the review remediation status? | [Coverage matrix (archived)](../plans/closed/harness-review-20261120/implementation.md) · [closure](../analysis/harness-remediation/closure.md) · [verification](../analysis/harness-remediation/verification-20261121.md) |
 | What is the reconstruction charter and safety contract? | [Charter](renderer-reconstruction-and-differential-validation.md) · [AGENTS.md](../AGENTS.md) |
+
+### Earlier harness review
+
+The 19 November review established a false-equivalence verdict at an
+intermediate checkpoint and localized the first mismatch in present 616.
+Its subsequent fixes and scientific limits are recorded in the
+[earlier review disposition](../analysis/harness-remediation/closure.md#19-november-review-disposition).
 
 ### Capability snapshot
 
@@ -46,7 +51,7 @@ GitHub identity is the author and GitHub refuses self-approval.
 
 | Area | State | Evidence / scope | Smallest missing discriminator |
 |---|---|---|---|
-| Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and exact four-channel comparator; all channels are compared | — |
+| Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and [exact comparison of applicable attachment channels](renderer/metal.md#contracts) | — |
 | Exact-prefix event-20 coverage | **Implemented; trusted candidate execution; live pilot stops at event 1** | One observation mechanism for default/offscreen targets and pre/post timing; one reconciliation/comparison path; colour payloads are the asserted equality scope, while depth/stencil snapshots are opt-in diagnostics; the checker builds the candidate from a source snapshot, executes it with a reference-free replay input against an immutable copied reference, and requires a single `qualified` predicate (pixel equality and independent attribution); the requested target prefix bounds qualification while later observations remain diagnostics; see the [exact-prefix report](../analysis/m7/m7-exact-prefix-report.md) | The event-1 1-LSB DXT1_ALPHA difference (`tex:433`, 23 px) is not root-caused. Event 11 is R32F and unobserved in the existing seal; R32F support is implemented and tested. Native multi-round DSH integration of the corrected checker is not yet demonstrated, so `M7_AUTONOMOUS_READY` is not claimed |
 | Exact verdict semantics | **Merged and audit-reviewed** | PR #241 final `3be433f7`; raw exactness separated from policy; envelope hard cap. #258 `8a5d4bc2` fixes the residual report-locator cap and malformed-evidence tracebacks; merged `d29f45f0` after independent exact-head review. | No missing discriminator for the envelope contract; non-blocking residuals are named in the audit |
 | Event/writer attribution | **Merged; audit-reviewed** | PR #242 final `7bcaaa1c`; capture identity from validated graph/checkpoint records; 616/904 matrices generated | Regenerate present 904/616 rows from the sealed graph |
@@ -1375,7 +1380,7 @@ Future **targeted** measurements (including further R0-M work) remain possible w
 - **Trace and fixture stage (2026-10-26).** Offline **TR0**, **TR1**, and **INV** may start from the contract amendment; **TR2** composition follows TR1, and its QBDI-to-fixture integration follows a supported TR0 result. The schema is [`execution-observation/v1`](oracle/TRACE_V1.md). **Historical TR3 preflight gate:** live EU IV instrumentation was not authorized by that gate. Its preflight passed on 2026-10-29 at `0a24c90` (zero-skip macOS run of the two TR2 modules). The preflight-only work order is [work-orders/TR3.md](oracle/work-orders/TR3.md). The work order records prerequisites and a proposed later experiment. That pass authorizes no implementation, EU4 launch, injection, live trace, or replacement. The implementation scope is [work-orders/TR3-IMPL.md](oracle/work-orders/TR3-IMPL.md). Writing its named paths waits for that work order to merge. That gate left an EU4 run unauthorized. See [Oracle plan of record](oracle/PLAN_OF_RECORD.md).
 - **Function-agnostic tracing (GEN0, 2026-10-30).** The next trace milestone is one preselected function, described by [`trace-target/v1`](oracle/GENERIC_TRACE_V1.md). The [plan of record](oracle/PLAN_OF_RECORD.md) records an operator report of the first EU4 interception: 15 instructions, eight memory operations, natural return boundary, no sealed digest, no qualified fixture. **GEN1** is the native tracer ([work-orders/GEN1.md](oracle/work-orders/GEN1.md)). **GEN2** may start offline from [work-orders/GEN2.md](oracle/work-orders/GEN2.md). **GEN3-A** may be written from [work-orders/GEN3.md](oracle/work-orders/GEN3.md); after it merges, **GEN3-B** may repair the launcher. One live EU4 launch stays separately authorized.
 - **Next phase (primary capability):** ground-truth acquisition + agent-driven C++ reconstruction of the graphics stack, per the [Oracle plan of record](oracle/PLAN_OF_RECORD.md) ([program index](oracle/README.md)). The Oracle **P3** slice is complete and released (`oracle-v2-p3b-20261017`), and so is **P4/P4b** — the offline recorder plus synthetic target, then the synthetic graphics replay — released as annotated tag `oracle-v2-p4b-20261018`. **P4r-A**, **P4r-B** and **P4r-C** (the record schema and immutable evidence store; exact capture accounting, a declared capture policy, offline finalization, concurrency and bounded capture; the resource registry/closure verifier and offline R0-M protocol compatibility) and **P4b** (the independent synthetic graphics replay) are all merged. No EU IV launch is authorized until P4/P4b pass **and the applicable offline half-gate passes**; passing P4/P4b does not satisfy that gate. That gate is sliced **P4.9-P4.11** ([P4_INTEGRATION.md](oracle/P4_INTEGRATION.md)): **P4.9** — bounded resource-content capture, whole-version content semantics, content provenance, fail-closed malformed declarations and the versioned observation export — is implemented. The remaining gate is split by acquisition scope (see above): the function-oriented **P4.10** authorizes **P5a**, and **P4.11** authorizes **P5b**. **PR D** P5a acceptance evidence exists for the session above; no CI job launches EU IV.
-- Consolidated rendering knowledge: [macOS rendering findings](eu4_macos_rendering_findings.md), [alternatives ranking](eu4_rendering_alternatives_ranked.md).
+- Consolidated rendering knowledge · [Renderer index](renderer/README.md), [macOS rendering findings](eu4_macos_rendering_findings.md), [alternatives ranking](eu4_rendering_alternatives_ranked.md).
 
 ## Reverse engineering (PR D tooling)
 

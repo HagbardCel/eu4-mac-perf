@@ -3,6 +3,7 @@
 | Document | Purpose |
 | -------- | ------- |
 | [status.md](status.md) | Current measured state, qualification gates, blockers |
+| [Renderer knowledge](renderer/README.md) | Original renderer, faithful backends, function contracts, and findings |
 | [roadmap.md](roadmap.md) | Navigation to the canonical strategy (not a second roadmap) |
 | [eu4_recommended_strategy.md](eu4_recommended_strategy.md) | **Canonical technical strategy and priorities** |
 | [conventions.md](conventions.md) | Repository responsibilities and authoring rules |

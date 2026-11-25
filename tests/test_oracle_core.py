@@ -1,11 +1,6 @@
-import hashlib
 import unittest
-from pathlib import Path
 
 from oracle.core import ObservationLedger, compare_fixture
-
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-
 
 class TestObservationLedger(unittest.TestCase):
     def test_reconcile_duplicate_and_counted_only(self):
@@ -68,20 +63,5 @@ class TestComparator(unittest.TestCase):
         e = dict(self.e, return_hex="0000000000000000")
         a = dict(self.e, return_hex="0000000000000080")
         self.assertEqual(compare_fixture(e, a)["status"], "MISMATCH")
-
-class TestSeedSourceIdentity(unittest.TestCase):
-    """The migrated seed must retain the preserved prototype's exact bytes.
-
-    Behavioral tests alone cannot prove byte fidelity; this pins the source
-    identity against the verbatim bundle copy.
-    """
-
-    def test_migrated_module_is_byte_identical_to_preserved_prototype(self):
-        migrated = _REPO_ROOT / "oracle" / "core.py"
-        preserved = _REPO_ROOT / "docs" / "proposals" / "EU4_Oracle_v2" / "oracle_proto" / "core.py"
-        self.assertEqual(
-            hashlib.sha256(migrated.read_bytes()).hexdigest(),
-            hashlib.sha256(preserved.read_bytes()).hexdigest(),
-        )
 
 if __name__ == "__main__": unittest.main()

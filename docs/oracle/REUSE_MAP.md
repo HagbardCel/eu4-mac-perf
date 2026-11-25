@@ -7,9 +7,8 @@ maintain). No code is moved by this document; it records ownership before P2 mig
 > **P2 status (2026-10-17):** the migration below is landing. The blueprint bytes are preserved
 > verbatim and tagged (`oracle-v2-blueprint-20261016`, see
 > [BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md)); the prototype is copied byte-identically
-> into `oracle/core.py` (module unchanged for P2), its tests are in `tests/test_oracle_core.py`,
-> and `tooling/common/check_oracle_bundle.py` verifies preservation in CI. The table below
-> remains the P1 ownership record.
+> into `oracle/core.py` (module unchanged for P2), and its behavioral tests live in
+> `tests/test_oracle_core.py`. The table below records P1 ownership.
 
 ## Existing assets → Oracle needs
 

@@ -1,8 +1,7 @@
 # Optimized Metal backend (planned)
 
-This backend is **planned**, not implemented. It must not be compared to the
-faithful backend as if it were a correctness reference. The faithful backend
-and the original sealed OpenGL evidence remain the authority.
+This backend is **planned**. The faithful backend and original sealed OpenGL
+evidence provide the correctness references for future variants.
 
 ## Preconditions
 
@@ -43,5 +42,5 @@ and the receipt schema. It may not reuse a faithful result as proof that an
 optimized variant is correct; the optimized variant needs its own exact
 comparison and its own protected control.
 
-See [Metal backend](metal.md), [status](status.md) and the
-[rendering strategy](eu4_recommended_strategy.md).
+See [Metal backend](metal.md), [status](../status.md) and the
+[rendering strategy](../eu4_recommended_strategy.md).

@@ -11,6 +11,46 @@ Governing references: [assessment](../../plans/closed/harness-review-20261120/as
 [matrix](../../plans/closed/harness-review-20261120/implementation.md),
 [audit](audit-20261120.md), [integration report](integration-report.md).
 
+## 19 November review disposition
+
+The earlier review reproduced a false exact verdict with a one-byte
+intermediate mismatch. #221 made authoritative checkpoints and exact
+controls part of acceptance, and #241/#258 hardened the verdict and evidence
+handling. #222 corrected pixel-region geometry. #245 later fixed the
+incomplete sampler key, cull gating and signed scissor conversion. #225
+unified shader receipt ownership, and #248 bound the effective replay
+recipe, shader inputs and cache identity.
+[Original assessment](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/plans/closed/harness-review/assessment.md) ·
+[Original merge record](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/plans/closed/harness-review/implementation.md) ·
+[Later verification](#finding-disposition)
+
+Lost case data and a mismatched campaign sidecar delayed the pilot.
+Verified case lookup and restore (#227/#246/#257), campaign preflight
+(#226/#247), and corrected goal and replay accounting (#223/#251)
+addressed the handoff. After the shadow result, the launcher waited
+202.48 seconds for auxiliary recorder summaries. #249 added terminal-result
+stop and explicit owned-process cleanup. The storage review found 36.99 GiB
+of duplicate local readbacks and proposed retaining their order and one
+verified payload. The repeated files and any later restore have separate
+evidence obligations.
+[Retention and startup verification](#finding-disposition) ·
+[Capture lifecycle fix](../../plans/closed/harness-review-20261120/steps/06-terminal-capture.md) ·
+[Original storage finding](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/plans/closed/harness-review/steps/09-artifact-cleanup.md)
+
+Present 616 localized the first differing writer to terrain draw 14, with
+607 differing pixels at checkpoint 15. The sampler collision's contribution,
+effective LOD and original GL intermediate arithmetic remained unresolved.
+The later present-904 texture comparison and M7 event-1 tests constrain
+different observations under their own seals. The review retained the
+single-process shadow, portable case and independent checker. It rejected
+full-frame readbacks at every draw, a second process per test, an all-game
+IR, and a replacement agent loop. An optimized backend remained conditional
+on a measured workload and verified contract.
+[Present-616 review evidence](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/plans/closed/harness-review/assessment.md#what-happened-in-the-latest-pilot) ·
+[Present-904 comparison](compressed-904.md#results) ·
+[M7 event-1 limits](../m7/event1-investigation.md#numerical-observation-coverage) ·
+[Scientific boundary](#scientific-boundary)
+
 ## Final merged state
 
 | Field | Value |
@@ -120,8 +160,9 @@ not, and is not presented as one.
 ## Archive recommendation
 
 The harness-review plan is archived at
-`plans/closed/harness-review-20261120/` (archive PR). References to the earlier
-archived review under `plans/closed/harness-review/` are preserved. The condition is not "all historical PRs merged":
+`plans/closed/harness-review-20261120/` (archive PR). The
+[earlier review](#19-november-review-disposition) links to the R0 source pin.
+The condition is not "all historical PRs merged":
 every harness-integrity finding now has a disposition, evidence and an owner,
 the scientific remainder is transferred to M7 (#270) rather than silently
 dropped, and the remaining work is explicitly owned. Do not treat the archive
