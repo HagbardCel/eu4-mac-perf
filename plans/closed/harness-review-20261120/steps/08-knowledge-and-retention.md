@@ -2,7 +2,7 @@
 
 **Objective.** Give an agent one verifiable starting point per subject and let a second session reconstruct a pilot result without searching historical worktrees. The project already has status, evidence discovery, case locators, receipts and ADRs.
 
-**Evidence.** `docs/status.md` leads with an older 615 interval, while the newest 616 evidence observes 14→15. A searched for a missing historical case; B later found A's outputs under a shared generic directory. The expanded and zipped A traces matched exactly. B's experiment tree alone used ~3.3 GiB at inspection, and the checked-in documentation, locally available artifacts and untracked working reports have different publication guarantees. [Status](../../../../docs/status.md) · [repository map](../../../../docs/repo-map.md) · [locator](../../../../automation/case_locator.py) · [discovery](../../../../automation/evidence_index.py)
+**Evidence.** `docs/status.md` leads with an older 615 interval, while the newest 616 evidence observes 14→15. A searched for a missing historical case; B later found A's outputs under a shared generic directory. The expanded and zipped A traces matched exactly. B's experiment tree alone used ~3.3 GiB at inspection, and the checked-in documentation, locally available artifacts and untracked working reports have different publication guarantees. [Status](../../../../docs/status.md) · [repository map](https://github.com/HagbardCel/eu4-mac-perf/blob/6d539a80c3a18fc352f5fc35d237c26fb01b6c06/docs/repo-map.md) · [locator](../../../../automation/case_locator.py) · [discovery](../../../../automation/evidence_index.py)
 
 **Implementation order**
 

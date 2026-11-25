@@ -1,9 +1,8 @@
 # Evidence retention and restore
 
-Historical evidence is read-only and indexed; it is never deleted by a review
-or an agent. This page records the supported discovery, retention and restore
-path. See [harness](harness.md) for commands and [status](status.md) for current
-capability.
+Restore historical evidence from read-only sources. Keep the original
+identity and the verifier's scope with each recovery record. [Harness
+commands](harness.md) · [Current capabilities](status.md)
 
 ## What is retained
 
@@ -48,10 +47,15 @@ published copy is re-verified before it is adopted.
 
 ## Restore trial
 
-1. Choose a locator and read its `identity`, `verification`, `relative_path`
-   and `size_bytes`.
-2. From a **fresh directory**, resolve the case and verify the manifest,
-   seal/stream and each declared blob digest **and byte size**.
+1. Choose the exact locator or original manifest. For a case locator, record
+   its `identity`, `verification`, `relative_path` and `size_bytes`.
+2. Materialize regular files in a fresh directory with a new, explicit
+   evidence root. Point the verifier at the restored files and restrict
+   discovery to that root. Refuse symlinks and payload paths that resolve
+   outside the restore. For a relocated sealed frame, use its unchanged
+   trusted descriptor or the existing portable case format. Preserve old
+   absolute paths as provenance. A missing member must fail even while the
+   producer still has its copy.
 3. Recompute the first divergent checkpoint comparison from the sealed
    reference and the recorded Metal readback, including alpha.
 4. If a blob is missing, report the exact member/digest and the configured
@@ -83,6 +87,39 @@ shader or texture payload is added to git. Run the check with:
 python3.14 -m automation.test_runner run --profile offline \
   --module tests.test_case_locator
 ```
+
+## Protected collections and recovery status
+
+Availability means the named bytes were found. Byte integrity means they
+match the original commitment or a pinned Git blob. Recorded verdict
+verification means a verifier recomputed the result from the retained
+inputs and outputs. Fresh execution produces its own receipt and binds its
+own candidate, renderer, shaders and numerical recipe. The checks below
+used retained outputs offline with zero EU4 launches. Evidence checked only
+as a Git blob or seal is identified in the table.
+
+| Collection | R1b recovery and applicable verifier |
+| --- | --- |
+| M1 GL/Metal coexistence | The Git-pinned receipt and flush log recovered byte-identically from `bb2eeaf8`. Preserve the recorded platform and flush-order scope. The original probe is the execution verifier. [Receipt](../results/20261031T151818Z-metal-coexist/receipt.json) · [Probe source and disposition](../plans/repository-refactor/r0-evidence.md#protected-evidence) |
+| M2 strategy and profiler investigations | The strategy and subrecord negative finding recover from Git, along with the historical M0a scaffold at the R0 pin. Keep the border, state-cache, sampler, profiler projections, and held-out workload records at their reported proof scopes and use their recorded producers for regeneration. [Strategy](eu4_recommended_strategy.md) · [Subrecord finding](gfx-subrecord-ababa.md) · [R0 dispositions](../plans/repository-refactor/r0-disposition.md) |
+| Phase C capsule | The in-tree `intrusive_complete_v1` gate passed. It verified the 14 declared files and the capture's semantic power evidence. Run `eu4_frame_model verify-evidence` with the named profile. [Capsule and methods](../results/20261003T210202Z-intrusive-diagnostic/report.md) |
+| M3 original engine route at `0xedfcd1` | The tracked run record is Git-recoverable at `bb2eeaf8`. The three documented `.local/gfx-experiments/simple-*` producer runs are available on the audit host. The final BGRA, checkpoint JSON and PNG verified from a fresh copy against the published digests. The CPU sample and GPU-completion observations keep their M3 scope. [Runs, digests and verifier scope](../analysis/reconstruction/simple-loading-draw/live-evidence.md) |
+| M4 `gl-reference-07` | The campaign pin and 32 declared artifact entries verified after copying the original evidence from the manifest's paths under `.local/m4/experiments/`. The fixed logical comparison recomputed zero differing pixels out of 1,930,176. The separate recorded checkpoint, drawable and window checks passed through the M4 presentation verifier. [Manifest](../analysis/m4/evidence-manifest.json) · [Qualification](../analysis/m4/qualification-report.md) |
+| M5 `sprite-gl-ref-09` | The campaign pin, 10 reference and two candidate entries, and the vertex sidecar's raw-byte commitment verified from fresh copies of the manifest paths under `.local/m5/experiments/`. The recorded seeded replay comparison recomputed zero differing pixels out of 1,930,176. The restored live checker confirmed engine reach and composition, with live pixel qualification false. [Manifest](../analysis/m5/evidence-manifest.json) · [Live evidence](../analysis/m5/live-evidence.json) |
+| M6 `menu-occ300` captured state | `m6_frame` verified 1,125 trace blobs and the committed trace and raw-reference digests in a fresh directory. `m6_compare` recomputed zero differing pixels including alpha using the recorded 326-event output. The report describes the captured-state boundary. [Frame manifest](../analysis/m6/menu-frame-evidence.json) · [Qualification](../analysis/m6/qualification-report.md#offline-captured-state-replay) |
+| M6 settled live acceptance and orientation | `m6_live_accept` rechecked all three original settled starts from a fresh directory, including the committed swap-frame digests and required resolve traces. The registered orientation test executed with its original reference PNG and all three tracked fixtures. The private reference PNG has an independent local copy and a digest in the frame manifest. [Settled starts](../analysis/m6/qualification-report.md#three-fresh-independent-starts) · [Orientation recovery](../analysis/m6/qualification-report.md#orientation-fixtures-and-historical-images) |
+| M7 present 615 | The readiness report commits session `2564021f-4e00-4a58-a448-043697249a91` and the manifest, stream and reference digests. The original seal, stream, blobs, GL reference and bound shadow outputs were unavailable in the configured M7 producer, campaign and R0 evidence roots. Recover those members by the published identity before replay or retirement. [Readiness report and digests](../analysis/m7/m7-readiness.md) |
+| M7 presents 616 and 904 | `m6_frame.load_seal` verified relocated originals from `.local/m7/goal-round1/capture/frames/frame-000001` and `.local/m7/goal-round1/capture-c/frame`. Preserve the separate recorded checkpoints, receipts and 904 texture representation comparison. [616/904 audit](../analysis/harness-remediation/audit-20261120.md) · [904 texture comparison](../analysis/harness-remediation/compressed-904.md) |
+| M7 default-window GL control, `90825686…` | The relocated original seal, stream and blobs verified against the published identity. Keep the historical pre-fix renderer, signed control receipt and intervention records under the report's pin. The recorded 347-pixel comparison is diagnostic and the current `gfx_gl_control_qualification` gate refuses the scope at `drawable_equivalence=unproven`. [Authority, receipt and intervention identities](../analysis/m7/gl-control-qualification-90825686.md) |
+| M7 trusted prefix, `47590918…` | Restored the 1,192-file trusted root from the R0 copy, along with the recorded replay, checkpoint request and shader receipt. `gfx_prefix_check.evaluate` recomputed exact prefix `[0, 0]` and event 1 on `tex:433` at 23 RGB pixels / max 1. Recover the descriptor with the frame. [R0 recovery and root digest](../plans/repository-refactor/r0-audit.md#reproduced-scope) · [Prefix report](../analysis/m7/m7-exact-prefix-report.md) |
+| M7 Strategy B, `47590918…` | The private R0 publication restored with 1,317 verified files and `safe_to_reuse=true` under `case_locator`. Its graph is `invalid` and the package remains diagnostic. The trusted root and bound replay above establish the recorded prefix result. [Locator identity and scope](../plans/repository-refactor/r0-audit.md#reproduced-scope) |
+| M7 interventions and sparse observations | Keep the precise/fast and reciprocal receipts, renderer, shader and recipe identities, and the depth and matched-null results under their original campaign. `m6_frame.load_seal` verified relocated sparse seals `482a6500…` and `1efc8880…` from the two recorded November 24 producer runs. Their recorded refusals and zero UV2 pixels preserve the offscreen depth and correspondence limits. [Numerical identities](../plans/repository-refactor/r0-evidence.md#event-1-numerical-identity) · [Sparse and intervention evidence](../analysis/m7/event1-investigation.md) |
+| Function oracle, original recorded session | The Git publication manifest matches the E1 certificate commitment. The canonical directory and mounted/configured local evidence roots yielded zero original members for `pr-d-gfx-live-20261025T155406Z`. Recover the 64 `captures/*.capture` entries plus `metadata.json`, `session.done`, `startup.status` and `summary.native` from the operator archive. Use `oracle/recorder`, `oracle/function` and `oracle/certify` to verify the original bytes and admission scope. [Manifest and archive](../results/20261025T155406Z-gfx-live-publication/publication-summary.md) |
+| Function oracle, frozen pilot and P-code differential | The 13-scenario pilot receipt and the distinct 414-case P-code scenario and reference corpora recovered byte-identically from the Git pin. The pilot validator and differential harness bind the target code window and constructed state. These remain emulated and scoped separately from the original live transcripts. [Pilot](../analysis/reconstruction/_GfxSetConstantBuffer/pilot/pilot.md) · [Differential verifier](../analysis/reconstruction/_GfxSetConstantBuffer/differential/README.md) |
+| L3.2b packets and qualification | The v1 packet's four files, reviewer pin, and v1 and v2 contract manifests verified. The v2 completion manifest verified all members from its Git publication `b633b9ad`, which preserves the pinned launch ledger. The original v1 capture is available at its recorded local path. Preserve the frozen v1 checker and the corrected review pin, with three established fields and `packet_ready=false`. V2 uses the completion and contract checkers and requires a separate qualified review. Original shader and texture payloads remain private at their capture or archive roots. [V1 packet and review](../analysis/gfx-draw/v0/l32b/effective-state/note.md) · [V2 completion pin](../campaigns/eu4-l32b-complete/l32b-manifest.json) · [Contract pin](../campaigns/eu4-l32b-contract/contract-manifest.json) |
+
+[Original R0 inventory](../plans/repository-refactor/r0-evidence.md#protected-evidence)
+· [Historical repository audit recovery](repo-map.md#recover-the-historical-p1-audit)
 
 ## Non-negotiables
 

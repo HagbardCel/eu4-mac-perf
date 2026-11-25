@@ -1,21 +1,9 @@
-# Repository map and lifecycle labels (P1 audit)
+# Repository map and lifecycle policy
 
-Inventory of Git-tracked paths with lifecycle labels, so the Oracle migration (P2) can
-move only what is safe to move. **This map records classification; it moves nothing,
-and a lifecycle label is never archival authorization.**
-
-The audit is a function of three separately identified inputs:
-
-```
-AuditResult = f( SourceSnapshot , Policy , ToolVersion )
-```
-
-- **Source** — a frozen Git tree-ish (`8033e35`), read from Git objects, not the worktree.
-- **Policy** — `tooling/common/repo_lifecycle.json`, a curated, versioned classification layer.
-- **Tools** — `tooling/common/repo_{snapshot,inventory,graph,lifecycle,audit}.py`.
-
-All three identities are recorded in [`repo-audit-context.json`](repo-audit-context.json).
-Re-running with the same triple reproduces byte-identical artifacts.
+The audit classifies Git-tracked paths using a source snapshot, the curated
+lifecycle policy and the audit tools. The generated context records the
+identities of all three inputs. [Policy](../tooling/common/repo_lifecycle.json)
+· [Audit CLI](../tooling/common/repo_audit.py)
 
 ## Lifecycle legend
 
@@ -33,23 +21,9 @@ A positively detected consumer reference (import / include / CI ref) always bloc
 eligibility regardless of which rule produced the label — classification precedence cannot
 conceal contradictory evidence.
 
-## Curated area classification (human-authored)
-
-| Area | Lifecycle (base) | Owner responsibility | Notes |
-| --- | --- | --- | --- |
-| `reverse_engineering/` | `ACTIVE` | Recover prototype implementation | Full-corpus pipeline + sealed snapshot validators are load-bearing. |
-| `benchmark/` | `ACTIVE` (base) | Profiler + CLI entry points | Operational despite "legacy" label. Individual retired experiments are carved out by earlier rules. |
-| `tests/` | `ACTIVE` | Portable test suite | Flat `unittest` discovery; the ceiling on regressions. |
-| `analysis/` | `UNKNOWN` (base) | Investigations + generated evidence | `analysis/evidence/**` is `FROZEN_VERIFIER`; `analysis/renderer-corpus/**`, `held-out*`, `output/**` and top-level `*.json` stay `GENERATED_DERIVED`; every other path — including nested documents — defaults to `UNKNOWN`. |
-| `docs/` | `ACTIVE` (base) | Documentation | Superseded memo families are carved out by earlier rules. |
-| `results/` | `FROZEN_VERIFIER` | Sealed/historical run evidence | Phase C capsule is CI-verified; leave at original paths. Per-run seal status is asserted through `evidence_capsules`. |
-| `tooling/` | `ACTIVE` | Guards + shared tooling | `check_doc_links`, `check_forbidden_tracked_paths`, repo audit tools. |
-| `experiments/`, `measurements/`, `patches/`, `fixtures/` | `ACTIVE` (placeholder) | Target homes during migration | Indexes only today. |
-| `.github/`, `.githooks/` | `ACTIVE` | CI + hooks | CI compiles `benchmark analysis tooling reverse_engineering`. |
-
 ## Archival policy
 
-Three separate decisions, intentionally not collapsed:
+The policy records three decisions.
 
 | Property | Meaning |
 | --- | --- |
@@ -57,15 +31,13 @@ Three separate decisions, intentionally not collapsed:
 | `archive_candidate` | Worth investigating for archival (retired/generated, no conflict) |
 | `archive_eligible` | **Explicitly** approved for archival |
 
-In this audit `archive_eligible` is `false` for **every** path: `approved_for_archive` in the
-policy is empty. A later cleanup PR authorizes individual candidates after reviewing their
-consumers and updating references. Static analysis can miss dynamic dependencies, external
-scripts, and human operational procedures, so it never authorizes relocation by itself.
+The current policy starts with an empty `approved_for_archive` list. An
+archival decision requires explicit approval and review of consumers,
+including dynamic dependencies, scripts and operator procedures.
 
 ## Evidence qualification (curated)
 
-`results/**` is frozen evidence, but not all of it is equally verified. Two columns in
-`repo-lifecycle.csv` record a **curated judgment** about preserved evidence:
+Two columns in the generated `repo-lifecycle.csv` describe preserved evidence.
 
 | `evidence_qualification` | Meaning |
 | --- | --- |
@@ -74,123 +46,47 @@ scripts, and human operational procedures, so it never authorizes relocation by 
 | `preserved_historical_evidence` | Evidence kept as provenance without an asserted seal. |
 
 `verification_profile` names the gate that asserts the seal (e.g. `intrusive_complete_v1`).
-These labels are **assertions recorded by the policy, not proof of integrity**: the
-cryptographic check is performed by the evidence gate (`verify-evidence`), and the labels
-would go stale if a file changed without re-verification. They exist to keep "we have
-verified this" distinct from "we have kept this", not to replace either.
+Run the named evidence gate to verify the bytes after an artifact changes.
 
-## Retired / preserved work (no deletion)
+## Generate an audit
 
-Preserved as evidence and provenance, not maintained. Archival requires the review above.
-
-- Border multi-draw track (NO-GO) and the observer-bias calibration.
-- State-cache and sampler-uniform experiments (failed engage / no signal).
-- WP-series and other superseded historical memos under `docs/`.
-
-## Hygiene findings
-
-- `tests/re_fixtures/callsite_mini/callsite_mini` (built fixture binary) and
-  `test_build_report_writes_candidates/` (test debris written into the working tree) are ignored.
-- The test that writes `test_build_report_writes_candidates/` into the CWD, and the
-  `manifest.json`-vs-directory guard in `tests/test_pre_ready_forensic.py`, are code-quality
-  fixes deferred to a later phase (see [`oracle/BASELINE_P0.md`](oracle/BASELINE_P0.md)).
-
-## Regenerating
+Use a disposable worktree, since `--write` creates four files and updates
+the marked section below. Run these commands from the repository root.
 
 ```sh
-PYTHONPATH=. python -m tooling.common.repo_audit --ref 8033e35 --write   # regenerate
-PYTHONPATH=. python -m tooling.common.repo_audit --ref 8033e35 --check   # verify (CI)
+git worktree add --detach /tmp/eu4-repo-audit HEAD
+cd /tmp/eu4-repo-audit
+python3.14 -m tooling.common.repo_audit --ref HEAD --write
+python3.14 -m tooling.common.repo_audit --ref HEAD --check
 ```
 
-## Not in scope here
+## Recover the historical P1 audit
 
-No code moved, renamed, or deleted; no canonical strategy rewrite (coordinated with PR #44);
-no new evidence system. Migration of the Oracle bundle and CI wiring is P2.
+The publication commit is `6d539a80c3a18fc352f5fc35d237c26fb01b6c06`.
+Its context identifies source commit
+`8033e35de6b6bb689c6affb9498eae0c166c5635`, tree
+`e00e1b0e88e3a10c1db6f9874fbf21b791b7b620`, one policy hash and five
+tool hashes. R1b checked those identities in a disposable publication
+checkout and reproduced the four artifacts and the generated map section
+byte for byte. The source ref spelling `8033e35` is part of the recorded
+context. [Publication and statistics](https://github.com/HagbardCel/eu4-mac-perf/blob/6d539a80c3a18fc352f5fc35d237c26fb01b6c06/docs/repo-map.md)
+· [Identity record](https://github.com/HagbardCel/eu4-mac-perf/blob/6d539a80c3a18fc352f5fc35d237c26fb01b6c06/docs/repo-audit-context.json)
+
+```sh
+git worktree add --detach /tmp/eu4-p1-audit 6d539a80c3a18fc352f5fc35d237c26fb01b6c06
+cd /tmp/eu4-p1-audit
+python3.14 -m tooling.common.repo_audit --ref 8033e35 --check
+```
+
+Use `git show 6d539a80:<path>` to recover an individual file.
+
+| Retired file | SHA-256 |
+| --- | --- |
+| `docs/repo-audit-context.json` | `adf650b2a901a2cb387c94f2d5d3c5848c52d07825b1ac1d0de52dfffacf03f8` |
+| `docs/repo-edges.csv` | `6ef8a8590e60a8dfc5714ad2e2e222ba0f0119916d330db83b0cb18d6138e9a6` |
+| `docs/repo-inventory.csv` | `d1a023450a70c8d6b58017a3501d9e0eff8f9bfbf8bfe40a6a7fbac30eda86ae` |
+| `docs/repo-lifecycle.csv` | `9f22a934eb5eeb6b299aeb635abca2916cdeb2fd27f1ee96826df49f08277625` |
 
 <!-- BEGIN GENERATED: repo-inventory -->
-
-Tracked paths: **725**
-
-| Area | Role | Files |
-|---|---|---|
-| `results` | sealed/historical run evidence | 207 |
-| `tests` | portable test suite | 186 |
-| `analysis` | legacy analysis + generated evidence | 134 |
-| `benchmark` | legacy profiler / CLI entry points | 110 |
-| `docs` | documentation | 45 |
-| `reverse_engineering` | static RE tooling | 29 |
-| `(root)` | — | 4 |
-| `tooling` | shared guards / measurement tooling | 4 |
-| `.githooks` | Git hooks | 1 |
-| `.github` | CI workflow | 1 |
-| `experiments` | isolated hypotheses (placeholder) | 1 |
-| `fixtures` | local fixtures / references | 1 |
-| `measurements` | measurement registry (placeholder) | 1 |
-| `patches` | version-pinned modifications (placeholder) | 1 |
-
-| Kind | Files |
-|---|---|
-| python | 174 |
-| json | 148 |
-| markdown | 122 |
-| c | 66 |
-| csv | 44 |
-| jsonl | 35 |
-| stderr | 28 |
-| c-header | 25 |
-| stdout | 21 |
-| binary | 11 |
-| text | 11 |
-| asm | 10 |
-| java | 6 |
-| no-extension | 4 |
-| gzip | 3 |
-| image | 3 |
-| shell | 3 |
-| log | 2 |
-| cpp | 1 |
-| gitignore | 1 |
-| inc | 1 |
-| m | 1 |
-| recipe | 1 |
-| s | 1 |
-| sha256 | 1 |
-| tsv | 1 |
-| yaml | 1 |
-
-Invariant: Σkinds = Σareas = N = 725 = 725 = 725.
-
-| Lifecycle | Files |
-|---|---|
-| ACTIVE | 348 |
-| FROZEN_VERIFIER | 257 |
-| RETIRED_EXPERIMENT | 86 |
-| GENERATED_DERIVED | 28 |
-| UNKNOWN | 6 |
-
-| Classification source | Files |
-|---|---|
-| rule | 725 |
-
-| Analysis coverage | Files |
-|---|---|
-| analyzed | 705 |
-| skipped_not_text | 19 |
-| skipped_oversized | 1 |
-
-| Reference edge | Count |
-|---|---|
-| doc_link | 420 |
-| import | 330 |
-| include | 61 |
-| manifest_ref | 14 |
-| ci_ref | 10 |
-
-Audit invariants:
-
-- `N_classified = N_tracked` → `725 = 725` (ok)
-- `N_archive_eligible_but_unapproved = 0` (ok)
-- `N_archive_eligible_with_consumer = 0` (ok)
-- dependency conflicts: 9; archive candidates: 105; archive eligible: 0
 
 <!-- END GENERATED: repo-inventory -->

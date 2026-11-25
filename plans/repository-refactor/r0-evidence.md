@@ -4,6 +4,8 @@
 
 ## Protected evidence
 
+[Current R1b recovery status and verifiers](../../docs/evidence-retention.md#protected-collections-and-recovery-status)
+
 R1 keeps original observations, byte commitments, scoped results and failed hypotheses. R2 links implementations to those findings. A recoverable Git commit can preserve historical source, tests, and tracked metadata. Native executables require their build inputs and toolchain identities. Local captures require a separately retained copy and an independently checked restore. A file presence check only establishes availability.
 
 | Collection and original identity | Scientific scope and necessary payloads | Verifier, consumer and recovery decision |

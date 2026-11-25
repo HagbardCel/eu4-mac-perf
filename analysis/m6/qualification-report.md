@@ -145,6 +145,28 @@ delta, so it is supporting evidence and not one of the three final starts.
 shows the reflected labels; the corrected final frames are
 `.local/m6/live-start{3,4,5}/run-1/swap-frame.bgra` and the tight crops above.
 
+## Orientation fixtures and historical images
+
+The registered test reads the `menu-occ300` reference PNG and three tracked
+fixtures. R1b restored the PNG from the independent private copy at
+`.local/r1b-evidence/m6/menu-occ300/frame-reference.png` on the audit host,
+checked its size and SHA-256 against the manifest, and ran the test with
+all four inputs. Restore that PNG from the audit host or its operator copy to
+the manifest path in a fresh checkout. Keep the raw BGRA reference and the
+settled-live swap frames with their original manifests. [Frame manifest](menu-frame-evidence.json)
+· [Registered test](../../tests/test_m6_live_accept.py)
+
+The three historical screenshots below were recovered individually from
+`bb2eeaf80aeb239b721bd94687c13820146c3b4c` and matched the checkout bytes.
+The retained reports, manifests and tests use other files. Retrieve one with
+`git show bb2eeaf8:analysis/m6/<filename>` and check its digest.
+
+| Screenshot | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `live-title-final.png` | 9,338,262 | `8aec716b54f1463f940cd3c642d0e896b5967f31f27a514b5a46408c0569ffcd` |
+| `live-title-metal.png` | 2,168,942 | `09ffe3fdf6af563ddd41d405bffd00a4212e2f1f6028561734f51e62d9fa6f74` |
+| `live-title-metal-postfix.png` | 12,009,448 | `9c570db929fdd68c3f8aa535d1032c9cc3d990f2f2c1abc741c4e5a0b65d592e` |
+
 ## Three fresh independent starts
 
 The acceptance evidence is [live-acceptance.json](live-acceptance.json) and

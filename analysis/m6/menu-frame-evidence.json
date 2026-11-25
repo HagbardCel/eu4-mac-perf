@@ -352,7 +352,13 @@
     "texture_evidence": "analysis/m6/texture-orientation.json",
     "visual_fixtures": [
       "analysis/m6/ref-buttons-crop.png",
-      "analysis/m6/live-title-buttons-crop.png"
-    ]
+      "analysis/m6/live-title-buttons-crop.png",
+      "analysis/m6/live-title-final-1728x1117.png"
+    ],
+    "orientation_reference_png": {
+      "path": ".local/m6/frames/menu-occ300/frame/frame-reference.png",
+      "bytes": 2829688,
+      "sha256": "2470062bdc49dcbabb8d02ea0395a8697390aa42c6f89fc429658a6a14a87fbe"
+    }
   }
 }
