@@ -2,7 +2,8 @@
 
 Current capabilities, evidence status and open limits are recorded in
 [docs/status.md](docs/status.md). Consult it before planning graphics work or
-claiming that a capability exists.
+claiming that a capability exists. Use the [renderer index](docs/renderer/README.md)
+for components, function contracts, backends, and findings.
 
 ## Verification workflow
 

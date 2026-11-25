@@ -120,8 +120,9 @@ not, and is not presented as one.
 ## Archive recommendation
 
 The harness-review plan is archived at
-`plans/closed/harness-review-20261120/` (archive PR). References to the earlier
-archived review under `plans/closed/harness-review/` are preserved. The condition is not "all historical PRs merged":
+`plans/closed/harness-review-20261120/` (archive PR). The
+[earlier review](https://github.com/HagbardCel/eu4-mac-perf/tree/6710a341d864466d7b0ab2d297ab513922d582b6/plans/closed/harness-review)
+is recoverable at the R0 source pin. The condition is not "all historical PRs merged":
 every harness-integrity finding now has a disposition, evidence and an owner,
 the scientific remainder is transferred to M7 (#270) rather than silently
 dropped, and the remaining work is explicitly owned. Do not treat the archive

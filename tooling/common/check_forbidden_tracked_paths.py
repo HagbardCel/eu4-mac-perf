@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail if git tracks paths that must stay local (game binaries, Ghidra, decompiled corpus)."""
+"""Fail if Git tracks local artifacts or unapproved root OpenCode configuration."""
 
 from __future__ import annotations
 
@@ -7,6 +7,9 @@ import re
 import subprocess
 import sys
 from pathlib import PurePosixPath
+
+
+ALLOWED_ROOT_OPENCODE = ".opencode/skills/opengl-metal-reconstruction/SKILL.md"
 
 
 def normalize(path: str) -> str:
@@ -24,6 +27,11 @@ def violations(path: str) -> list[str]:
 
     if p == ".local" or p.startswith(".local/"):
         reasons.append("local working tree (.local/)")
+
+    if p != ALLOWED_ROOT_OPENCODE and (
+        p == "opencode.json" or p == ".opencode" or p.startswith(".opencode/")
+    ):
+        reasons.append("tracked root OpenCode activation")
 
     if p.endswith(".gpr"):
         reasons.append("Ghidra project file (*.gpr)")

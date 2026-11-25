@@ -538,8 +538,12 @@ not temperature.
 python3 benchmark/eu4_benchmark.py report
 ```
 
-The report writes `analysis/output/report.md`, `summary.csv`, `runs.csv`,
-`power.svg`, and a `throughput.svg` plot when game-date measurements exist.
+The report writes local generated files under the ignored default directory
+`analysis/output/`: `report.md`, `summary.csv`, `runs.csv`, `power.svg`,
+and `throughput.svg` when game-date measurements exist. The
+[historical five-file report](https://github.com/HagbardCel/eu4-mac-perf/tree/6710a341d864466d7b0ab2d297ab513922d582b6/analysis/output)
+is recoverable byte-for-byte from Git. A fresh report generated from its
+nine retained runs covers the same run IDs and may reflect newer metadata.
 Its formal attribution rule requires three repeat runs of idle, paused, and
 speed 5 at a verified common refresh rate; this is a confidence rule, **not** a
 required run count for screening configurations. A paused GPU rise

@@ -10,13 +10,33 @@ history and must be read with its original run/seal identity.
 
 | Question | Canonical document |
 |---|---|
-| What does the original EU4 renderer do, and how was it observed? | [EU4 renderer](eu4_renderer.md) |
-| How does the faithful Metal backend work and what is qualified? | [Metal backend](metal.md) |
-| What is planned for the optimized backend? | [Metal optimized](metal_optimized.md) |
+| Where are renderer components, functions, backends, and findings documented? | [Renderer knowledge](renderer/README.md) |
 | How is evidence retained and restored? | [Evidence retention](evidence-retention.md) |
 | Which command should I run, and how do I recover? | [Harness operations](harness.md) |
 | What is the review remediation status? | [Coverage matrix (archived)](../plans/closed/harness-review-20261120/implementation.md) · [closure](../analysis/harness-remediation/closure.md) · [verification](../analysis/harness-remediation/verification-20261121.md) |
 | What is the reconstruction charter and safety contract? | [Charter](renderer-reconstruction-and-differential-validation.md) · [AGENTS.md](../AGENTS.md) |
+
+### Earlier harness review
+
+The 19 November review reproduced a false-equivalence verdict from a differing
+intermediate checkpoint. It also found incomplete sampler keys, unbound replay
+overrides, lost local evidence, a mismatched campaign sidecar, and a long
+capture tail after the sealed result was ready. It recommended retaining the
+single-process shadow, portable case, and independent checker. It found
+evidence retrieval and experiment design cost more time than replay. The
+storage review measured 36.99 GiB of duplicate local readback bytes in one run
+and recommended preserving the order and one verified payload. The later
+[remediation closure](../analysis/harness-remediation/closure.md) tracks the
+fixes and remaining scientific work.
+
+On present 616 the first differing writer was terrain draw 14, with 607
+differing pixels at checkpoint 15. The sampler collision's contribution,
+effective LOD and intermediate GL arithmetic remained unresolved. The review
+rejected whole-frame readback at every draw, a second process for each test,
+an all-game IR, and a replacement agent loop. It deferred an optimized
+backend pending a measured workload and a verified contract.
+[Historical assessment](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/plans/closed/harness-review/assessment.md) ·
+[Implementation record](https://github.com/HagbardCel/eu4-mac-perf/blob/6710a341d864466d7b0ab2d297ab513922d582b6/plans/closed/harness-review/implementation.md)
 
 ### Capability snapshot
 
@@ -46,7 +66,7 @@ GitHub identity is the author and GitHub refuses self-approval.
 
 | Area | State | Evidence / scope | Smallest missing discriminator |
 |---|---|---|---|
-| Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and exact four-channel comparator; all channels are compared | — |
+| Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and [exact comparison of applicable attachment channels](renderer/metal.md#contracts) | — |
 | Exact-prefix event-20 coverage | **Implemented; trusted candidate execution; live pilot stops at event 1** | One observation mechanism for default/offscreen targets and pre/post timing; one reconciliation/comparison path; colour payloads are the asserted equality scope, while depth/stencil snapshots are opt-in diagnostics; the checker builds the candidate from a source snapshot, executes it with a reference-free replay input against an immutable copied reference, and requires a single `qualified` predicate (pixel equality and independent attribution); the requested target prefix bounds qualification while later observations remain diagnostics; see the [exact-prefix report](../analysis/m7/m7-exact-prefix-report.md) | The event-1 1-LSB DXT1_ALPHA difference (`tex:433`, 23 px) is not root-caused. Event 11 is R32F and unobserved in the existing seal; R32F support is implemented and tested. Native multi-round DSH integration of the corrected checker is not yet demonstrated, so `M7_AUTONOMOUS_READY` is not claimed |
 | Exact verdict semantics | **Merged and audit-reviewed** | PR #241 final `3be433f7`; raw exactness separated from policy; envelope hard cap. #258 `8a5d4bc2` fixes the residual report-locator cap and malformed-evidence tracebacks; merged `d29f45f0` after independent exact-head review. | No missing discriminator for the envelope contract; non-blocking residuals are named in the audit |
 | Event/writer attribution | **Merged; audit-reviewed** | PR #242 final `7bcaaa1c`; capture identity from validated graph/checkpoint records; 616/904 matrices generated | Regenerate present 904/616 rows from the sealed graph |

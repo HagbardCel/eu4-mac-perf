@@ -41,6 +41,7 @@ oracle/slice/runs/
 
 # Rolling CLI preflight output (regenerated locally)
 analysis/preflight-intrusive-diagnostic-contract-latest.json
+/analysis/output/
 
 # Tier B: heavy or local-only run artifacts
 results/**/*.pliststream

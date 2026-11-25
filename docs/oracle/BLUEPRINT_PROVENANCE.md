@@ -1,74 +1,37 @@
-# Oracle v2 blueprint — preservation provenance
+# Oracle v2 blueprint provenance
 
-**Status:** historical preservation record. This documents the *original delivered
-blueprint bundle*; it does not authorize or describe new work. The authoritative
-specification of the capture/validation infrastructure remains
-[PLAN_OF_RECORD.md](PLAN_OF_RECORD.md) and the documents named under *Ownership* in
-[README.md](README.md).
+The 16 October 2026 blueprint arrived as an untracked local handoff. Its first
+Git-backed identity is commit `56207cc3a2bfc28e6bb3719c04125ed42f5b0a97`
+under `docs/proposals/EU4_Oracle_v2/`. The local and remote annotated tag
+`oracle-v2-blueprint-20261016` both resolve to that commit.
+[Original blueprint tree](https://github.com/HagbardCel/eu4-mac-perf/tree/56207cc3a2bfc28e6bb3719c04125ed42f5b0a97/docs/proposals/EU4_Oracle_v2) ·
+[Original manifest](https://github.com/HagbardCel/eu4-mac-perf/blob/56207cc3a2bfc28e6bb3719c04125ed42f5b0a97/docs/proposals/EU4_Oracle_v2/MANIFEST.json)
 
-## Origin
+The bundle contains the original design, inactive nested OpenCode examples and
+the executable seed later copied to [`oracle/core.py`](../../oracle/core.py).
+The [Oracle plan of record](PLAN_OF_RECORD.md) governs maintained implementation
+and qualification. The [tracked-path guard](../../tooling/common/check_forbidden_tracked_paths.py)
+enforces the root OpenCode restriction, with the reconstruction skill as the
+sole tracked exception.
 
-| Field | Value |
-| --- | --- |
-| Provenance | Local, **untracked** handoff — the bundle was delivered on disk and had no Git source revision before this record. The preceding `main` revision identifies the repository state at handoff only; it does **not** establish the historical identity of these files. |
-| Handoff date | 2026-10-16 |
-| First Git-backed identity | The preservation commit created together with this file; this is the bundle's first tracked revision. |
-| Annotated tag | `oracle-v2-blueprint-20261016` (points at the preservation commit). The tag's resolved commit is pinned independently by `tooling/common/check_oracle_bundle.py`; it is not embedded here to avoid a self-referential identity. |
-| Preserved location | `docs/proposals/EU4_Oracle_v2/` (verbatim; not relocated) |
+## Recovery and verification
 
-The frozen P0 baseline that this handoff predates is recorded in
-[BASELINE_P0.md](BASELINE_P0.md).
+R1a ran the legacy Oracle guard successfully before retirement and independently
+restored all 14 files into scratch. The restored path set, regular-file modes
+and Git blob hashes matched the pinned tree and the checkout bytes. The original
+manifest separately matched all 13 payload paths, sizes and SHA-256 hashes.
+Its own SHA-256 is
+`0ac526289b7da3ac47dac52f044f8a26af09869687daed782cb116a4e88936b4`.
+The restored prototype also matched the maintained seed byte-for-byte.
 
-## Preserved files
+For offline inspection, extract the original paths into a fresh directory.
 
-Hashes below were computed independently from the on-disk bytes at handoff. They
-match `MANIFEST.json` (kind `eu4_oracle_v2_blueprint`, status `offline design, NOT runtime capture`).
+```sh
+scratch=$(mktemp -d)
+git archive 56207cc3a2bfc28e6bb3719c04125ed42f5b0a97 -- docs/proposals/EU4_Oracle_v2 |
+  tar -x -C "$scratch"
+git ls-tree -r 56207cc3a2bfc28e6bb3719c04125ed42f5b0a97 -- docs/proposals/EU4_Oracle_v2
+```
 
-| Path | Bytes | SHA-256 |
-| --- | ---: | --- |
-| `README.md` | 1800 | `4bb28dd8be12d3bf8e5ea0c0632c5d235b7a1a38a549bf43eefcdc74572d67d2` |
-| `design/MASTER_DESIGN_V2.md` | 22686 | `2ec8ec0e19e91e4f9c345efdb9854e800e73adb8dc44db8dd0aa70ac2dfe6325` |
-| `design/OPENCODE_FEASIBILITY.md` | 4987 | `26dedfd34e65b31294255b66d9ce0defb0254a6f261930e598815911c4b968bb` |
-| `design/PR_CHECKLIST.md` | 4543 | `c940dfe6a2d5d1fddac22efcfd3dd0798ff57b89c62048734d4b9d8e5768943b` |
-| `examples/.opencode/agents/eu4-reconstructor.md` | 1498 | `95712a8bdabad187f66fefd67c29ce3d8e4c16603a8323f3bcdbddc996606432` |
-| `examples/.opencode/tools/oracle.ts` | 2876 | `5f46f0ffa2cd581ca5f1cd6c318c08ef4623f47ccedb591c1852bad900d23a9f` |
-| `examples/CONTROLLER_SKETCH.ts` | 1126 | `ce077254058fe9f21d15978929132e1df3bbaaeca05dfd6df621023548fbe712` |
-| `examples/diagnostic.example.json` | 635 | `53b182487fcb75c97bc410bd5ff859e318f6b713c7625cec463b289ec371b337` |
-| `examples/diagnostic.schema.json` | 1582 | `a432637828ece15a531e4582aeaecbe5f0bad8a5e3cacc478ab6d7034f74b0cf` |
-| `examples/opencode.json` | 451 | `6d9e8622fce35f2433d76729205026dfee9895640fe15ed24246ecaf4639d5c8` |
-| `oracle_proto/__init__.py` | 0 | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
-| `oracle_proto/core.py` | 5214 | `465a7b336cdc7524181ca5995b4f198b645664b8f890cfe8e1791e02e19db56d` |
-| `tests/test_core.py` | 3039 | `247884615fef57bb93028b26c23274a3f611fc2367c26ebe874643d3e1f75998` |
-| `MANIFEST.json` (not self-listed) | 2202 | `0ac526289b7da3ac47dac52f044f8a26af09869687daed782cb116a4e88936b4` |
-
-## Historical, not authority
-
-- The blueprint's design prose (`design/MASTER_DESIGN_V2.md`, `design/OPENCODE_FEASIBILITY.md`,
-  `design/PR_CHECKLIST.md`) is retained as delivered reference. It is **not** a competing
-  architecture authority; binding decisions live in the plan of record.
-- `examples/` contains **inactive** OpenCode templates. They are nested under
-  `examples/.opencode/` and are never loaded as project configuration; no root `.opencode/`
-  is activated by this preservation.
-- `.opencode/skills/opengl-metal-reconstruction/SKILL.md` is a later reconstruction
-  skill, not part of this blueprint. It is the only tracked root OpenCode file the
-  repository allows. This preservation still did not activate root OpenCode configuration.
-- The executable prototype (`oracle_proto/core.py`, `tests/test_core.py`) is the *seed*
-  migrated to a living package during P2; the copies here remain verbatim. It is an offline
-  contract demonstration, not a runtime recorder, ABI emulator, or secure sandbox.
-
-## Verification
-
-`tooling/common/check_oracle_bundle.py` makes the **pinned preservation commit** (`56207cc`),
-not this editable manifest, the authority for what the bundle contains. It enforces three
-independent conditions:
-
-1. **Historical tree identity** — the current Git index matches the pinned tree on the exact
-   `(path, mode, object id)` tuples, rejecting added, deleted, modified or mode-changed files.
-2. **Worktree integrity** — every pinned path (including this manifest) exists as a regular file
-   with the pinned bytes and executable status; no path traverses a symlink; and no additional
-   file, symlink or special entry exists inside the bundle, so *unstaged* filesystem changes are
-   caught too.
-3. **Manifest consistency** — this manifest lists exactly the pinned payload files (excluding
-   itself), without duplicates, with sizes and SHA-256 values derived from the pinned blobs.
-
-The annotated tag must also resolve to the pinned commit. Runs in CI.
+Use the tree listing to check each restored path, mode and `git hash-object`
+result. Use the original manifest to check payload sizes and SHA-256 hashes.
