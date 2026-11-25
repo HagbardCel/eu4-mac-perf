@@ -1,6 +1,6 @@
 # R0 repository audit
 
-**Status:** ready for disposition and PR-sequence review. [Disposition map and PR sequence](r0-disposition.md)
+**Status:** audit delivered for disposition and PR-sequence review. [Approved plan baseline](approved-plan.md) · [Dispositions](r0-disposition.md) · [Evidence and migration](r0-evidence.md) · [Measurements](r0-measurements.md)
 
 R0 covers the repository and its verification boundaries. The leading refactor opportunities are to preserve findings and evidence, extract reusable checker behavior from milestone entry points, and measure repeated work before removing tests. A single retained capture establishes an exact RGB match through event 0 and a difference at event 1. Ordinary DSH workspace mode supplies native round continuation. Its filesystem policy and session persistence cover only part of the proposed trust and recovery model.
 
@@ -9,8 +9,8 @@ R0 covers the repository and its verification boundaries. The leading refactor o
 | Input | Identity or result |
 | --- | --- |
 | Repository | `main` and local `origin/main` at `6710a341d864466d7b0ab2d297ab513922d582b6`, tree `eeb0c633cefa955900d334882efc8b157681403c` |
-| Planning source | `plans/eu4_repository_refactoring_plan.md`, SHA-256 `3bede981d415ad92af4239fa86307049de560c485bf3f8fc0f5661b04e317c11` |
-| Overlap | GitHub returned zero open PRs. [#278](https://github.com/HagbardCel/eu4-mac-perf/issues/278) tracks default-drawable GL control. Main already includes #296–#299 numerical recipe identity, event-1 localization, sparse observation, and capture diagnostics. Keep those while reviewing the planned ownership changes. |
+| Planning source | [Preserved plan](approved-plan.md), SHA-256 `4b88dc2be8d4f93145d127959267a0a776824c49cb95b00d5cd0b65893f46e86`. The submitted source SHA-256 is `3bede981d415ad92af4239fa86307049de560c485bf3f8fc0f5661b04e317c11`. The tracked copy normalizes Markdown hard breaks and placeholder links in an example. |
+| Overlap | GitHub returned zero open PRs at intake, before R0 PR #300. Main already includes #296–#299 numerical recipe identity, event-1 localization, sparse observation, and capture diagnostics. Preserve those paths and the scope of [#278](https://github.com/HagbardCel/eu4-mac-perf/issues/278). |
 | Workspace | 71 registered Git worktrees at intake, including historical DSH campaigns and detached verification trees. The primary workspace contained local evidence and an untracked plan. A separate clean checkout pinned each full-suite attempt. |
 | Host | macOS 27.0.1 build 26A434, arm64, Xcode 27.2 build 27B52, Python 3.14.10, NumPy 2.5.5. `clang`, `metal`, `glslangValidator`, `spirv-cross`, and Rosetta support files were present. |
 | EU4 | Installed GOG macOS x86-64 binary SHA-256 `b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d` matches the pin. R0 read the file and code window offline. |
@@ -64,6 +64,8 @@ The default CGL drawable reports Apple OpenGL `2.1 Metal - 91.7`, legacy, Apple 
 
 The registered driver, replay-input verifier, and receipt signer matched their reviewed digests. The native GL executor rebuilt with the registry's deterministic recipe and matched its pin, SHA-256 `254618ef8ab232fd1b3c42e6186d642702e714e70d79c92f6d2d908cfa3abc7a`. This verifies build identity. The executable's exactness claim still depends on a qualified target and same-seal observations. [Authority registry and build recipe](../../automation/gfx_gl_control_authorities.py)
 
+The archived precise-default candidate recorded 20 differences on this same seal. R0's pinned native replay recorded 23 under its fast default. The [identity reconciliation](r0-evidence.md#event-1-numerical-identity) verifies both source and recipe identities and preserves the scope of the same-build historical A/B.
+
 ### Event-1 observable matrix
 
 | Observable | Original availability and precision | Candidate source and comparison | Qualification gap |
@@ -91,18 +93,92 @@ Preflight passed with the checked Python interpreter and an audit-local copy of 
 
 | Concern | Source-grounded finding | Required R4 proof |
 | --- | --- | --- |
-| Round order | Installed `dsh-goal-round-driver/src/index.ts` processes quiescence and awaits `ctx.sessions.flush(agent.session)` before reserving a next round. It disarms on a flush error. This is a DSH session durability boundary. The EU4 bridge's Git snapshot is a separately invoked campaign operation. | Demonstrate an externally controlled Git commit after changed rounds, unchanged-round behavior, and refusal to start the next round after a failed Git checkpoint. |
+| Round order | The released, scoped `session/flush` lifecycle listener is the awaited durability extension point. `SessionStore.flush` awaits all listeners and rethrows any rejection. The native round driver awaits it at quiescence before reserving the next round and disarms on error. The existing EU4 bridge's Git snapshot is invoked separately. | Mount a trusted listener and prove a real Git checkpoint after changed rounds, unchanged-round behavior, and fail-closed handling during interruption. |
 | Deadline and cancellation | Native goal code has cancellation and round lifecycle. Native bash foreground work receives abort signals. Background jobs can outlive a foreground timeout. Campaign mode seeds an operator deadline and checks active state at expensive entry points. | Demonstrate one enforced wall-clock deadline, cancellation of all owned workers, and recoverable interrupted work in the pinned workspace profile. |
 | File and Git isolation | The installed DSH Seatbelt provider allowed writes in both disposable worktrees and a read of a sibling evidence marker. It denied writing the sibling marker. A disposable ref update succeeded when `.git` was inside the standalone workspace and was denied for a linked worktree with Git metadata outside the write root. The fs adapter canonicalizes writes. Keep trusted authority outside the candidate and bind both read and write policy. | Verify terminal, filesystem, native-tool, child, and Git subprocess behaviors together against a sibling trusted checker, reference, and protected refs and credentials. |
 | Launch controls | `test_profiles` refuses live work in offline mode. `campaign_guard` checks deadline/mode and launch entitlement. `gfx_launch` and the Metal boot path use the host lease and consume the one-use launch claim at spawn. | Preserve all supported launch choke points, token exclusion, atomic one-use claims, and interruption cleanup before replacing campaign entry points. |
 | GPU and validation | The trusted replay paths take the host-wide GPU lock. The prefix checker verifies the copied reference, snapshots candidate sources, builds, isolates candidate execution, and rehashes outputs. The DSH bridge anchors checker and generation inputs. Campaign finalization requires fresh checker execution and a direct goal-completion guard. | Preserve protected required cases, executable and revision binding, independent comparison, fail-closed behavior, and qualification separate from Git preservation. |
 
-The installed source and composition establish a continuation opportunity and show the boundaries requiring enforcement. A complete workspace-mode lifecycle trial still needs a changed and unchanged round, an injected checkpoint failure, and cancellation or deadline with a disposable child. Retain the existing governed route for workloads that depend on those safeguards. [Goal integration](../../docs/dsh-native-goal.md) · [Campaign guard](../../automation/campaign_guard.py) · [Launch and GPU lease](../../automation/launch_lease.py) · [Trusted bridge](../../automation/dsh_bridge.py)
+**Confirmed on the installed packages.** A disposable Node probe imported the real SessionStore and goal-round driver, installed a scoped flush listener, and drove the native round admission and idle notifications with an in-memory agent. Round 2 stayed unqueued until the test listener resolved. A rejected flush disarmed the goal and subsequent idle notification did not queue round 2. The probe used a deferred marker and did not commit Git, invoke a model, or start an agent process. Source SHA-256 for `dsh-session/src/index.ts` is `8941b4c7a45debf2443b0f937830f806130167e3ef53426833f7225dd5a8bb8f`. For `dsh-goal-round-driver/src/index.ts` it is `fd7a5e4c436f951ca5d236df83a7b0dd662c2ebbffffe49a30714fe55ce4bfe7`.
+
+**R4 design constraint.** Flush is also used around requests and teardown. The listener must be scoped to the trusted session, identify a completed goal round and its current Git state, and be idempotent across duplicate flushes. Separate source checkpoint eligibility from transcript durability. The driver rechecks readiness and waits for descendant work before queue admission. Prove workspace ownership and worker quiescence for the checkpoint itself, including cancellation and child processes. `agent/pre-step` is a later admission defense: downstream `{kind:'reject'}` blocks the goal, while a thrown hook can reschedule the attempt. A passive `agent/status` observer or missing listener cannot enforce the checkpoint. `agent/turn-stopping` is a separate serial normal-turn callback.
+
+**Remaining deployment risk.** Prove trusted plugin composition and privilege in the real workspace profile, including sibling evidence reads, Git writer identity, child containment, and terminal/resume idempotence. Preserve the governed route until those checks pass. [Goal integration](../../docs/dsh-native-goal.md) · [Campaign guard](../../automation/campaign_guard.py) · [Launch and GPU lease](../../automation/launch_lease.py) · [Trusted bridge](../../automation/dsh_bridge.py)
 
 ## Runtime baseline
 
-See [R0 measurements](r0-measurements.md) for exact-head platform runs, offline replay timings, and the measured test-cost shortlist.
+See [R0 measurements](r0-measurements.md) for the original exact-head baselines, authentic replay pairs, full-suite attribution, analysis of recent DSH traces, and prioritized performance targets.
 
-## Review gate
+## Reproducibility
 
-Approve the dispositions and PR dependencies in [the map](r0-disposition.md). R1 can preserve and link knowledge while evidence recovery and DSH lifecycle gaps are resolved. The relevant gap must close before a downstream PR removes its consumer or safety boundary.
+Check out `6710a341d864466d7b0ab2d297ab513922d582b6` separately. Keep output in a private scratch directory. This PR preserves the plan's requirements and gate text. For evidence recovery use the existing verifiers and identities in the [protected collection table](r0-evidence.md#protected-evidence). The installed DSH probe can be reconstructed using `SessionStore.prepare` and `enter` on a new Context, an asynchronous `session/flush` listener, and the released driver's `apply` with disposable goal/agent services. Issue one goal-change notification, mark its queued message claimed and admitted, then send idle. Resolve or reject the next flush and inspect follow-up and disarm order.
+
+Run the following from the checkout holding the audit documents and original Git objects. It uses the original audit utilities and reproduces the family totals from the checked-in selectors. It prints counts and neither regenerates tracked audit artifacts nor reads captured payloads. The original per-path outputs remain local for forensics.
+
+```python
+import csv, io, re
+from collections import defaultdict
+from pathlib import Path
+from tooling.common import repo_audit, repo_lifecycle
+from tooling.common.repo_snapshot import RepoSnapshot
+
+root = Path.cwd()
+pin = "6710a341d864466d7b0ab2d297ab513922d582b6"
+snap = RepoSnapshot.from_ref(root, pin)
+files, _ = repo_audit.generate(root, pin, False, repo_lifecycle.DEFAULT_POLICY_PATH)
+rows = list(csv.DictReader(io.StringIO(files["docs/repo-inventory.csv"])))
+doc = (root / "plans/repository-refactor/r0-disposition.md").read_text()
+rules = [(k, re.compile(rx)) for k, rx in (s.split(" ", 1) for s in
+    doc.split("```text\n", 1)[1].split("```", 1)[0].strip().splitlines())]
+generated = {"docs/repo-audit-context.json", "docs/repo-inventory.csv",
+    "docs/repo-edges.csv", "docs/repo-lifecycle.csv", "benchmark/submission_counter_schema.h",
+    "benchmark/submission_counter_schema.py", "benchmark/subrecord_equivalence_ranges.inc"}
+evidence = ("analysis/evidence/", "analysis/output/", "analysis/renderer-corpus/",
+            "analysis/held-out/", "analysis/held-out-source/", "results/")
+source = set(".py .c .h .cc .cpp .hpp .m .mm .s .swift .sh .js .ts .metal .glsl .vert .frag .java .def .inc .yml .yaml .toml .ini".split())
+special = {".githooks/pre-commit", "benchmark/powermetrics_helper",
+           "benchmark/power_mode_helper", "dsh/scripts/probe"}
+def authored(path):
+    p = Path(path)
+    ext = p.suffix.lower()
+    if path in generated or set(p.parts[:-1]) & {"vendor", "third_party", "node_modules"}:
+        return False
+    if path.startswith(evidence) and ext != ".md" and p.name != "trials.py":
+        return False
+    cfg = ext == ".json" and path.startswith(("automation/", "campaigns/", "dsh/", "tooling/"))
+    cfg = cfg and (p.name in {"campaign.json", "package.json", "runtime.json", "repo_lifecycle.json"}
+                   or path.startswith("dsh/campaigns/"))
+    return (ext in source | {".md", ".rst"} or cfg or path in special or p.name in
+            {"Makefile", ".gitignore", "requirements.txt", "requirements-test.txt", "CMakeLists.txt"})
+
+blobs = snap.read_many([r["path"] for r in rows if authored(r["path"])], max_bytes=None)
+groups = defaultdict(lambda: [0, 0, 0])
+for row in rows:
+    path = row["path"]
+    family = next(name for name, rx in rules if rx.search(path))
+    text = blobs.get(path, b"")
+    group = groups[family]
+    group[0] += 1
+    group[1] += text.count(b"\n") + int(bool(text) and not text.endswith(b"\n"))
+    group[2] += int(row["size_bytes"])
+assert tuple(map(sum, zip(*groups.values()))) == (2388, 395033, 100115100)
+for name, _ in rules:
+    print(name, *groups[name])
+```
+
+## R0 requirement-by-requirement acceptance
+
+R0 authorizes planning and review of the sequenced implementation. The review still owns the disposition decision. Downstream qualification and retirement gates remain part of their proposed PRs.
+
+| Requirement | Acceptance evidence | Remaining condition and effect |
+| --- | --- | --- |
+| Preserve valid baseline and scientific work (follow-up 1, original R0.1/R0.4) | [Pinned inputs](#pinned-inputs), event matrix, ABI code-window check, and original platform and replay results. | The pre-existing native shader-cache fixture compilation error remains recorded. R2a addresses it before the next native gate. It does not invalidate R0 timing, inventory or retained replay. |
+| Disposition and ownership (2, R0.2/R0.3/R0.9) | [42 family rows](r0-disposition.md#subsystem-dispositions) reconcile all tracked files, with consumers, holds, retirement prerequisites and estimates. | External scripts and historical payloads need scoped confirmation at retirement. Holds apply to specific proposed removals, while R1 knowledge and early verified cleanup can proceed. |
+| Redundant implementations (3, R0.3/R0.7) | [Overlap table](r0-disposition.md#source-overlap-and-retirement) selects surviving modules and ties removals to regression coverage. | Actual extraction size and equivalence across old case schemas remain PR acceptance checks. |
+| Full-suite attribution (4, R0.8) | [Instrumented run](r0-measurements.md#full-native-attribution) assigns 99.98% of unittest wall time to test and fixture groups. The comparison reproduced the original selection, counts and sole pre-existing error. | Native-child internals and exact stage savings require focused R5 measurements. Overlapping wait and subprocess intervals are reported as separate cost views. |
+| Agent validation analysis (5, R0.8) | [Recent trace audit](r0-measurements.md#agent-traces-and-repeated-work) ties calls to inputs, source changes, rollback, receipts, test jobs and status waits. | Unidentified executions are excluded from estimated savings. Preserving independent terminal receipts and relevant post-edit gates remains mandatory. |
+| Knowledge and function migration (6, R0.4/R0.9) | [R1/R2 coverage](r0-evidence.md#r1-and-r2-migration-coverage) maps the six dossier families, executable modules, proof scopes and negative findings to owners. | Future original behavior and ABI gaps remain scoped scientific work. They do not prevent organizing recovered findings. |
+| Protected evidence and 20 vs 23 reconciliation (7, R0.5/R0.9) | [Protected collections](r0-evidence.md#protected-evidence), restored M7 reference, and [source/recipe comparison](r0-evidence.md#event-1-numerical-identity). | M4/M5 manifests and local members and M6 trace blobs verified in place. Separate archival restores, older M7 private cases and the oracle transcripts still gate archival or reuse where applicable. They do not block metadata migration. |
+| Native DSH feasibility and governance (8, R0.6/R0.7) | [Lifecycle and trust audit](#dsh-and-trust-boundaries) names the released flush hook and demonstrates failure blocking in a disposable probe. | A real trusted Git checkpoint, cancellation/worker containment and backend isolation are R4 adoption gates. Keep active controls until proven. |
+| Quantitative PR and performance budget (9, R0 gate) | The [R1–R7 budget](r0-disposition.md#pr-sequence-and-quantitative-budget) estimates −4,230 enabling LOC and counts moves as zero. The [performance budget](r0-measurements.md#optimization-budget) identifies 46–102 s in first-wave full-suite savings against measured costs. | Performance savings are estimates and fall short of the provisional targets. Re-measure comparable workloads before retirement or release. |
+| Durable reproduction (10) | [Tracked plan](approved-plan.md), Git and runtime pins, classification recipe and selectors, trace identities, measurement commands and published numerical recipes. | Raw local inputs remain private. Another authorized agent needs the named host or archived originals to reproduce authentic or execution-specific measurements. |
