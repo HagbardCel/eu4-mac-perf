@@ -45,7 +45,7 @@ python3.14 -m automation.test_runner run --profile offline --label r0-attributio
   --state-dir "$audit_scratch/runner" --min-tests 3000 --timeout 2400
 ```
 
-Run `20261125T180755Z-bdd849a0` finished in 489.736 s, with 488.664 s inside unittest. It ran the same 4,516 tests, executed 4,447 and skipped 69. Runner `compare` against `20261125T171656Z-774615a9` returned `no_new_failures`, with the same one pre-existing compile error. The timed replicate was 125.132 s faster than the original runner wall time. Machine load, thermal state and compiler/filesystem warmth were not controlled across the two runs. Use the replicate for attribution and as a bound on the measured cost pools. Keep 614.868 s as the original comparison point.
+Run `20261125T180755Z-bdd849a0` finished in 489.736 s, with 488.664 s inside unittest. It ran the same 4,516 tests, executed 4,447 and skipped 69. Runner `compare` against `20261125T171656Z-774615a9` returned `no_new_failures`, with the same one pre-existing compile error. The timed replicate was **125.132 s (20.35%) faster** than the original. This spread exceeds the entire first-wave savings estimate. Instrumentation, host load, thermal state and compiler/filesystem warmth differ or were uncontrolled. These runs establish cost pools and the observed spread. They cannot measure an optimization effect or estimate mean native gate time.
 
 | Exclusive test or fixture group | Wall seconds | Share of unittest wall |
 | --- | ---: | ---: |
@@ -103,7 +103,7 @@ Ranked by measured wall time. All 13 single-module runs passed, with 689 executi
 | `test_oracle_function_fixture` | 0.213 | 23 / 0 | `20261125T173047Z-237645c5` |
 | `test_reconstruction_contract` | 0.167 | 4 / 2 | `20261125T173047Z-b7fe9cf4` |
 
-The isolated focused times include different compiler and filesystem conditions from the attributed full run. Prioritize comparisons with the same selection, toolchain, platform, and input roots. [Proposed test dispositions](r0-disposition.md#tests-to-review-first)
+The isolated focused times include different compiler and filesystem conditions from the attributed full run. Prioritize comparisons with the same selection, toolchain, platform, and input roots. [Proposed test dispositions](r0-disposition.md#source-overlap-and-retirement)
 
 ## Optimization budget
 
@@ -119,9 +119,20 @@ R5 owns the first suite changes. Within a single execution, reuse proven immutab
 | 6. Separate DSH review snapshot/bridge mutation cases from repeated Git initialization. Share immutable committed fixtures and copy only the state under test. | DSH review and bridge took 26.862 s. They observed 520 and 364 root subprocesses. | 4–10 s | Reviewer isolation, write-set verification, swapped and stale snapshots, authority refusal and real Git publication. [Review](../../tests/test_dsh_review.py) · [Bridge](../../tests/test_dsh_bridge.py) | Medium |
 | 7. Shorten independent timeout fixtures where the same real process-group signal and escalation assertions still run. Leave production policy durations unchanged. | Runner timeout at 11.068 s and silent supervisor at 5.448 s. Oracle deadline tests were budgeted in row 1. | 0–6 s conditional | Timeout receipt, termination of descendants, escalation and supervisor cancellation. [Runner](../../tests/test_test_runner.py) · [Supervisor](../../tests/test_m7_continuous_supervisor.py) | Medium |
 
-The identified first-wave opportunities total **46–102 s**, roughly 9–21% of the attributed run. With the original native baseline, a 70% reduction would require about 430 s in savings and a two-minute gate about 495 s. At the high estimate, roughly 328 s and 393 s respectively would still need to be demonstrated. The portable baseline similarly requires about 184 s of savings for 70% and 142 s for two minutes. R5 must measure portable and native costs independently. Removing overlap in R2–R4/R7 and reducing the number of unnecessary validations can improve comparable end-to-end campaign time. Keep the historical session savings in a separate end-to-end budget.
+The identified first-wave opportunities total **46–102 s**, roughly 9–21% of the attributed native run. This estimate does **not establish feasibility of a 70% reduction**. For scale, the original 614.868 s native run would require savings of about 430 s for 70%. The 262.183 s portable run would require about 184 s for 70% and about 142 s to reach its separate two-minute aspiration. The native estimates do not transfer to portable CI. R0 provides no two-minute native target and no demonstrated optimized timing. Report actual paired gains and seek approval for any revised aspiration under the approved plan.
 
-Retain approximately **70% lower comparable validation time**, **focused runs below 10 s**, **authentic replay below 60 s**, and **full offline gate below two minutes** as provisional goals. The restored 475 case provides one below-target authentic replay measurement. The target spans comparable authentic workloads with their existing proof scope. R0 changes neither suite performance nor coverage.
+## Section 8.3 latency status
+
+| Approved aspiration | Measured status or next comparable sample |
+| --- | --- |
+| Common read-only diagnostic <1 s | Earlier evidence discovery and temporal diagnostic took 0.15 s and 0.4 s on named cases. Measure the same bounded queries with the R7 corpus and roots before claiming typical latency. [Historical samples](../../analysis/m7/efficiency.md#improved-offline-workflow-measured) |
+| Typical focused portable <10 s | Earlier 11-module offline selection ran in 6.1 s. Ten of 13 current isolated native modules fell below 10 s. Neither sample establishes the current portable distribution. Time a fixed common portable selection on CI. |
+| Small native experiment with existing build <30 s | The retained warm host probe took median 0.002 s and the matching warm event-20 replay 20.691 s. Repeat an agreed small native workload at identical proof scope to establish broader latency. |
+| Common authentic offline replay <60 s | All six 475 samples met the time bound at their retained scope. The checker still reports event-1 divergence. Sample a second protected workload before generalizing. |
+| Full portable offline gate <2 min | **262.183 s** at the pin. Native wall times of 614.868 s and 489.736 s are separate comparisons. |
+| Comparable full offline validation ≥70% lower | Unproven. Establish separate portable and native before/after pairs with equivalent invariants. |
+| Eliminate unnecessary equivalent native builds | Nine operation-diff fixture builds took 11.865 s in the attributed run. Confirm matching dependency and flag identity, then count launches and verify retained fresh-build/failure coverage. |
+| Zero routine autonomous original EU4 launches | R0 ran offline with zero launches. R6 must verify actual routine sessions and authorization receipts. |
 
 ## Agent traces and repeated work
 
@@ -147,6 +158,7 @@ To reproduce the trace audit, locate the named `session-<UUID>/session.v4.jsonl.
 
 ## Measurement contract
 
-- The full suite uses the existing runner. Focused costs use single-module `--module` selections with the same checkout and environment. Compare the measured shortlist before a consolidation and preserve each unique invariant. A focused sum is not the full-suite cost.
+- For R5 pair base and candidate on the same host or CI image, OS/toolchain/interpreter, test profile and selection, native prerequisites, evidence and cold/warm setup. Keep background load and thermal conditions comparable and record the order, runner IDs, wall times, failures and skips. Repeat targeted pairs with reversed order where effects overlap observed run-to-run spread. If a test selection changes, map every removed case to the retained invariant and report the composition and coverage change alongside the result. Use the existing runner and keep portable and native comparisons separate. The final full gate follows the normal merge workflow.
 - The replay experiment uses seal `47590918…` through event 20 and the current trusted checker. Each pair starts with no replay host or translation cache at its isolated output root. The warm arm verifies the existing host and translation identity and writes a fresh execution directory. Host-build timing includes dependency identity validation. Replay timing includes trusted-root verification, materialization, translation, host execution, and reconciliation. It does not estimate GPU service time.
-- Store raw runner results, timing trials, and DSH analyzer output under the local audit root described in the [audit](r0-audit.md). Reuse the pinned case and match platform, toolchain, test selection, and artifacts when measuring R5 and R7.
+- Report single-invocation wall time separately from session validation count, execution intervals, elapsed session time and avoidable waits. Join calls and jobs by identity and avoid double-counting overlapping intervals. Confirm equivalent validation scope and relevant source/input identity before assigning avoidable cost. The historical 158.203 s saving is a cumulative session finding.
+- Keep raw runner results, timing trials and DSH analyzer output under the private audit root. Exact profiling scripts and the retention location are recorded with the [reproduction archive](r0-audit.md#reproducibility).

@@ -105,15 +105,38 @@ Preflight passed with the checked Python interpreter and an audit-local copy of 
 
 **Remaining deployment risk.** Prove trusted plugin composition and privilege in the real workspace profile, including sibling evidence reads, Git writer identity, child containment, and terminal/resume idempotence. Preserve the governed route until those checks pass. [Goal integration](../../docs/dsh-native-goal.md) · [Campaign guard](../../automation/campaign_guard.py) · [Launch and GPU lease](../../automation/launch_lease.py) · [Trusted bridge](../../automation/dsh_bridge.py)
 
-## Runtime baseline
+## Section 11 baseline dashboard
 
-See [R0 measurements](r0-measurements.md) for the original exact-head baselines, authentic replay pairs, full-suite attribution, analysis of recent DSH traces, and prioritized performance targets.
+These baselines use the pinned source above and explicitly dated historical samples. The [approved dashboard criteria](approved-plan.md#11-metrics-and-acceptance-dashboard) govern the later comparison.
+
+| Dimension | R0 baseline | Comparable follow-up |
+| --- | --- | --- |
+| Authored LOC | 395,033 across six authored responsibilities. [Source baseline](#source-baseline) | Recount by responsibility at R7. Count R0 documentation and enabling work cumulatively, report scientific additions separately, and charge moves zero. [Budget](r0-disposition.md#pr-sequence-and-quantitative-budget) |
+| Tracked bytes | 100,115,100 logical bytes, including 82,379,560 generated/data/evidence bytes. This measures the active tree, while historical Git object storage has no R0 baseline. | Compare logical blob bytes with the same policy. Measure Git pack/object storage separately only if claiming storage savings there. Verify unique evidence recovery first. |
+| Ownership | One maintained Metal path with live, replay and diagnostic adapters. The selected-draw GL control has a narrow authority scope. Replay, case handling, and workflow wrappers overlap. [Source comparison](r0-disposition.md#source-overlap-and-retirement) | Verify one maintained owner per capability and a clean checkout with public CLI, ABI/build and evidence consumers. |
+| Orchestration | One installed native DSH continuation driver. Governed campaigns still bind objective, sidecar, checker and external state. Ordinary workspace composition disables the campaign plugin and retains native rounds. [DSH audit](#dsh-and-trust-boundaries) | Exercise routine native continuation without those per-session campaign inputs, while preserving controlled capture and independent qualification. |
+| Startup | After one-time provision/preflight, the workspace path requires choosing the worktree, running `run.sh --workspace`, opening its URL, creating a Web session and submitting a human goal. The governed example additionally supplies sidecar, fresh external deadline/state and a prepared goal with pinned case/checker. No comparable startup duration or context-size sample. [Workspace](../../dsh/README.md#offline-reconstruction-experiments) · [M7 runbook](../../analysis/m7/m7-operator-runbook.md) | From an already provisioned host, count operator actions and supplied artifacts, record seconds to first admitted round and startup context tokens, and verify duration defaults to 120 minutes with optional workstream only. |
+| Knowledge retrieval | Earlier M7 tools measured discovery of 53 indexed campaigns at **0.15 s / 8,801 B**, and frame 74 returned **two records / 3,502 B**. Those are locator/read costs. R0 resolved the pinned function ABI and a failed sparse-control result but recorded no matched agent read, token or elapsed totals for the full fact-to-source-and-evidence task. [Measured workflow](../../analysis/m7/efficiency.md#improved-offline-workflow-measured) · [Oracle finding](#function-oracle) · [Sparse result](r0-evidence.md#protected-evidence) | In fresh sessions, give the same two prompts for a positive fact and a failed hypothesis. Require fact, source and verified evidence identity. Count targeted reads, input and cache-read tokens separately, and elapsed time through the first correct evidence link. |
+| Feedback speed | Portable full gate **262.183 s**. Native full gate **614.868 s**, with an attributed replicate at **489.736 s**. The authentic case median was **23.667 s cold / 20.691 s warm**. [Measurements and latency status](r0-measurements.md#section-83-latency-status) | Pair before/after invocations at retained scope. Separately compare validation counts, elapsed time and avoidable waits across comparable sessions. |
+| Scientific progress | Independent captured-state Metal replay verifies `[0, 0]` on 475, then finds a 23-pixel divergence at event 1. The historical 20-pixel candidate and sparse depth refusal are diagnostic findings. The signed native GL control has no same-target authority for that event. Function evidence comprises static ABI, P-code differential cases and a separate 64-record original publication with scoped replay and outstanding raw recovery. No defensible per-agent-hour qualification rate. [Evidence tiers and results](r0-evidence.md) | For each comparable R6 session, log newly independently qualified transitions/functions/scopes and explained divergences with receipts, coverage and elapsed agent-hours. Report authentic, original-function, emulated and synthetic results by tier, with diagnostic negatives visible. |
+| Regression protection | The six 475 replays reproduced the known bound and the checker refused an unbound replay. The full native test run retains one pre-existing compile error. Neither absence of a newly accepted regression nor full renderer equivalence was established across all supported scopes. [Reproduced scope](#reproduced-scope) · [Suite verdicts](r0-measurements.md#offline-suites) | Re-run the required protected regressions and missing/state-only/stale/tampered negatives for promotion, with independent state and receipt checks. |
+| Git recovery | Git preserves the pinned start and tracked metadata, and the governed bridge binds candidate snapshots and qualification receipts. DSH flush waits for its listener and a rejection blocks the next round in a disposable probe. No observed population of protected changed-round commits or interrupted/resumed native sessions, so percentage recovery is unavailable. [Lifecycle probe](#dsh-and-trust-boundaries) · [Campaign snapshots](../../docs/dsh-native-goal.md#candidate-snapshots-and-the-qualification-record) | In R4/R6 enumerate completed changed rounds as denominator, verify each protected checkpoint and starting/latest qualified refs, then interrupt and recover in a fresh session. |
+| Safety | R0 ran offline with zero EU4 launches. Offline launch entry points refuse authorization and the governed mode has the external deadline, one-use launch claims and host/GPU locks. The workspace probe denied sibling writes and linked-worktree Git ref writes. Full protection of trusted evidence, refs and subprocesses under ordinary workspace mode is unproven. [Trust boundaries](#dsh-and-trust-boundaries) | Reproduce denials, deadline and worker cancellation together on the pinned profile, verify authority after interruption, and audit actual launch receipts. |
+| Autonomy | Eight recent exports show **two user messages and three approval interventions**, counted separately by event type. Policy events, setup and actions outside the exports are outside these counts. In one campaign four unnecessary revalidations cost **158.203 s**. Equivalent investigative experiments were not established, so this is repeated validation cost. [Recent trace audit](r0-measurements.md#recent-campaign-audit) | Count setup, messages, approvals and interventions across matched sessions using operator records and exports. Give the resumed agent an existing negative result and compare repeated work by source, input, hypothesis and existing outcome. |
 
 ## Reproducibility
 
-Check out `6710a341d864466d7b0ab2d297ab513922d582b6` separately. Keep output in a private scratch directory. This PR preserves the plan's requirements and gate text. For evidence recovery use the existing verifiers and identities in the [protected collection table](r0-evidence.md#protected-evidence). The installed DSH probe can be reconstructed using `SessionStore.prepare` and `enter` on a new Context, an asynchronous `session/flush` listener, and the released driver's `apply` with disposable goal/agent services. Issue one goal-change notification, mark its queued message claimed and admitted, then send idle. Resolve or reject the next flush and inspect follow-up and disarm order.
+Check out `6710a341d864466d7b0ab2d297ab513922d582b6` separately. Keep output in a private scratch directory. For evidence recovery use the existing verifiers and identities in the [protected collection table](r0-evidence.md#protected-evidence).
 
-Run the following from the checkout holding the audit documents and original Git objects. It uses the original audit utilities and reproduces the family totals from the checked-in selectors. It prints counts and neither regenerates tracked audit artifacts nor reads captured payloads. The original per-path outputs remain local for forensics.
+The private audit root in [pinned inputs](#pinned-inputs) contains `r0-reproduction-6710a341.tar.gz` (11,348 bytes, SHA-256 `0a7e4b87101dab04002336cd0d3d48611236b3141b87b120f68cce0a79b0d1e4`). Recover it from the audit host or request a private copy from its custodian, verify with `shasum -a 256`, and unpack into scratch. It preserves the exact scripts and compact results from the disposable measurements, with no captured game payloads, private session transcripts or installed packages. Retain it with the local audit records.
+
+| Exact artifact inside archive | Recovery or invocation |
+| --- | --- |
+| `measure-inventory.py` | Original ownership and inventory generator. Its script directory basename provides the Git pin and receives generated output. For an output-free comparison use the recipe below. |
+| `attribution-corrected/sitecustomize.py`, `attribution-corrected/run.sh`, `attribute-suite.py` | Exact hook, run wrapper and aggregator. The wrapper expects the pinned clean checkout at sibling `checkout/`. The aggregator reads `summary.json` and `timings.jsonl` from the named run directory. These raw records remain under the local audit root's `attribution-corrected/`; interval file SHA-256 `2fccf6f08da4b82d2fc942bfe400c22d74d294ceaedccfd607ac770bbdfac0b7`. `attribution.txt` in the archive preserves the summarized results. |
+| `probe-goal-flush.mjs` and `probe-goal-flush.txt` | Script SHA-256 `9c0476164928b68619761a68506b2afcf441f590c73860ff4a4f5b403ae6c487`. Run `node probe-goal-flush.mjs` using the installed packages identified above and a disposable context. The script imports the real session store and round driver, then resolves or rejects its admitted round's flush. The archive also holds the separate Seatbelt script and its verified result at `dsh-fence/`. |
+
+Run the following from the checkout holding the audit documents and original Git objects. It uses the original audit utilities and reproduces the responsibility and family totals. Each path takes the first matching rule in each classification. It prints counts without writing generated artifacts or reading local captured payloads.
 
 ```python
 import csv, io, re
@@ -138,32 +161,75 @@ evidence = ("analysis/evidence/", "analysis/output/", "analysis/renderer-corpus/
 source = set(".py .c .h .cc .cpp .hpp .m .mm .s .swift .sh .js .ts .metal .glsl .vert .frag .java .def .inc .yml .yaml .toml .ini".split())
 special = {".githooks/pre-commit", "benchmark/powermetrics_helper",
            "benchmark/power_mode_helper", "dsh/scripts/probe"}
-def authored(path):
+orchestration = set("""
+__init__ acceptance agents call_chain campaign_contract campaign_guard cli correction_accept
+dsh_bridge dsh_campaign dsh_pilot dsh_profile dsh_receipts dsh_review gfx_contract_accept
+gfx_contract_runner gfx_draw_accept gfx_draw_accept_v2 gfx_infra_accept gfx_l32b_complete
+gfx_qualification handoff handoff_cli live_gfx m6_live_accept m6_live_capture m7_continuous
+next_blocker opencode promote_evidence reconstruction_accept review_result runner session_state
+state verification_manifest
+""".split())
+capture = tuple("""
+eu4_gfx_capture_ eu4_gfx_draw_capture eu4_gfx_draw_control eu4_gfx_draw_indexed
+eu4_gfx_draw_packet eu4_gfx_frame_observe eu4_gfx_frame_seal eu4_gfx_frame_trace
+eu4_gfx_gl_interpose eu4_gfx_live_capture eu4_gfx_observe eu4_gfx_op_
+eu4_gfx_set_constant_buffer_capture eu4_gfx_startup_ eu4_gfx_stream_bench eu4_metal_gl_diag
+""".split())
+data = "Generated and evidence"
+
+def responsibility(path):
     p = Path(path)
     ext = p.suffix.lower()
     if path in generated or set(p.parts[:-1]) & {"vendor", "third_party", "node_modules"}:
-        return False
+        return data
     if path.startswith(evidence) and ext != ".md" and p.name != "trials.py":
-        return False
+        return data
+    if ext in {".md", ".rst"}:
+        return "Documentation"
     cfg = ext == ".json" and path.startswith(("automation/", "campaigns/", "dsh/", "tooling/"))
     cfg = cfg and (p.name in {"campaign.json", "package.json", "runtime.json", "repo_lifecycle.json"}
                    or path.startswith("dsh/campaigns/"))
-    return (ext in source | {".md", ".rst"} or cfg or path in special or p.name in
-            {"Makefile", ".gitignore", "requirements.txt", "requirements-test.txt", "CMakeLists.txt"})
+    if not (ext in source or cfg or path in special or p.name in
+            {"Makefile", ".gitignore", "requirements.txt", "requirements-test.txt", "CMakeLists.txt"}):
+        return data
+    dossier = path.startswith("analysis/reconstruction/")
+    if path.startswith("tests/") or "tests" in p.parts or (
+            dossier and p.stem in {"harness", "abi_check", "abi_call6"}):
+        return "Tests"
+    if path.startswith(("reverse_engineering/", "reconstruction_trace/")):
+        return "Reverse engineering"
+    if dossier and p.name.startswith("gfx_set_constant_buffer"):
+        return "Renderer"
+    if path.startswith(("campaigns/", "dsh/", ".github/")) or (
+            path.startswith("automation/") and p.name.removesuffix(".py") in orchestration
+            and p.name.endswith(".py")):
+        return "Orchestration and CI"
+    if path.startswith("benchmark/") and p.name.startswith(
+            ("eu4_gfx_", "eu4_metal_", "eu4_gl_shadow")) and not p.name.startswith(capture):
+        return "Renderer"
+    return "Tooling and experiments"
 
-blobs = snap.read_many([r["path"] for r in rows if authored(r["path"])], max_bytes=None)
+owners = {r["path"]: responsibility(r["path"]) for r in rows}
+blobs = snap.read_many([p for p, owner in owners.items() if owner != data], max_bytes=None)
 groups = defaultdict(lambda: [0, 0, 0])
+responsibilities = defaultdict(lambda: [0, 0, 0])
 for row in rows:
     path = row["path"]
     family = next(name for name, rx in rules if rx.search(path))
     text = blobs.get(path, b"")
-    group = groups[family]
-    group[0] += 1
-    group[1] += text.count(b"\n") + int(bool(text) and not text.endswith(b"\n"))
-    group[2] += int(row["size_bytes"])
-assert tuple(map(sum, zip(*groups.values()))) == (2388, 395033, 100115100)
+    text.decode("utf-8")
+    assert b"\0" not in text
+    lines = text.count(b"\n") + int(bool(text) and not text.endswith(b"\n"))
+    for group in (groups[family], responsibilities[owners[path]]):
+        group[0] += 1
+        group[1] += lines
+        group[2] += int(row["size_bytes"])
+for dimension in (groups, responsibilities):
+    assert tuple(map(sum, zip(*dimension.values()))) == (2388, 395033, 100115100)
+for name, counts in sorted(responsibilities.items()):
+    print(name, *counts, sep="\t")
 for name, _ in rules:
-    print(name, *groups[name])
+    print(name, *groups[name], sep="\t")
 ```
 
 ## R0 requirement-by-requirement acceptance
@@ -173,12 +239,13 @@ R0 authorizes planning and review of the sequenced implementation. The review st
 | Requirement | Acceptance evidence | Remaining condition and effect |
 | --- | --- | --- |
 | Preserve valid baseline and scientific work (follow-up 1, original R0.1/R0.4) | [Pinned inputs](#pinned-inputs), event matrix, ABI code-window check, and original platform and replay results. | The pre-existing native shader-cache fixture compilation error remains recorded. R2a addresses it before the next native gate. It does not invalidate R0 timing, inventory or retained replay. |
-| Disposition and ownership (2, R0.2/R0.3/R0.9) | [42 family rows](r0-disposition.md#subsystem-dispositions) reconcile all tracked files, with consumers, holds, retirement prerequisites and estimates. | External scripts and historical payloads need scoped confirmation at retirement. Holds apply to specific proposed removals, while R1 knowledge and early verified cleanup can proceed. |
+| Disposition and ownership (2, R0.2/R0.3/R0.9) | [42 family rows](r0-disposition.md#subsystem-dispositions) reconcile all tracked files, with consumers, holds, retirement prerequisites and estimates. The [physical map](r0-disposition.md#post-r7-physical-ownership) names the post-R7 owners and existing paths to retain. | External scripts and historical payloads need scoped confirmation at retirement. Holds apply to specific proposed removals, while R1 knowledge and early verified cleanup can proceed. |
 | Redundant implementations (3, R0.3/R0.7) | [Overlap table](r0-disposition.md#source-overlap-and-retirement) selects surviving modules and ties removals to regression coverage. | Actual extraction size and equivalence across old case schemas remain PR acceptance checks. |
 | Full-suite attribution (4, R0.8) | [Instrumented run](r0-measurements.md#full-native-attribution) assigns 99.98% of unittest wall time to test and fixture groups. The comparison reproduced the original selection, counts and sole pre-existing error. | Native-child internals and exact stage savings require focused R5 measurements. Overlapping wait and subprocess intervals are reported as separate cost views. |
 | Agent validation analysis (5, R0.8) | [Recent trace audit](r0-measurements.md#agent-traces-and-repeated-work) ties calls to inputs, source changes, rollback, receipts, test jobs and status waits. | Unidentified executions are excluded from estimated savings. Preserving independent terminal receipts and relevant post-edit gates remains mandatory. |
 | Knowledge and function migration (6, R0.4/R0.9) | [R1/R2 coverage](r0-evidence.md#r1-and-r2-migration-coverage) maps the six dossier families, executable modules, proof scopes and negative findings to owners. | Future original behavior and ABI gaps remain scoped scientific work. They do not prevent organizing recovered findings. |
 | Protected evidence and 20 vs 23 reconciliation (7, R0.5/R0.9) | [Protected collections](r0-evidence.md#protected-evidence), restored M7 reference, and [source/recipe comparison](r0-evidence.md#event-1-numerical-identity). | M4/M5 manifests and local members and M6 trace blobs verified in place. Separate archival restores, older M7 private cases and the oracle transcripts still gate archival or reuse where applicable. They do not block metadata migration. |
 | Native DSH feasibility and governance (8, R0.6/R0.7) | [Lifecycle and trust audit](#dsh-and-trust-boundaries) names the released flush hook and demonstrates failure blocking in a disposable probe. | A real trusted Git checkpoint, cancellation/worker containment and backend isolation are R4 adoption gates. Keep active controls until proven. |
-| Quantitative PR and performance budget (9, R0 gate) | The [R1–R7 budget](r0-disposition.md#pr-sequence-and-quantitative-budget) estimates −4,230 enabling LOC and counts moves as zero. The [performance budget](r0-measurements.md#optimization-budget) identifies 46–102 s in first-wave full-suite savings against measured costs. | Performance savings are estimates and fall short of the provisional targets. Re-measure comparable workloads before retirement or release. |
-| Durable reproduction (10) | [Tracked plan](approved-plan.md), Git and runtime pins, classification recipe and selectors, trace identities, measurement commands and published numerical recipes. | Raw local inputs remain private. Another authorized agent needs the named host or archived originals to reproduce authentic or execution-specific measurements. |
+| Quantitative PR and performance budget (9, R0 gate) | The [R1–R7 budget](r0-disposition.md#pr-sequence-and-quantitative-budget) includes cumulative LOC with R0 and keeps the approved phase gates binding. R6 requires seeded repair, continuation and recovery in a subsequent session. | Carry forward measured savings and verified removals. R6 must establish the operating model before routine campaign mechanisms retire. |
+| Durable reproduction (10) | The [counting recipe and local archive record](#reproducibility) preserve both classification rules and the exact attribution and DSH probe artifacts. The [tracked plan](approved-plan.md) preserves the original gates. | Raw local inputs remain private. Another authorized agent needs the named host or archived originals to reproduce authentic or execution-specific measurements. |
+| Dashboard and target calibration (approved §§8.3, 11) | The [dashboard](#section-11-baseline-dashboard) covers all 12 dimensions. The [latency status](r0-measurements.md#section-83-latency-status) and [measurement contract](r0-measurements.md#measurement-contract) separate portable/native and invocation/session costs. | The 125.132 s native spread exceeds the 46–102 s first-wave estimate. The 70% target remains unproven. Measured gaps are assigned to comparable R5 or R6 follow-ups. |
