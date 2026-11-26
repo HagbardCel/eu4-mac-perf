@@ -479,15 +479,11 @@ def verify_candidate(workspace: Path | str,
         "sidecar": str(Path(sidecar_path).resolve()),
         "baseline_commit": sidecar.candidate_baseline_commit,
         "source_paths": list(sources),
-        "source_digests": _candidate_source_digests(workspace, sources),
+        "source_digests": replay_host_dependencies.relative_dependencies(workspace, sources, strict=True),
         "revision": revision,
         "changed_paths": sorted(changed),
         "policy_digest": sidecar.policy_digest,
     }
-
-
-def _candidate_source_digests(workspace: Path, sources) -> dict[str, str]:
-    return replay_host_dependencies.relative_dependencies(workspace, sources, strict=True)
 
 
 def _execution_environment(execution_dir: Path) -> dict:
@@ -536,14 +532,10 @@ def _cached_candidate_build(snapshot_root: Path, destination: Path,
             shutil.copy2(cached_host, destination)
             if _sha256(destination) != metadata["host_sha256"]:
                 raise OSError("cached candidate host changed while copying")
-            record = dict(metadata)
-            record.update({
-                "schema": "gfx-replay-host-candidate-build/v1",
-                "cache_hit": True,
-                "host_path": str(destination),
-                "host_sha256": _sha256(destination),
-            })
-            return destination, record
+            return destination, {
+                **metadata, "schema": "gfx-replay-host-candidate-build/v1",
+                "cache_hit": True, "host_path": str(destination),
+            }
     temporary = destination.with_name(destination.name + ".tmp")
     record = replay_host_dependencies.build_snapshot_host(
         snapshot_root, temporary, sources=sources)
@@ -554,8 +546,7 @@ def _cached_candidate_build(snapshot_root: Path, destination: Path,
     record["host_path"] = str(destination)
     record["host_sha256"] = _sha256(destination)
     cache_entry.mkdir(parents=True, exist_ok=True)
-    metadata = dict(record)
-    metadata["host_path"] = str(cached_host)
+    metadata = {**record, "host_path": str(cached_host)}
     (cache_entry / "build.json.tmp").write_text(
         json.dumps(metadata, indent=2) + "\n")
     os.replace(cache_entry / "build.json.tmp", metadata_path)
@@ -629,7 +620,7 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         except (OSError, subprocess.SubprocessError) as exc:
             raise PrefixCheckError(
                 f"candidate replay host build failed: {exc}") from exc
-        after = _candidate_source_digests(workspace, sources)
+        after = replay_host_dependencies.relative_dependencies(workspace, sources, strict=True)
         if before != snapshot["digests"] or before != after:
             raise PrefixCheckError(
                 "candidate renderer source changed between snapshot and build")
@@ -674,7 +665,8 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         if _sha256(host) != candidate["build"]["host_sha256"]:
             raise PrefixCheckError(
                 "candidate replay host changed after execution")
-        if _candidate_source_digests(workspace, sources) != candidate["source_digests"]:
+        post_execution = replay_host_dependencies.relative_dependencies(workspace, sources, strict=True)
+        if post_execution != candidate["source_digests"]:
             raise PrefixCheckError(
                 "candidate renderer source changed after the trusted build")
     replay_path = replay_dir / "replay.json"

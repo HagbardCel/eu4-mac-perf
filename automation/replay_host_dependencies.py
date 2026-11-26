@@ -39,13 +39,6 @@ BUILD_FLAGS = (
     "-framework",
     "Metal",
 )
-# Environment variables that can change the produced binary.
-BUILD_ENV_KEYS = (
-    "SDKROOT",
-    "MACOSX_DEPLOYMENT_TARGET",
-    "ARCHFLAGS",
-    "DEVELOPER_DIR",
-)
 _LOCAL_INCLUDE = re.compile(
     r'^\s*#\s*(?:include|import)\s+"([^"]+)"', re.MULTILINE)
 _COMPILER_CACHE: dict[tuple[str, int], dict] = {}
@@ -347,10 +340,9 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
     output = Path(output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     identity = build_identity(snapshot_root, sources, compiler=compiler, strict=True)
-    compiler_info = compiler_identity(compiler)
     command = build_command(output, [snapshot_root / relative for relative in sources],
                             compiler=compiler)
-    build_env = environment or build_environment()
+    build_env = environment or identity["environment"]
     completed = subprocess.run(
         command, capture_output=True, text=True, check=False,
         timeout=timeout, env=build_env)
@@ -363,8 +355,8 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
     return {
         "schema": "gfx-replay-host-candidate-build/v1",
         "command": command,
-        "compiler": compiler_info,
-        "flags": list(BUILD_FLAGS),
+        "compiler": identity["compiler"],
+        "flags": identity["flags"],
         "environment": build_env,
         "source_root": str(snapshot_root),
         "source_files": sorted(identity["dependencies"]),

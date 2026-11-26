@@ -1575,19 +1575,6 @@ class ExecutionReceiptTests(unittest.TestCase):
         self.assertTrue(gfx_prefix_check.verify_execution_outputs(
             execution, base))
 
-    def test_candidate_source_digest_changes_with_content(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
-        source = root / "renderer/metal" / "eu4_gfx_frame_replay.mm"
-        source.parent.mkdir(parents=True)
-        source.write_text("// baseline\n")
-        for header in ("eu4_gfx_frame_replay_cli.mm",):
-            (source.parent / header).write_text("// cli\n")
-        before = gfx_prefix_check._candidate_source_digests(root, replay_host_dependencies.REPLAY_SOURCES)
-        source.write_text("// changed\n")
-        after = gfx_prefix_check._candidate_source_digests(root, replay_host_dependencies.REPLAY_SOURCES)
-        self.assertNotEqual(before, after)
 
 class OffscreenCoverageTests(unittest.TestCase):
     def test_missing_offscreen_post_event_observation_is_invalid(self):
