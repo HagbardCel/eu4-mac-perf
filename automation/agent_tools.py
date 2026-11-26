@@ -3701,7 +3701,6 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                         f"{run['parse_error'] or run['stderr'] or 'no output'}"))
         result = dict(value)
         replay_status = str(value.get("status") or "unknown")
-        result["case_id"] = manifest.get("case_id")
         result["replay_status"] = replay_status
         result["subprocess"] = report
         if replay_status in ("pass", "fail") and run["exit_code"] in (0, 2):
