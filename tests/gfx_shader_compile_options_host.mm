@@ -40,21 +40,21 @@ int main(int argc, const char *argv[]) {
         assert(resolve_shader_fast_math(NULL, NULL, &fast_math) == nil && fast_math);
         state.shader_fast_math = fast_math;
         NSString *first_key = nil;
-        id first = function_for(shader_dir, stage, &first_key, NULL);
+        id first = function_for(shader_dir, stage, &first_key, NULL, NULL);
         assert(first != nil && [first_key hasSuffix:@"#vertex_main#vertex#fastmath-on"]);
 
         assert(resolve_shader_fast_math("1", NULL, &fast_math) == nil && fast_math);
         state.shader_fast_math = fast_math;
         NSString *second_key = nil;
-        assert(function_for(shader_dir, stage, &second_key, NULL) == first);
+        assert(function_for(shader_dir, stage, &second_key, NULL, NULL) == first);
         assert([first_key isEqual:second_key] && compiler.calls.count == 1);
 
         assert(resolve_shader_fast_math("0", NULL, &fast_math) == nil && !fast_math);
         state.shader_fast_math = fast_math;
-        id precise = function_for(shader_dir, stage, &second_key, NULL);
+        id precise = function_for(shader_dir, stage, &second_key, NULL, NULL);
         assert(precise != nil && precise != first);
         assert([second_key hasSuffix:@"#vertex_main#vertex#fastmath-off"]);
-        assert(function_for(shader_dir, stage, NULL, NULL) == precise);
+        assert(function_for(shader_dir, stage, NULL, NULL, NULL) == precise);
         NSArray *expected = @[
             @{@"source": @"mock MSL", @"fast_math": @YES,
               @"entry": @"vertex_main", @"language": @(MTLLanguageVersion2_1)},
