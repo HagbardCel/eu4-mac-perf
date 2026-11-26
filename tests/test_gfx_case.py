@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import gfx_case, gfx_flight  # noqa: E402
+from automation import gfx_case, gfx_replay_case, gfx_flight  # noqa: E402
 
 try:
     import numpy as np
@@ -179,11 +179,42 @@ class CaseBuilderTests(unittest.TestCase):
         self.assertIn("Remaining hypotheses", analysis)
         self.assertIn("Missing evidence", analysis)
         self.assertIn("Another EU4 launch", analysis)
-        replay = gfx_case.compare_case(case_dir)
+        replay = gfx_replay_case.compare_legacy_case(case_dir)
         self.assertIn(replay["status"], ("pass", "fail", "unverified"))
-        inspected = gfx_case.inspect_case(case_dir)
+        inspected = gfx_replay_case.inspect_legacy_case(case_dir)
         self.assertEqual(inspected["classification"], gfx_case.CONFIRMED_RENDERING)
         self.assertGreater(packaged["total_bytes"], 0)
+
+    def test_relocated_legacy_case_uses_only_packaged_frames(self):
+        case = Path(gfx_case.build_case(self.run)["case_dir"])
+        repro = case / "repro" / "repro.json"
+        document = json.loads(repro.read_text())
+        for frame in document["frames"].values():
+            frame["path"] = str(case / frame["path"])
+        repro.write_text(json.dumps(document))
+        manifest = json.loads((case / "case.json").read_text())
+        manifest["case_id"] = "historical-case"
+        (case / "case.json").write_text(json.dumps(manifest))
+        expected = gfx_replay_case.compare_legacy_case(case, write=False)
+        self.assertEqual(expected["status"], "pass")
+
+        restored = self.run.parent / "historical-case"
+        case.rename(restored)
+        kind, _, restored_manifest, _ = gfx_replay_case.case_schema(restored)
+        self.assertEqual(kind, gfx_replay_case.CASE_KIND_LEGACY)
+        self.assertEqual(restored_manifest["case_id"], "historical-case")
+        self.assertEqual(gfx_replay_case.inspect_legacy_case(restored)["case_id"],
+                         "historical-case")
+        self.assertEqual(gfx_replay_case.compare_legacy_case(restored, write=False), expected)
+        self.assertFalse((restored / "repro" / "comparison.json").exists())
+
+        frame = restored / "frames" / "reference-frame-4.bgra"
+        external = restored.parent / "external.bgra"
+        frame.rename(external)
+        frame.symlink_to(external)
+        refused = gfx_replay_case.compare_legacy_case(restored, write=False)
+        self.assertEqual(refused["status"], gfx_case.INCOMPLETE)
+        self.assertIn("escapes the case directory", refused["reason"])
 
     def test_tampered_packaged_frame_is_not_replayed_as_valid(self):
         packaged = gfx_case.build_case(self.run)
@@ -192,7 +223,7 @@ class CaseBuilderTests(unittest.TestCase):
         payload = bytearray(frame.read_bytes())
         payload[0] ^= 0xFF
         frame.write_bytes(bytes(payload))
-        replay = gfx_case.compare_case(case_dir)
+        replay = gfx_replay_case.compare_legacy_case(case_dir)
         self.assertEqual(replay["status"], gfx_case.INCOMPLETE)
         self.assertIn("digest", replay["reason"])
 

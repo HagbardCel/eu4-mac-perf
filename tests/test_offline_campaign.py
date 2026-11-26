@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import gfx_align, gfx_case, gfx_frame_compare  # noqa: E402
+from automation import gfx_align, gfx_case, gfx_replay_case, gfx_frame_compare  # noqa: E402
 
 try:
     import numpy as np
@@ -207,7 +207,7 @@ class OfflineCampaignTests(unittest.TestCase):
         (run / "session.json").write_text(json.dumps({"session_id": "offline-100"}))
         packaged = gfx_case.build_case(run)
         self.assertEqual(packaged["classification"], gfx_case.CONFIRMED_RENDERING)
-        replay = gfx_case.compare_case(Path(packaged["case_dir"]))
+        replay = gfx_replay_case.compare_legacy_case(Path(packaged["case_dir"]))
         self.assertEqual(replay["status"], "fail")
         analysis = (Path(packaged["case_dir"]) / "analysis.md").read_text()
         self.assertIn("horizontal mirroring", analysis.lower())

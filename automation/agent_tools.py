@@ -2002,52 +2002,6 @@ def _case_replay_outcome(result: dict) -> tuple[str, str, str | None, str | None
     return "incomplete", "incomplete", None, "unverified"
 
 
-CASE_KIND_STRATEGY_B = "strategy_b"
-CASE_KIND_LEGACY = "legacy"
-CASE_KIND_UNSUPPORTED = "unsupported"
-CASE_KIND_MALFORMED = "malformed"
-CASE_KIND_MISSING = "missing"
-
-
-def _case_schema(case_path: Path) -> tuple[str, str | None, dict, str | None]:
-    """Classify a case directory without ever guessing a schema.
-
-    A malformed manifest, an unsupported ``gfx-strategy-b-case/*`` version and
-    a recognized legacy image-comparison case are distinct outcomes.  Only the
-    recognized legacy schema may reach the older comparator.
-    """
-    manifest_path = case_path / "case.json"
-    if not manifest_path.is_file():
-        # A legacy image-comparison source may be a built case (manifest.json)
-        # or a run directory the legacy comparator can inspect.  Recognize
-        # those explicitly; a directory with no legacy markers is missing.
-        for name in ("manifest.json", "result.json"):
-            manifest = _optional_json(case_path / name)
-            if manifest:
-                return CASE_KIND_LEGACY, None, manifest, (
-                    f"legacy image-comparison evidence in {name}")
-        if (case_path / "repro" / "repro.json").is_file():
-            return CASE_KIND_LEGACY, None, {}, "legacy repro/repro.json"
-        return CASE_KIND_MISSING, None, {}, "no case.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        return CASE_KIND_MALFORMED, None, {}, f"case.json is unreadable: {exc}"
-    if not isinstance(manifest, dict):
-        return CASE_KIND_MALFORMED, None, {}, "case.json is not an object"
-    schema = manifest.get("schema")
-    if schema in gfx_replay_case.CASE_SCHEMAS:
-        return CASE_KIND_STRATEGY_B, str(schema), manifest, None
-    if isinstance(schema, str) and schema.startswith("gfx-strategy-b-case/"):
-        return CASE_KIND_UNSUPPORTED, schema, manifest, (
-            f"unsupported Strategy B schema: {schema}")
-    if schema == gfx_case.SCHEMA:
-        return CASE_KIND_LEGACY, None, manifest, "legacy image-comparison case"
-    return CASE_KIND_UNSUPPORTED, (
-        schema if isinstance(schema, str) else None), manifest, (
-            f"unsupported case schema: {schema!r}")
-
-
 def _case_verification_outcome(verification: dict,
                                schema: str | None) -> tuple[str, str, str]:
     """Map a Strategy B verification to (status, diagnostic, evidence)."""
@@ -3332,7 +3286,7 @@ def _strategy_b_verify(case_path: Path) -> dict:
 
 def _case_invalid_envelope(tool: str, case_path: Path, kind: str,
                            schema: str | None, detail: str | None) -> dict:
-    status = ("not_found" if kind == CASE_KIND_MISSING else "invalid")
+    status = ("not_found" if kind == gfx_replay_case.CASE_KIND_MISSING else "invalid")
     return _envelope(
         tool, status, {
             "case": str(case_path), "kind": kind, "schema": schema,
@@ -3458,9 +3412,9 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 "case": str(case_path), "exists": False,
             }, diagnostic="unavailable",
                reason=f"case directory does not exist: {case_path}")
-        kind, schema, manifest, detail = _case_schema(case_path)
-        if kind != CASE_KIND_STRATEGY_B:
-            if kind == CASE_KIND_LEGACY:
+        kind, schema, manifest, detail = gfx_replay_case.case_schema(case_path)
+        if kind != gfx_replay_case.CASE_KIND_STRATEGY_B:
+            if kind == gfx_replay_case.CASE_KIND_LEGACY:
                 return _envelope(
                     "eu4_replay", "refused", {
                         "case": str(case_path), "kind": kind,
@@ -3656,8 +3610,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 "case": str(case_path), "exists": False,
             }, diagnostic="unavailable",
                reason=f"case directory does not exist: {case_path}")
-        kind, schema, manifest, detail = _case_schema(case_path)
-        if kind == CASE_KIND_STRATEGY_B:
+        kind, schema, manifest, detail = gfx_replay_case.case_schema(case_path)
+        if kind == gfx_replay_case.CASE_KIND_STRATEGY_B:
             verification = _strategy_b_verify(case_path)
             if not verification["ok"]:
                 return _strategy_b_verify_result(
@@ -3696,7 +3650,7 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                         "reasons") or []))
             return _strategy_b_verify_result(
                 case_path, schema, manifest, verification)
-        if kind != CASE_KIND_LEGACY:
+        if kind != gfx_replay_case.CASE_KIND_LEGACY:
             return _case_invalid_envelope(
                 "eu4_replay", case_path, kind, schema, detail)
         # The legacy image-comparison case needs NumPy; Strategy B replay above
@@ -3704,9 +3658,10 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         dependency = _dependency_failure("eu4_replay", case_path)
         if dependency is not None:
             return dependency
-        result = dict(gfx_case.compare_case(case_path, write=False))
+        result = dict(gfx_replay_case.compare_legacy_case(case_path, write=False))
         replay_status = str(result.get("status") or "unavailable")
         status, diagnostic, verdict, evidence = _case_replay_outcome(result)
+        result["case_id"] = manifest.get("case_id")
         result["replay_status"] = replay_status
         result["reproduced"] = replay_status == "fail"
         result["verified"] = replay_status == "pass"
@@ -3746,6 +3701,7 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                         f"{run['parse_error'] or run['stderr'] or 'no output'}"))
         result = dict(value)
         replay_status = str(value.get("status") or "unknown")
+        result["case_id"] = manifest.get("case_id")
         result["replay_status"] = replay_status
         result["subprocess"] = report
         if replay_status in ("pass", "fail") and run["exit_code"] in (0, 2):
@@ -3785,11 +3741,11 @@ def _event_case_inspect(args: argparse.Namespace, path: Path) -> dict:
     except ValueError as exc:
         return _envelope("eu4_case_inspect", "invalid",
                          reason=str(exc), diagnostic="invalid")
-    kind, schema, _manifest, detail = _case_schema(path)
+    kind, schema, _manifest, detail = gfx_replay_case.case_schema(path)
     verification = None
-    if kind == CASE_KIND_STRATEGY_B:
+    if kind == gfx_replay_case.CASE_KIND_STRATEGY_B:
         verification = _strategy_b_verify(path)
-    elif kind != CASE_KIND_MISSING and not (
+    elif kind != gfx_replay_case.CASE_KIND_MISSING and not (
             path / "frame-trace.json").is_file():
         return _case_invalid_envelope(
             "eu4_case_inspect", path, kind, schema, detail)
@@ -3868,8 +3824,8 @@ def eu4_case_inspect(args: argparse.Namespace) -> dict:
             "case": str(path), "exists": False,
         }, diagnostic="unavailable",
            reason=f"case directory does not exist: {path}")
-    kind, schema, manifest, detail = _case_schema(path)
-    if kind == CASE_KIND_STRATEGY_B:
+    kind, schema, manifest, detail = gfx_replay_case.case_schema(path)
+    if kind == gfx_replay_case.CASE_KIND_STRATEGY_B:
         verification = _strategy_b_verify(path)
         status, diagnostic, evidence = _case_verification_outcome(
             verification, schema)
@@ -3906,10 +3862,10 @@ def eu4_case_inspect(args: argparse.Namespace) -> dict:
             reason="; ".join(str(item) for item in
                              (verification.get("problems") or [])),
             diagnostic=diagnostic, evidence=evidence, qualified=False)
-    if kind != CASE_KIND_LEGACY:
+    if kind != gfx_replay_case.CASE_KIND_LEGACY:
         return _case_invalid_envelope(
             "eu4_case_inspect", path, kind, schema, detail)
-    value = gfx_case.inspect_case(path)
+    value = gfx_replay_case.inspect_legacy_case(path)
     verdict = {
         "pass": "equal", "fail": "different", "unverified": "unverified",
     }.get(str(value.get("comparison_status") or ""))

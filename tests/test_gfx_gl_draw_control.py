@@ -24,7 +24,7 @@ from automation import gfx_gl_replay_input as replay_input
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / "automation" / "gfx_gl_control_renderer.py"
-EXECUTOR = ROOT / "benchmark" / "eu4_gfx_draw_control.c"
+EXECUTOR = ROOT / "renderer/gl/eu4_gfx_draw_control.c"
 SEED = bytes(range(32))
 PUBLIC_KEY = gfx_ed25519.derive_public_key(SEED).hex()
 
@@ -252,7 +252,7 @@ class DrawControlTests(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.binary = Path(cls.temporary.name) / "eu4_gfx_draw_control"
         built = subprocess.run(
-            ["clang", "-O2", "-w", "-I", str(ROOT / "benchmark"), "-o",
+            ["clang", "-O2", "-w", "-o",
              str(cls.binary), str(EXECUTOR), "-framework", "OpenGL"],
             capture_output=True, text=True, check=False)
         if built.returncode != 0:
@@ -711,14 +711,13 @@ class DrawControlTests(unittest.TestCase):
             base = Path(temporary)
             hashes = []
             for name, cwd, source in (
-                    ("one", ROOT, "benchmark/eu4_gfx_draw_control.c"),
-                    ("two", base, str(ROOT / "benchmark"
-                                       / "eu4_gfx_draw_control.c"))):
+                    ("one", ROOT, EXECUTOR.relative_to(ROOT)),
+                    ("two", base, EXECUTOR)):
                 output = base / name / "eu4_gfx_draw_control"
                 output.parent.mkdir(parents=True)
                 build = subprocess.run(
                     [compiler, "-O2", "-g0", "-w", "-Wl,-no_uuid",
-                     "-I", str(ROOT / "benchmark"), "-o", str(output),
+                     "-o", str(output),
                      source, "-framework", "OpenGL"],
                     cwd=str(cwd), capture_output=True, text=True, check=False)
                 self.assertEqual(build.returncode, 0, build.stderr)

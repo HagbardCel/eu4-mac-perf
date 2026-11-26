@@ -2149,7 +2149,7 @@ class StrategyBCaseToolTests(ToolTests):
         (case / "case.json").write_text(json.dumps({
             "schema": "gfx-strategy-b-case/v99", "case_id": "unknown",
         }))
-        with mock.patch.object(agent_tools.gfx_case, "inspect_case") as legacy:
+        with mock.patch.object(agent_tools.gfx_replay_case, "inspect_legacy_case") as legacy:
             code, value = self.call(["eu4_case_inspect", "--case", str(case)])
         self.assertEqual(code, 2, value)
         self.assertEqual(value["status"], "invalid")
@@ -2161,7 +2161,7 @@ class StrategyBCaseToolTests(ToolTests):
         case = self.root / "malformed-case"
         case.mkdir()
         (case / "case.json").write_text("{not json")
-        with mock.patch.object(agent_tools.gfx_case, "inspect_case") as legacy:
+        with mock.patch.object(agent_tools.gfx_replay_case, "inspect_legacy_case") as legacy:
             code, value = self.call(["eu4_case_inspect", "--case", str(case)])
         self.assertEqual(code, 2, value)
         self.assertEqual(value["status"], "invalid")
@@ -2263,7 +2263,7 @@ class StrategyBCaseToolTests(ToolTests):
         }))
         expected = {"schema": agent_tools.gfx_case.SCHEMA,
                     "comparison_status": "fail"}
-        with mock.patch.object(agent_tools.gfx_case, "inspect_case",
+        with mock.patch.object(agent_tools.gfx_replay_case, "inspect_legacy_case",
                                return_value=expected) as legacy:
             code, value = self.call(["eu4_case_inspect", "--case", str(case)])
         self.assertEqual(code, 0, value)

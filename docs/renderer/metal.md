@@ -77,6 +77,14 @@ Supported and explicitly rejected values are projected through
 See [render state](../renderer-reconstruction-and-differential-validation.md) and
 the [review matrix](../../plans/closed/harness-review-20261120/implementation.md).
 
+The direct, independent and trusted single-frame tools share Metal host
+invocation and shader translation in [m6_frame](../../automation/m6_frame.py).
+The ordered replay supervisor uses the same host with its sequence inputs.
+[Portable case tools](../../automation/gfx_replay_case.py) verify Strategy B
+v1/v2 and compare legacy dual-run packages through `eu4_replay case`.
+Historic absolute frame paths resolve to the copied payloads under `frames/`
+after relocation. The legacy builder remains available for dual-run results.
+
 ## Qualification
 
 `qualified_match` requires verified identity, complete capture/provenance,

@@ -21,12 +21,15 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from automation import gfx_frame_graph, gfx_independent_replay, m6_compare, m6_frame
+from automation import (
+    gfx_frame_compare, gfx_frame_graph, gfx_independent_replay, m6_compare, m6_frame)
 from automation.gfx_artifacts import sha256_file as _sha
 
 SCHEMA = "gfx-strategy-b-case/v1"
 SEQUENCE_SCHEMA = "gfx-strategy-b-case/v2"
 SEQUENCE_MANIFEST_SCHEMA = "gfx-strategy-b-case-sequence/v1"
+LEGACY_SCHEMA = "gfx-diagnostic-case/v1"
+LEGACY_INCOMPLETE = "incomplete_evidence"
 CASE_SCHEMAS = (SCHEMA, SEQUENCE_SCHEMA)
 
 
@@ -52,6 +55,20 @@ def _relative_files(root: Path) -> list[dict]:
 def _write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def _case_command(operation: str, *args: str) -> list[str]:
+    return ["python3.14", "-m", "automation.gfx_replay_case",
+            operation, "--case", ".", *args]
+
+
+def _graph_summary(graph: dict) -> dict:
+    return {
+        "schema": gfx_frame_graph.SCHEMA,
+        **{key: graph.get(key) for key in (
+            "status", "reasons", "counts", "boundary", "external_inputs",
+            "renderer_generated", "renderer_generated_sampled", "unproven")},
+    }
 
 
 def _owned_case(path: Path) -> bool:
@@ -307,17 +324,7 @@ def _incomplete_case(
         _portable_paths(graph, replay_dir="replay", capture_dir="replay")
         graph = _scrub_paths(graph, replacements)
         _write_json(work / "dependency-graph.json", graph)
-        _write_json(work / "graph.json", {
-            "schema": gfx_frame_graph.SCHEMA,
-            "status": graph.get("status"),
-            "reasons": graph.get("reasons"),
-            "counts": graph.get("counts"),
-            "boundary": graph.get("boundary"),
-            "external_inputs": graph.get("external_inputs"),
-            "renderer_generated": graph.get("renderer_generated"),
-            "renderer_generated_sampled": graph.get("renderer_generated_sampled"),
-            "unproven": graph.get("unproven"),
-        })
+        _write_json(work / "graph.json", _graph_summary(graph))
         manifest = {
             "schema": schema,
             "case_id": case_id,
@@ -330,10 +337,7 @@ def _incomplete_case(
             "first_divergence": report.get("first_divergence"),
             "qualification": report.get("qualification"),
             "replay_command": [],
-            "verify_command": [
-                "python3.14", "-m", "automation.gfx_replay_case", "verify",
-                "--case", ".",
-            ],
+            "verify_command": _case_command("verify"),
             "files": [],
         }
         (work / "README.md").write_text(_readme(manifest), encoding="utf-8")
@@ -408,6 +412,24 @@ def _relocate_capture_seal(case_dir: Path) -> None:
     _write_json(seal_path, seal)
 
 
+def _copy_single_frame_payloads(case_dir: Path, frame_dir: Path,
+                                shaders: Path, replay_dir: Path,
+                                report: dict) -> None:
+    shutil.copytree(frame_dir, case_dir / "capture")
+    _relocate_capture_sequence(case_dir)
+    _relocate_capture_seal(case_dir)
+    shutil.copytree(shaders, case_dir / "shaders")
+    destination = case_dir / "replay"
+    destination.mkdir(parents=True)
+    sources = [replay_dir / name for name in REPLAY_ARTIFACTS]
+    for item in report.get("checkpoints") or []:
+        # Older reports use "file" for the same native checkpoint.
+        sources.append(replay_dir / str(item.get("metal_file") or item.get("file") or ""))
+    for source in sources:
+        if source.is_file():
+            shutil.copy2(source, destination / source.name)
+
+
 def package(
     frame_dir: Path | str,
     replay_dir: Path | str,
@@ -427,23 +449,7 @@ def package(
     report = json.loads(report_path.read_text())
     shader_source = gfx_independent_replay._shader_dir(frame_dir, shaders)
     prepare_case_output(case_dir, [frame_dir, replay_dir, shader_source])
-    shutil.copytree(frame_dir, case_dir / "capture")
-    _relocate_capture_sequence(case_dir)
-    _relocate_capture_seal(case_dir)
-    shutil.copytree(shader_source, case_dir / "shaders")
-    (case_dir / "replay").mkdir(parents=True)
-    for name in REPLAY_ARTIFACTS:
-        source = replay_dir / name
-        if source.is_file():
-            shutil.copy2(source, case_dir / "replay" / name)
-    for item in report.get("checkpoints") or []:
-        # Comparison entries expose the replay output as ``metal_file``;
-        # legacy entries may still use ``file``.
-        source = Path(str(item.get("metal_file") or item.get("file") or ""))
-        if not source.is_absolute():
-            source = replay_dir / source
-        if source.is_file():
-            shutil.copy2(source, case_dir / "replay" / source.name)
+    _copy_single_frame_payloads(case_dir, frame_dir, shader_source, replay_dir, report)
     graph = report.get("graph") or gfx_frame_graph.build(case_dir / "capture")
     # Rewrite absolute artifact references in the report to case-relative ones.
     portable_report = json.loads(json.dumps(report))
@@ -461,17 +467,7 @@ def package(
             for key, value in portable_report["artifacts"].items()
         }
     _write_json(case_dir / "report.json", portable_report)
-    _write_json(case_dir / "graph.json", {
-        "schema": gfx_frame_graph.SCHEMA,
-        "status": graph.get("status"),
-        "reasons": graph.get("reasons"),
-        "counts": graph.get("counts"),
-        "boundary": graph.get("boundary"),
-        "external_inputs": graph.get("external_inputs"),
-        "renderer_generated": graph.get("renderer_generated"),
-        "renderer_generated_sampled": graph.get("renderer_generated_sampled"),
-        "unproven": graph.get("unproven"),
-    })
+    _write_json(case_dir / "graph.json", _graph_summary(graph))
     manifest = {
         "schema": SCHEMA,
         "case_id": case_id,
@@ -481,15 +477,8 @@ def package(
         "replay": "replay",
         "report": "report.json",
         "graph": "graph.json",
-        "replay_command": [
-            "python3.14", "-m", "automation.gfx_replay_case", "replay",
-            "--case", ".",
-            "--out", "replay-rerun",
-        ],
-        "verify_command": [
-            "python3.14", "-m", "automation.gfx_replay_case", "verify",
-            "--case", ".",
-        ],
+        "replay_command": _case_command("replay", "--out", "replay-rerun"),
+        "verify_command": _case_command("verify"),
         "replay_status": portable_report.get("status"),
         "graph_status": graph.get("status"),
         "first_divergence": portable_report.get("first_divergence"),
@@ -914,38 +903,14 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
     staged = _StagedCase(destination, [frame_dir, metal_dir, shader_source])
     work = staged.path
     try:
-        shutil.copytree(frame_dir, work / "capture")
-        _relocate_capture_sequence(work)
-        _relocate_capture_seal(work)
-        shutil.copytree(shader_source, work / "shaders")
-        (work / "replay").mkdir(parents=True)
-        for name in REPLAY_ARTIFACTS:
-            source = metal_dir / name
-            if source.is_file():
-                shutil.copy2(source, work / "replay" / name)
-        for item in report.get("checkpoints") or []:
-            source = Path(str(item.get("metal_file") or item.get("file") or ""))
-            if not source.is_absolute():
-                source = metal_dir / source
-            if source.is_file():
-                shutil.copy2(source, work / "replay" / source.name)
+        _copy_single_frame_payloads(work, frame_dir, shader_source, metal_dir, report)
         portable = _portable_diagnosis(report, work)
         _write_json(work / "diagnostic-report.json", portable)
         graph = json.loads(json.dumps(
             report.get("graph") or gfx_frame_graph.build(work / "capture")))
         graph["frame_dir"] = "capture"
         _write_json(work / "dependency-graph.json", graph)
-        _write_json(work / "graph.json", {
-            "schema": gfx_frame_graph.SCHEMA,
-            "status": graph.get("status"),
-            "reasons": graph.get("reasons"),
-            "counts": graph.get("counts"),
-            "boundary": graph.get("boundary"),
-            "external_inputs": graph.get("external_inputs"),
-            "renderer_generated": graph.get("renderer_generated"),
-            "renderer_generated_sampled": graph.get("renderer_generated_sampled"),
-            "unproven": graph.get("unproven"),
-        })
+        _write_json(work / "graph.json", _graph_summary(graph))
         difference = None
         if include_difference:
             try:
@@ -976,14 +941,8 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
                 "diagnose", "--frame", "capture", "--metal", "replay",
                 "--out", "diagnosis", "--require-seal",
             ],
-            "replay_command": [
-                "python3.14", "-m", "automation.gfx_replay_case", "replay",
-                "--case", ".", "--out", "replay-rerun",
-            ],
-            "verify_command": [
-                "python3.14", "-m", "automation.gfx_replay_case", "verify",
-                "--case", ".",
-            ],
+            "replay_command": _case_command("replay", "--out", "replay-rerun"),
+            "verify_command": _case_command("verify"),
             "classification": report.get("classification"),
             "first_divergence": report.get("first_divergence"),
             "qualification": report.get("qualification"),
@@ -1720,17 +1679,7 @@ def package_sequence_diagnosis(
                         capture_dir=target_relative)
         graph = _scrub_paths(graph, replacements)
         _write_json(work / "dependency-graph.json", graph)
-        _write_json(work / "graph.json", {
-            "schema": gfx_frame_graph.SCHEMA,
-            "status": graph.get("status"),
-            "reasons": graph.get("reasons"),
-            "counts": graph.get("counts"),
-            "boundary": graph.get("boundary"),
-            "external_inputs": graph.get("external_inputs"),
-            "renderer_generated": graph.get("renderer_generated"),
-            "renderer_generated_sampled": graph.get("renderer_generated_sampled"),
-            "unproven": graph.get("unproven"),
-        })
+        _write_json(work / "graph.json", _graph_summary(graph))
         selected_sources = None
         if checkpoint_sources is not None:
             if isinstance(checkpoint_sources, dict):
@@ -1835,14 +1784,8 @@ def package_sequence_diagnosis(
             "classification": report.get("classification"),
             "first_divergence": report.get("first_divergence"),
             "qualification": report.get("qualification"),
-            "replay_command": [
-                "python3.14", "-m", "automation.gfx_replay_case", "replay",
-                "--case", ".", "--out", "replay-rerun",
-            ],
-            "verify_command": [
-                "python3.14", "-m", "automation.gfx_replay_case", "verify",
-                "--case", ".",
-            ],
+            "replay_command": _case_command("replay", "--out", "replay-rerun"),
+            "verify_command": _case_command("verify"),
             "files": [],
         }
         (work / "README.md").write_text(_readme(manifest), encoding="utf-8")
@@ -2366,6 +2309,141 @@ def _case_relative_path(case_dir: Path, relative: str) -> tuple[Path | None, str
     if candidate != root and root not in candidate.parents:
         return None, f"manifest path escapes the case directory: {relative}"
     return candidate, None
+
+
+def _optional_case_json(path: Path) -> dict | None:
+    try:
+        return _json(path)
+    except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
+        return None
+
+
+def _legacy_frame_bytes(case_dir: Path, record: dict, role: str) -> bytes:
+    # Older manifests recorded the source checkout path. Only the packaged
+    # frames directory carries replay evidence, including after relocation.
+    recorded = Path(record["path"])
+    if recorded.parent.name != "frames" or ".." in recorded.parts:
+        raise ValueError(f"invalid packaged {role} frame path")
+    member, problem = _case_relative_path(case_dir, f"frames/{recorded.name}")
+    if member is None:
+        raise ValueError(problem)
+    payload = member.read_bytes()
+    if record.get("sha256") and hashlib.sha256(payload).hexdigest() != record["sha256"]:
+        raise ValueError(f"packaged {role} frame digest does not match")
+    return payload
+
+
+CASE_KIND_STRATEGY_B = "strategy_b"
+CASE_KIND_LEGACY = "legacy"
+CASE_KIND_UNSUPPORTED = "unsupported"
+CASE_KIND_MALFORMED = "malformed"
+CASE_KIND_MISSING = "missing"
+
+
+def case_schema(case_path: Path) -> tuple[str, str | None, dict, str | None]:
+    """Classify a case directory without ever guessing a schema.
+
+    A malformed manifest, an unsupported ``gfx-strategy-b-case/*`` version and
+    a recognized legacy image-comparison case are distinct outcomes.  Only the
+    recognized legacy schema may reach the older comparator.
+    """
+    manifest_path = case_path / "case.json"
+    if not manifest_path.is_file():
+        # A legacy image-comparison source may be a built case (manifest.json)
+        # or a run directory the legacy comparator can inspect.  Recognize
+        # those explicitly; a directory with no legacy markers is missing.
+        for name in ("manifest.json", "result.json"):
+            if manifest := _optional_case_json(case_path / name):
+                return CASE_KIND_LEGACY, None, manifest, (
+                    f"legacy image-comparison evidence in {name}")
+        if (case_path / "repro" / "repro.json").is_file():
+            return CASE_KIND_LEGACY, None, {}, "legacy repro/repro.json"
+        return CASE_KIND_MISSING, None, {}, "no case.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return CASE_KIND_MALFORMED, None, {}, f"case.json is unreadable: {exc}"
+    if not isinstance(manifest, dict):
+        return CASE_KIND_MALFORMED, None, {}, "case.json is not an object"
+    schema = manifest.get("schema")
+    if schema in CASE_SCHEMAS:
+        return CASE_KIND_STRATEGY_B, str(schema), manifest, None
+    if isinstance(schema, str) and schema.startswith("gfx-strategy-b-case/"):
+        return CASE_KIND_UNSUPPORTED, schema, manifest, (
+            f"unsupported Strategy B schema: {schema}")
+    if schema == LEGACY_SCHEMA:
+        return CASE_KIND_LEGACY, None, manifest, "legacy image-comparison case"
+    return CASE_KIND_UNSUPPORTED, (
+        schema if isinstance(schema, str) else None), manifest, (
+            f"unsupported case schema: {schema!r}")
+
+
+def compare_legacy_case(case_dir: Path, *, write: bool = True) -> dict:
+    """Re-run the offline comparator from the packaged repro description.
+
+    ``write`` defaults to the historical behaviour (a ``repro/comparison.json``
+    inside the case). Agent surfaces pass ``write=False`` so replaying evidence
+    discovered in another worktree never mutates it.
+    """
+    case_dir = Path(case_dir)
+    repro = _optional_case_json(case_dir / "repro" / "repro.json")
+    if repro is None:
+        raise ValueError(f"no repro/repro.json in {case_dir}")
+    frames = repro.get("frames") or {}
+    reference = frames.get("reference")
+    candidate = frames.get("candidate")
+    if not reference or not candidate:
+        result = {"schema": "gfx-case-repro/v1", "status": LEGACY_INCOMPLETE,
+                  "reason": "both packaged raw frames are required"}
+    else:
+        policy = repro.get("policy") or {"policy": "tolerant"}
+        compare_policy = {
+            "policy": policy.get("policy", "tolerant"),
+            "pixel_tolerance": policy.get("max_channel_error", 0),
+            "max_mismatched_fraction": policy.get("max_mismatched_fraction", 0.0),
+            "max_mean_abs_error": policy.get("max_mean_abs_error", 0.0),
+            "allow_scale_normalization": policy.get(
+                "allow_scale_normalization", True),
+        }
+        try:
+            reference_bytes = _legacy_frame_bytes(case_dir, reference, "reference")
+            candidate_bytes = _legacy_frame_bytes(case_dir, candidate, "candidate")
+            result = gfx_frame_compare.compare_payloads(
+                reference_bytes, reference, candidate_bytes, candidate,
+                policy=compare_policy, regions=policy.get("regions") or {},
+            )
+            result["schema"] = "gfx-case-repro/v1"
+        except (OSError, KeyError, TypeError, ValueError,
+                gfx_frame_compare.CompareError) as exc:
+            result = {"schema": "gfx-case-repro/v1", "status": LEGACY_INCOMPLETE,
+                      "reason": f"{type(exc).__name__}: {exc}"}
+    if write:
+        output = case_dir / "repro" / "comparison.json"
+        output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n",
+                          encoding="utf-8")
+    return result
+
+
+def inspect_legacy_case(case_dir: Path) -> dict:
+    case_dir = Path(case_dir)
+    manifest = _optional_case_json(case_dir / "manifest.json") or {}
+    result = _optional_case_json(case_dir / "result.json") or {}
+    case = _optional_case_json(case_dir / "case.json") or {}
+    return {
+        "schema": LEGACY_SCHEMA,
+        "case_id": case.get("case_id"),
+        "case_dir": str(case_dir),
+        "classification": result.get("classification"),
+        "session_id": manifest.get("session_id"),
+        "scenario": manifest.get("scenario"),
+        "stop": result.get("stop"),
+        "health": (result.get("health") or {}).get("verdict"),
+        "comparison_status": (result.get("comparison") or {}).get("status"),
+        "analysis": str(case_dir / "analysis.md"),
+        "files": sorted(
+            str(path.relative_to(case_dir)) for path in case_dir.rglob("*") if path.is_file()
+        ),
+    }
 
 
 def _declared_inventory(

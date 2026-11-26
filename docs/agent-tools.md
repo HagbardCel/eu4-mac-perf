@@ -195,7 +195,7 @@ python3 -m automation.agent_tools eu4_capture gl-control-qualify \
   --live-image <sealed-checkpoint.bgra> \
   --width 1728 --height 1117 --frame-dir <sealed-frame> \
   --checkpoint-event 15 --draw-event 14 \
-  --renderer <original-api-control-runner> --control-out <empty-dir>
+  --renderer automation/gfx_gl_control_renderer.py --control-out <empty-dir>
 python3 -m automation.agent_tools eu4_capture gl-control-qualify \
   --live-image <sealed-checkpoint.bgra> --control-image <control.bgra> \
   --width 1728 --height 1117 --comparison-only
@@ -233,6 +233,15 @@ checkpoint identity to come from the seal-verified event stream's own
 `default_checkpoint` record (not a mutable request sidecar); the live image to
 be that exact sealed blob and digest; and a completed `opengl` control renderer
 executed by the qualifier with a fresh challenge nonce.
+
+The maintained native executor lives in
+[renderer/gl](../renderer/gl/eu4_gfx_draw_control.c). Set
+`GL_CONTROL_EXECUTABLE` to its reviewed build and
+`GL_CONTROL_SIGNING_KEY_FILE` to the operator's Ed25519 key file before running
+the qualifier. The [registry](../automation/gfx_gl_control_authorities.py)
+records the build recipe and accepted digests. The historical registered
+binary was linked without `LC_UUID` and current macOS loaders can refuse it.
+A new executable digest needs independent review before it can be registered.
 
 The qualifier derives the mandatory drawable and pre-draw state from the seal
 itself, never from caller JSON: `GL_SAMPLES`, `GL_SAMPLE_BUFFERS`, depth/

@@ -46,9 +46,9 @@ SCHEMA = "gfx-gl-control-renderer-authorities/v2"
 #
 # The first entry pins the M7 original-OpenGL selected-draw control.  Its
 # driver is automation/gfx_gl_control_renderer.py; the native executor is built
-# from benchmark/eu4_gfx_draw_control.c with the deterministic recipe:
-#   clang -O2 -g0 -w -Wl,-no_uuid -I benchmark \
-#       -o <dir>/eu4_gfx_draw_control benchmark/eu4_gfx_draw_control.c \
+# from renderer/gl/eu4_gfx_draw_control.c with the deterministic recipe:
+#   clang -O2 -g0 -w -Wl,-no_uuid \
+#       -o <dir>/eu4_gfx_draw_control renderer/gl/eu4_gfx_draw_control.c \
 #       -framework OpenGL
 # The output basename must be eu4_gfx_draw_control; clang embeds it, so a
 # different -o basename changes the digest even with identical source.  With
@@ -76,7 +76,7 @@ AUTHORITIES: dict[str, dict] = {
              "sha256": "52e03dd0c0b80c10c4e8acf2f72d4307a07c2c0321a06bd1107e0903f3ffa3b4"},
         ],
         "source": (
-            "benchmark/eu4_gfx_draw_control.c + "
+            "renderer/gl/eu4_gfx_draw_control.c + "
             "automation/gfx_gl_control_renderer.py"),
     },
 }
