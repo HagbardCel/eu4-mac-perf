@@ -2094,7 +2094,7 @@ def replay_host_producer(host: Path | str | None = None) -> dict:
     host = Path(host) if host is not None else REPLAY_HOST
     stamp = Path(str(host) + ".deps.json")
     identity = replay_host_dependencies.build_identity(
-        root=ROOT, sources=(REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE))
+        root=ROOT, sources=(REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE), strict=True)
     if not _replay_stamp_matches(stamp, identity, host):
         raise FrameError(
             "replay host build receipt does not match the current binary and "
@@ -2177,7 +2177,7 @@ def build_replay_host(force: bool = False) -> Path:
 def _build_replay_host_locked(force: bool = False) -> Path:
     sources = (REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE)
     identity = replay_host_dependencies.build_identity(
-        root=ROOT, sources=sources)
+        root=ROOT, sources=sources, strict=True)
     stamp = _replay_host_stamp()
     if not force and _replay_stamp_matches(stamp, identity, REPLAY_HOST):
         return REPLAY_HOST
@@ -2193,6 +2193,7 @@ def _build_replay_host_locked(force: bool = False) -> Path:
     try:
         built = subprocess.run(
             replay_host_dependencies.build_command(temporary, sources),
+            env=identity["environment"],
             capture_output=True,
             text=True,
             check=False,

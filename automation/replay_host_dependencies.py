@@ -333,6 +333,8 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
         raise OSError(
             (completed.stderr or completed.stdout or
              "replay host build failed").strip()[-4000:])
+    if identity != build_identity(snapshot_root, compiler=compiler, strict=True):
+        raise OSError("snapshot dependencies changed during replay host build")
     return {
         "schema": "gfx-replay-host-candidate-build/v1",
         "command": command,

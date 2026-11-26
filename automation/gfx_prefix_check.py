@@ -517,7 +517,7 @@ def _execution_environment(execution_dir: Path) -> dict:
 def _cached_candidate_build(snapshot_root: Path, destination: Path,
                             cache_root: Path) -> tuple[Path, dict]:
     """Build or reuse a candidate host keyed by its complete source identity."""
-    identity = replay_host_dependencies.build_identity(snapshot_root)
+    identity = replay_host_dependencies.build_identity(snapshot_root, strict=True)
     cache_entry = cache_root / identity["fingerprint"]
     metadata_path = cache_entry / "build.json"
     cached_host = cache_entry / "gfx-frame-replay"
