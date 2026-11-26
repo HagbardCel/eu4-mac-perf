@@ -404,8 +404,8 @@ class EventEvidenceTests(unittest.TestCase):
                    "divergence": {"status": "match"}}
         with mock.patch.object(gfx_event_evidence, "inspect_event",
                                return_value=derived), \
-                mock.patch.object(agent_tools, "_case_schema",
-                                  return_value=(agent_tools.CASE_KIND_STRATEGY_B,
+                mock.patch.object(agent_tools.gfx_replay_case, "case_schema",
+                                  return_value=(agent_tools.gfx_replay_case.CASE_KIND_STRATEGY_B,
                                                 "gfx-strategy-b-case/v1", {}, None)), \
                 mock.patch.object(agent_tools, "_strategy_b_verify",
                                   return_value={"ok": True}):

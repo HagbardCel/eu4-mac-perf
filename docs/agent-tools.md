@@ -192,11 +192,6 @@ python3 -m automation.agent_tools eu4_capture probe --checkpoint after-present \
   --output <dir> --campaign-run-root <authorized-root>
 python3 -m automation.agent_tools eu4_capture gl-control --run <capture-root>
 python3 -m automation.agent_tools eu4_capture gl-control-qualify \
-  --live-image <sealed-checkpoint.bgra> \
-  --width 1728 --height 1117 --frame-dir <sealed-frame> \
-  --checkpoint-event 15 --draw-event 14 \
-  --renderer <original-api-control-runner> --control-out <empty-dir>
-python3 -m automation.agent_tools eu4_capture gl-control-qualify \
   --live-image <sealed-checkpoint.bgra> --control-image <control.bgra> \
   --width 1728 --height 1117 --comparison-only
 ```
@@ -233,6 +228,30 @@ checkpoint identity to come from the seal-verified event stream's own
 `default_checkpoint` record (not a mutable request sidecar); the live image to
 be that exact sealed blob and digest; and a completed `opengl` control renderer
 executed by the qualifier with a fresh challenge nonce.
+
+Build the UUID-linked authority from the repository root using the reviewed
+Apple clang and macOS SDK. The deployer verifies the native executable and
+generated driver digests and prints both paths. Set `operator_key` to the
+absolute path of the authorized operator's Ed25519 key file.
+
+```sh
+python3.14 -m automation.native_build gl-control
+gl_authority="$PWD/.local/native-builds/gl-control/153fd9647236bde7eb1b60d91074fa0f3370d22782d62c5e88718f79d6cb3feb"
+env -u GL_CONTROL_SIGNING_KEY \
+  GL_CONTROL_EXECUTABLE="$gl_authority/eu4_gfx_draw_control" \
+  GL_CONTROL_SIGNING_KEY_FILE="$operator_key" \
+  python3.14 -m automation.agent_tools eu4_capture gl-control-qualify \
+  --live-image <sealed-checkpoint.bgra> \
+  --width 1728 --height 1117 --frame-dir <sealed-frame> \
+  --checkpoint-event 15 --draw-event 14 \
+  --renderer "$gl_authority/gfx_gl_control_renderer.py" --control-out <empty-dir>
+```
+
+For historical receipt verification, keep the recorded driver, executor and
+component paths and use their historical digests. The
+[registry](../automation/gfx_gl_control_authorities.py) preserves the
+historical link recipe. Its binary lacks `LC_UUID`, which newer macOS
+loaders require. [Selected-draw OpenGL control](renderer/metal.md#selected-draw-opengl-control)
 
 The qualifier derives the mandatory drawable and pre-draw state from the seal
 itself, never from caller JSON: `GL_SAMPLES`, `GL_SAMPLE_BUFFERS`, depth/

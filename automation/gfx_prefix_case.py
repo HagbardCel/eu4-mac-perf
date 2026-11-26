@@ -14,8 +14,9 @@ import json
 import shutil
 from pathlib import Path
 
-from automation import gfx_frame_graph, gfx_prefix_check, m6_frame
+from automation import gfx_frame_graph, m6_frame
 from automation.gfx_artifacts import sha256_file as _sha
+from automation.gfx_independent_replay import _path_overlap
 
 SCHEMA = "gfx-observation-case/v1"
 
@@ -29,9 +30,7 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     """Copy events 0..end and every referenced blob into a derived frame."""
     frame_dir = Path(frame_dir).expanduser().resolve()
     destination = Path(destination).expanduser().resolve()
-    if (destination == frame_dir
-            or destination in frame_dir.parents
-            or frame_dir in destination.parents):
+    if _path_overlap(destination, frame_dir):
         raise PrefixCaseError(
             "derived case destination overlaps the source frame")
     if destination.exists():
@@ -39,12 +38,12 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
             "derived case destination already exists; choose a new path")
     if end < 0:
         raise PrefixCaseError("prefix end must be non-negative")
-    seal = m6_frame.load_seal(frame_dir)
     trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
+    seal = m6_frame.load_seal(frame_dir, trace=trace)
     events = trace.get("_events") or []
     if end >= len(events):
         raise PrefixCaseError("prefix end is beyond the event stream")
-    prefix = m6_frame.load_prefix_observations(trace, frame_dir)
+    prefix = trace.get("_prefix")
     if prefix is None or prefix.get("mode") != "prefix":
         raise PrefixCaseError(
             "frame has no contiguous prefix; a derived case cannot promote "
@@ -86,12 +85,7 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
         "observation_sha256": _sha(observation_path),
         "observation_bytes": observation_path.stat().st_size,
     })
-    manifest = dict(trace)
-    manifest.pop("_events", None)
-    manifest.pop("_draws", None)
-    manifest.pop("_frame_dir", None)
-    manifest.pop("_prefix", None)
-    manifest.pop("_blob_count_verified", None)
+    manifest = {key: value for key, value in trace.items() if not key.startswith("_")}
     manifest.update({
         "schema": m6_frame.TRACE_SCHEMA,
         "complete": True,

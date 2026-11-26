@@ -114,27 +114,33 @@ def _known_replay_output(path: Path) -> bool:
     return False
 
 
-def prepare_replay_output(out_dir: Path, inputs: list[Path]) -> Path:
-    """Validate and prepare one replay output directory without data loss."""
+def validate_output_destination(out_dir: Path, inputs: list[Path], *,
+                                owns_output, error, label: str, prior: str
+                                ) -> tuple[Path, bool]:
+    """Check a destination and report whether it contains a prior output."""
     out_dir = out_dir.expanduser().resolve()
     if _protected_output(out_dir):
-        raise ReplayError("output_protected",
-                          f"refusing to replace protected output {out_dir}")
+        raise error("output_protected", f"refusing to replace protected output {out_dir}")
     for source in inputs:
         if _path_overlap(out_dir, source.expanduser().resolve()):
-            raise ReplayError(
-                "output_overlap",
-                f"replay output {out_dir} overlaps input {source}")
-    if out_dir.exists():
-        if not out_dir.is_dir():
-            raise ReplayError("output_conflict", f"{out_dir} is not a directory")
-        entries = list(out_dir.iterdir())
-        if entries and not _known_replay_output(out_dir):
-            raise ReplayError(
-                "output_not_owned",
-                f"{out_dir} is nonempty and is not a prior replay output")
-        if entries:
-            shutil.rmtree(out_dir)
+            raise error("output_overlap", f"{label} {out_dir} overlaps input {source}")
+    if not out_dir.exists():
+        return out_dir, False
+    if not out_dir.is_dir():
+        raise error("output_conflict", f"{out_dir} is not a directory")
+    nonempty = any(out_dir.iterdir())
+    if nonempty and not owns_output(out_dir):
+        raise error("output_not_owned", f"{out_dir} is nonempty and is not a prior {prior}")
+    return out_dir, nonempty
+
+
+def prepare_replay_output(out_dir: Path, inputs: list[Path]) -> Path:
+    """Validate and prepare one replay output directory without data loss."""
+    out_dir, replace = validate_output_destination(
+        out_dir, inputs, owns_output=_known_replay_output,
+        error=ReplayError, label="replay output", prior="replay output")
+    if replace:
+        shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / OUTPUT_MARKER).write_text(
         json.dumps({
@@ -4351,45 +4357,26 @@ def _replay_locked_serialized(
     request = gfx_frame_graph.write_checkpoint_request(
         graph, out_dir / "checkpoint-request.json")
     host = m6_frame.build_replay_host()
-    try:
-        snapshot, producer = m6_frame.snapshot_replay_host(host)
-    except m6_frame.FrameError as exc:
-        raise ReplayError("producer_identity", str(exc)) from exc
-    command = [
-        str(snapshot), "--frame", str(frame_dir), "--shaders", str(shader_dir),
-        "--out", str(out_dir), "--checkpoints",
-        str(out_dir / "checkpoint-request.json"),
-    ]
-    try:
-        ran = subprocess.run(
-            command, capture_output=True, text=True, check=False, env=env,
-            timeout=timeout,
-        )
-    except BaseException:
-        try:
-            snapshot.unlink()
-        except FileNotFoundError:
-            pass
-        raise
     result_path = out_dir / "replay.json"
     receipt_error: str | None = None
     try:
-        if result_path.is_file():
-            try:
-                write_producer_receipt(
-                    out_dir, frame_dir, producer, result_path,
-                    shaders=shader_dir, policy=policy, faults=faults,
-                    env=env, ambient=ambient)
-            except ReplayError as exc:
-                # A malformed/failed checkpoint declaration is a diagnostic
-                # result, not a reason to lose the report or leak the host
-                # copy.
-                receipt_error = f"{exc.kind}: {exc.detail or exc}"
-    finally:
-        try:
-            snapshot.unlink()
-        except FileNotFoundError:
-            pass
+        with m6_frame.replay_host_snapshot(host) as (snapshot, producer):
+            command = m6_frame.replay_host_command(
+                snapshot, frame=frame_dir, shaders=shader_dir, out=out_dir,
+                checkpoints=out_dir / "checkpoint-request.json")
+            ran = subprocess.run(
+                command, capture_output=True, text=True, check=False, env=env,
+                timeout=timeout)
+            if result_path.is_file():
+                try:
+                    write_producer_receipt(
+                        out_dir, frame_dir, producer, result_path,
+                        shaders=shader_dir, policy=policy, faults=faults,
+                        env=env, ambient=ambient)
+                except ReplayError as exc:
+                    receipt_error = f"{exc.kind}: {exc.detail or exc}"
+    except m6_frame.FrameError as exc:
+        raise ReplayError("producer_identity", str(exc)) from exc
     diagnosis = analyse_frame(
         frame_dir, out_dir, policy, trace=trace, seal=seal, graph=graph,
         request=request, request_source="published", faults=faults,

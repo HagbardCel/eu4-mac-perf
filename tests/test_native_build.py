@@ -219,6 +219,30 @@ def _run_synthetic_suite(setup) -> tuple[unittest.TestResult, list[bool]]:
     return result, ran
 
 
+class OpenGLDeploymentTests(unittest.TestCase):
+    def test_existing_installation_requires_both_exact_artifacts(self):
+        driver_digest = native_build.sha256_file(
+            ROOT / "automation/gfx_gl_control_renderer.py")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            install = root / ".local/native-builds/gl-control" / driver_digest
+            install.mkdir(parents=True)
+            driver = install / "gfx_gl_control_renderer.py"
+            executor = install / "eu4_gfx_draw_control"
+            driver.write_bytes((ROOT / "automation/gfx_gl_control_renderer.py").read_bytes())
+            executor.write_bytes(b"installed executable")
+            executor.chmod(0o755)
+            with mock.patch.multiple(native_build, ROOT=root,
+                                     _GL_DRIVER_SHA256=driver_digest,
+                                     _GL_EXECUTABLE_SHA256=native_build.sha256_file(executor)):
+                self.assertEqual(native_build.deploy_gl_control(), {
+                    "renderer": str(driver), "executable": str(executor)})
+                executor.write_bytes(b"unexpected executable")
+                with self.assertRaisesRegex(ValueError, "unexpected build identity"):
+                    native_build.deploy_gl_control()
+                self.assertEqual(executor.read_bytes(), b"unexpected executable")
+
+
 class SuiteOutcomeTests(unittest.TestCase):
     """The suite-level result, not just the helper, must skip/fail correctly."""
 

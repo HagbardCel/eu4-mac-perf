@@ -1990,66 +1990,15 @@ def _case_replay_outcome(result: dict) -> tuple[str, str, str | None, str | None
     """Map a case-repro status to (status, diagnostic, verdict, evidence)."""
     replay_status = str(result.get("status") or "unavailable")
     reason = str(result.get("reason") or "")
-    if replay_status in (gfx_frame_compare.PASS, "pass",
-                         gfx_frame_compare.FAIL, "fail",
-                         gfx_frame_compare.UNVERIFIED, "unverified"):
-        verdict = {
-            "pass": "equal", "fail": "different", "unverified": "unverified",
-        }.get(replay_status)
+    verdict = _verdict_from_status(replay_status)
+    if verdict is not None:
         return "ok", "complete", verdict, "valid"
     if "numpy" in reason.lower() or "unavailable" in replay_status:
         return "unavailable", "unavailable", None, None
     return "incomplete", "incomplete", None, "unverified"
 
 
-CASE_KIND_STRATEGY_B = "strategy_b"
-CASE_KIND_LEGACY = "legacy"
-CASE_KIND_UNSUPPORTED = "unsupported"
-CASE_KIND_MALFORMED = "malformed"
-CASE_KIND_MISSING = "missing"
-
-
-def _case_schema(case_path: Path) -> tuple[str, str | None, dict, str | None]:
-    """Classify a case directory without ever guessing a schema.
-
-    A malformed manifest, an unsupported ``gfx-strategy-b-case/*`` version and
-    a recognized legacy image-comparison case are distinct outcomes.  Only the
-    recognized legacy schema may reach the older comparator.
-    """
-    manifest_path = case_path / "case.json"
-    if not manifest_path.is_file():
-        # A legacy image-comparison source may be a built case (manifest.json)
-        # or a run directory the legacy comparator can inspect.  Recognize
-        # those explicitly; a directory with no legacy markers is missing.
-        for name in ("manifest.json", "result.json"):
-            manifest = _optional_json(case_path / name)
-            if manifest:
-                return CASE_KIND_LEGACY, None, manifest, (
-                    f"legacy image-comparison evidence in {name}")
-        if (case_path / "repro" / "repro.json").is_file():
-            return CASE_KIND_LEGACY, None, {}, "legacy repro/repro.json"
-        return CASE_KIND_MISSING, None, {}, "no case.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        return CASE_KIND_MALFORMED, None, {}, f"case.json is unreadable: {exc}"
-    if not isinstance(manifest, dict):
-        return CASE_KIND_MALFORMED, None, {}, "case.json is not an object"
-    schema = manifest.get("schema")
-    if schema in gfx_replay_case.CASE_SCHEMAS:
-        return CASE_KIND_STRATEGY_B, str(schema), manifest, None
-    if isinstance(schema, str) and schema.startswith("gfx-strategy-b-case/"):
-        return CASE_KIND_UNSUPPORTED, schema, manifest, (
-            f"unsupported Strategy B schema: {schema}")
-    if schema == gfx_case.SCHEMA:
-        return CASE_KIND_LEGACY, None, manifest, "legacy image-comparison case"
-    return CASE_KIND_UNSUPPORTED, (
-        schema if isinstance(schema, str) else None), manifest, (
-            f"unsupported case schema: {schema!r}")
-
-
-def _case_verification_outcome(verification: dict,
-                               schema: str | None) -> tuple[str, str, str]:
+def _case_verification_outcome(verification: dict) -> tuple[str, str, str]:
     """Map a Strategy B verification to (status, diagnostic, evidence)."""
     if verification.get("verifier_exception"):
         return "invalid", "invalid", "invalid"
@@ -2087,34 +2036,20 @@ def _case_verification_view(verification: dict) -> dict:
 def _case_sequence_view(case_path: Path) -> dict:
     """Summarize the v2 ordered prefix without copying payloads."""
     sequence = _optional_json(case_path / "sequence.json")
-    frames = []
-    for entry in sequence.get("frames") or []:
-        if not isinstance(entry, dict):
-            continue
-        frames.append({
-            "index": entry.get("index"),
-            "dir": entry.get("dir"),
-            "capture_frame_id": entry.get("capture_frame_id"),
-            "original_sequence_index": entry.get("original_sequence_index"),
-            "manifest_sha256": entry.get("manifest_sha256"),
-            "event_stream_sha256": entry.get("event_stream_sha256"),
-            "reference_sha256": entry.get("reference_sha256"),
-            "shader_dir": entry.get("shader_dir"),
-            "shader_report_sha256": entry.get("shader_report_sha256"),
-            "checkpoint_count": entry.get("checkpoint_count"),
-            "graph_status": entry.get("graph_status"),
-        })
+    frame_keys = (
+        "index", "dir", "capture_frame_id", "original_sequence_index",
+        "manifest_sha256", "event_stream_sha256", "reference_sha256",
+        "shader_dir", "shader_report_sha256", "checkpoint_count", "graph_status",
+    )
     return {
-        "schema": sequence.get("schema"),
-        "session_id": sequence.get("session_id"),
-        "pid": sequence.get("pid"),
-        "target_index": sequence.get("target_index"),
-        "frames": frames,
-        "minimal_prefix": sequence.get("minimal_prefix"),
-        "excluded_frames": sequence.get("excluded_frames"),
+        **{key: sequence.get(key) for key in
+           ("schema", "session_id", "pid", "target_index", "minimal_prefix", "excluded_frames")},
+        "frames": [{key: entry.get(key) for key in frame_keys}
+                   for entry in sequence.get("frames") or [] if isinstance(entry, dict)],
         "carried_resources": sequence.get("carried_resources") or [],
         "reproduction": sequence.get("reproduction") or {},
     }
+
 
 
 COMPACT_OUTPUT_CAP = 8192
@@ -3281,58 +3216,44 @@ def _replay_report_view(report: dict) -> dict:
         report.get("diagnosis"), dict) else {}
     source = diagnosis or report
     return {
-        "status": report.get("status"),
-        "classification": report.get("classification")
-        or source.get("classification"),
+        **{key: report.get(key) for key in ("status", "reproduction", "campaign", "replay")},
+        **{key: report.get(key) or source.get(key) for key in (
+            "classification", "qualification", "policy", "evaluation", "checkpoints",
+            "checkpoint_validation", "state_coverage", "provenance",
+            "operation_coverage", "binding_audit", "first_divergence", "history")},
         "outcome": report.get("outcome") or source.get("qualification"),
-        "qualification": report.get("qualification")
-        or source.get("qualification"),
-        "reproduction": report.get("reproduction"),
-        "campaign": report.get("campaign"),
-        "policy": report.get("policy") or source.get("policy"),
-        "evaluation": report.get("evaluation") or source.get("evaluation"),
-        "checkpoints": report.get("checkpoints") or source.get("checkpoints"),
-        "checkpoint_validation": report.get("checkpoint_validation")
-        or source.get("checkpoint_validation"),
-        "state_coverage": report.get("state_coverage")
-        or source.get("state_coverage"),
-        "provenance": report.get("provenance") or source.get("provenance"),
-        "operation_coverage": report.get("operation_coverage")
-        or source.get("operation_coverage"),
-        "binding_audit": report.get("binding_audit")
-        or source.get("binding_audit"),
-        "final": (report.get("pixels") or source.get("pixels") or {}).get(
-            "final") or report.get("final"),
-        "first_divergence": report.get("first_divergence")
-        or source.get("first_divergence"),
-        "history": report.get("history") or source.get("history"),
-        "replay": report.get("replay"),
+        "final": (report.get("pixels") or source.get("pixels") or {}).get("final")
+        or report.get("final"),
     }
 
 
 def _strategy_b_verify(case_path: Path) -> dict:
     try:
         return gfx_replay_case.verify(case_path)
-    except (RuntimeError, OSError, ValueError, json.JSONDecodeError) as exc:
-        return {
-            "schema": "gfx-strategy-b-case-verification/v1",
-            "case_id": None,
-            "ok": False,
-            "verifier_exception": True,
-            "exception": f"{type(exc).__name__}: {exc}",
-            "problems": [f"case verification raised "
-                         f"{type(exc).__name__}: {exc}"],
-            "files": 0,
-            "graph_status": None,
-            "sequence": {},
-            "reproduction_status": "invalid",
-            "independently_reproducible": False,
-        }
+    except (RuntimeError, OSError, ValueError) as exc:
+        return _case_verifier_exception(exc)
+
+
+def _case_verifier_exception(exc: Exception) -> dict:
+    detail = f"{type(exc).__name__}: {exc}"
+    return {
+        "schema": "gfx-strategy-b-case-verification/v1",
+        "case_id": None,
+        "ok": False,
+        "verifier_exception": True,
+        "exception": detail,
+        "problems": [f"case verification raised {detail}"],
+        "files": 0,
+        "graph_status": None,
+        "sequence": {},
+        "reproduction_status": "invalid",
+        "independently_reproducible": False,
+    }
 
 
 def _case_invalid_envelope(tool: str, case_path: Path, kind: str,
                            schema: str | None, detail: str | None) -> dict:
-    status = ("not_found" if kind == CASE_KIND_MISSING else "invalid")
+    status = ("not_found" if kind == gfx_replay_case.CASE_KIND_MISSING else "invalid")
     return _envelope(
         tool, status, {
             "case": str(case_path), "kind": kind, "schema": schema,
@@ -3345,49 +3266,41 @@ def _case_invalid_envelope(tool: str, case_path: Path, kind: str,
 
 def _strategy_b_verify_result(case_path: Path, schema: str,
                               manifest: dict, verification: dict,
-                              *, compact: bool = True) -> dict:
-    status, diagnostic, evidence = _case_verification_outcome(
-        verification, schema)
+                              *, compact: bool = True, tool: str = "eu4_replay") -> dict:
+    status, diagnostic, evidence = _case_verification_outcome(verification)
+    replay_tool = tool == "eu4_replay"
     if compact:
         value = _compact_case_view(case_path, schema, manifest, verification)
+    else:
+        value = {
+            "schema": schema,
+            **{key: manifest.get(key) for key in
+               ("case_id", "title", "replay_command", "verify_command")},
+            "verification": verification if replay_tool else _case_verification_view(verification),
+            "diagnosis": _diagnosis_report(case_path, manifest),
+        }
+        if schema == gfx_replay_case.SEQUENCE_SCHEMA:
+            value["sequence"] = _case_sequence_view(case_path)
+        source = value.get("sequence") or verification.get("sequence") or {}
+        value["reproduction"] = manifest.get("reproduction") or source.get("reproduction") or {}
+        if not replay_tool:
+            value.update({
+                "graph": _optional_json(case_path / "graph.json"),
+                "reproduction_scope": manifest.get("reproduction_scope"),
+                "terminal_failure": manifest.get("terminal_failure"),
+                "files": len(manifest.get("files") or []),
+            })
+    if replay_tool:
         value["execution"] = "not_run"
         value["next"] = ("pass --replay-out to re-execute this Strategy B case"
                          if verification.get("ok")
                          else "repair the case evidence before replay")
-        value["verification_full"] = False
-        return _bounded_envelope(_envelope(
-            "eu4_replay", status, value,
-            reason="; ".join(str(item) for item in
-                             (verification.get("problems") or [])),
-            diagnostic=diagnostic, evidence=evidence, qualified=False))
-    value = {
-        "schema": schema,
-        "case_id": manifest.get("case_id"),
-        "title": manifest.get("title"),
-        "verification": verification,
-        "execution": "not_run",
-        "reproduction": (manifest.get("reproduction")
-                         or (verification.get("sequence") or {}).get(
-                             "reproduction") or {}),
-        "replay_command": manifest.get("replay_command"),
-        "verify_command": manifest.get("verify_command"),
-        "next": ("pass --replay-out to re-execute this Strategy B case"
-                 if verification.get("ok")
-                 else "repair the case evidence before replay"),
-    }
-    if schema == gfx_replay_case.SEQUENCE_SCHEMA:
-        value["sequence"] = _case_sequence_view(case_path)
-        value["diagnosis"] = _diagnosis_report(case_path, manifest)
-        value["reproduction"] = (manifest.get("reproduction")
-                                 or value["sequence"].get("reproduction")
-                                 or {})
-    else:
-        value["diagnosis"] = _diagnosis_report(case_path, manifest)
-    return _envelope(
-        "eu4_replay", status, value,
-        reason="; ".join(str(item) for item in
-                         (verification.get("problems") or [])),
-        diagnostic=diagnostic, evidence=evidence, qualified=False)
+        if compact:
+            value["verification_full"] = False
+    envelope = _envelope(
+        tool, status, value, diagnostic=diagnostic, evidence=evidence, qualified=False,
+        reason="; ".join(str(item) for item in verification.get("problems") or []))
+    return _bounded_envelope(envelope) if compact else envelope
 
 
 def _replay_rationale(args: argparse.Namespace):
@@ -3458,9 +3371,9 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 "case": str(case_path), "exists": False,
             }, diagnostic="unavailable",
                reason=f"case directory does not exist: {case_path}")
-        kind, schema, manifest, detail = _case_schema(case_path)
-        if kind != CASE_KIND_STRATEGY_B:
-            if kind == CASE_KIND_LEGACY:
+        kind, schema, manifest, detail = gfx_replay_case.case_schema(case_path)
+        if kind != gfx_replay_case.CASE_KIND_STRATEGY_B:
+            if kind == gfx_replay_case.CASE_KIND_LEGACY:
                 return _envelope(
                     "eu4_replay", "refused", {
                         "case": str(case_path), "kind": kind,
@@ -3656,47 +3569,48 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 "case": str(case_path), "exists": False,
             }, diagnostic="unavailable",
                reason=f"case directory does not exist: {case_path}")
-        kind, schema, manifest, detail = _case_schema(case_path)
-        if kind == CASE_KIND_STRATEGY_B:
-            verification = _strategy_b_verify(case_path)
-            if not verification["ok"]:
+        kind, schema, manifest, detail = gfx_replay_case.case_schema(case_path)
+        if kind == gfx_replay_case.CASE_KIND_STRATEGY_B:
+            if not args.replay_out:
                 return _strategy_b_verify_result(
-                    case_path, schema, manifest, verification)
-            if args.replay_out:
-                rationale, refusal = _replay_rationale(args)
-                if refusal is not None:
-                    return refusal
-                try:
-                    report = gfx_replay_case.replay_case(
-                        case_path, Path(args.replay_out),
-                        rationale=rationale)
-                except (RuntimeError, OSError, ValueError) as exc:
-                    return _envelope(
-                        "eu4_replay", "failed", {
-                            "case": _case_verification_view(verification),
-                            "schema": schema,
-                        }, diagnostic="failed", evidence="invalid",
-                        reason=f"Strategy B replay did not complete: {exc}")
-                reproduction = (report.get("reproduction") or {})
-                complete = reproduction.get(
-                    "status", "complete") != "incomplete"
-                status, diagnostic, verdict, evidence, qualified = (
-                    _diagnosis_outcome(report, reproduction_complete=complete))
-                value = _replay_report_view(report)
-                value["case"] = _case_verification_view(verification)
-                value["schema"] = schema
-                value["sequence"] = (
-                    _case_sequence_view(case_path)
-                    if schema == gfx_replay_case.SEQUENCE_SCHEMA else {})
-                value["case_id"] = manifest.get("case_id")
+                    case_path, schema, manifest, _strategy_b_verify(case_path))
+            rationale, refusal = _replay_rationale(args)
+            if refusal is not None:
+                return refusal
+            try:
+                report = gfx_replay_case.replay_case(
+                    case_path, Path(args.replay_out), rationale=rationale)
+            except (RuntimeError, OSError, ValueError) as exc:
+                verification = getattr(exc, "verification", None)
+                if verification is None:
+                    verification = _case_verifier_exception(exc)
+                if not verification["ok"]:
+                    return _strategy_b_verify_result(
+                        case_path, schema, manifest, verification)
                 return _envelope(
-                    "eu4_replay", status, value, diagnostic=diagnostic,
-                    verdict=verdict, evidence=evidence, qualified=qualified,
-                    reason="; ".join((report.get("evaluation") or {}).get(
-                        "reasons") or []))
-            return _strategy_b_verify_result(
-                case_path, schema, manifest, verification)
-        if kind != CASE_KIND_LEGACY:
+                    "eu4_replay", "failed", {
+                        "case": _case_verification_view(verification),
+                        "schema": schema,
+                    }, diagnostic="failed", evidence="invalid",
+                    reason=f"Strategy B replay did not complete: {exc}")
+            verification = report["case_verification"]
+            schema = verification["case_schema"]
+            reproduction = report.get("reproduction") or {}
+            status, diagnostic, verdict, evidence, qualified = _diagnosis_outcome(
+                report, reproduction_complete=reproduction.get("status") != "incomplete")
+            value = _replay_report_view(report)
+            value.update({
+                "case": _case_verification_view(verification),
+                "schema": schema,
+                "sequence": (_case_sequence_view(case_path)
+                             if schema == gfx_replay_case.SEQUENCE_SCHEMA else {}),
+                "case_id": verification.get("case_id"),
+            })
+            return _envelope(
+                "eu4_replay", status, value, diagnostic=diagnostic,
+                verdict=verdict, evidence=evidence, qualified=qualified,
+                reason="; ".join((report.get("evaluation") or {}).get("reasons") or []))
+        if kind != gfx_replay_case.CASE_KIND_LEGACY:
             return _case_invalid_envelope(
                 "eu4_replay", case_path, kind, schema, detail)
         # The legacy image-comparison case needs NumPy; Strategy B replay above
@@ -3704,17 +3618,17 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         dependency = _dependency_failure("eu4_replay", case_path)
         if dependency is not None:
             return dependency
-        result = dict(gfx_case.compare_case(case_path, write=False))
+        result = dict(gfx_replay_case.compare_legacy_case(case_path, write=False))
         replay_status = str(result.get("status") or "unavailable")
         status, diagnostic, verdict, evidence = _case_replay_outcome(result)
+        result["case_id"] = manifest.get("case_id")
         result["replay_status"] = replay_status
         result["reproduced"] = replay_status == "fail"
         result["verified"] = replay_status == "pass"
         return _envelope("eu4_replay", status, result,
                          reason=str(result.get("reason") or ""),
                          diagnostic=diagnostic, verdict=verdict,
-                         evidence=evidence,
-                         qualified=(replay_status == "pass"))
+                         evidence=evidence, qualified=False)
     if args.replay_op == "frame":
         if not args.frame or not args.replay_out:
             return _envelope(
@@ -3785,11 +3699,11 @@ def _event_case_inspect(args: argparse.Namespace, path: Path) -> dict:
     except ValueError as exc:
         return _envelope("eu4_case_inspect", "invalid",
                          reason=str(exc), diagnostic="invalid")
-    kind, schema, _manifest, detail = _case_schema(path)
+    kind, schema, _manifest, detail = gfx_replay_case.case_schema(path)
     verification = None
-    if kind == CASE_KIND_STRATEGY_B:
+    if kind == gfx_replay_case.CASE_KIND_STRATEGY_B:
         verification = _strategy_b_verify(path)
-    elif kind != CASE_KIND_MISSING and not (
+    elif kind != gfx_replay_case.CASE_KIND_MISSING and not (
             path / "frame-trace.json").is_file():
         return _case_invalid_envelope(
             "eu4_case_inspect", path, kind, schema, detail)
@@ -3813,7 +3727,7 @@ def _event_case_inspect(args: argparse.Namespace, path: Path) -> dict:
     status, diagnostic, evidence = "ok", "complete", "valid"
     if verification is not None:
         verification_status, verification_diagnostic, evidence = (
-            _case_verification_outcome(verification, schema))
+            _case_verification_outcome(verification))
         if verification_status != "ok":
             status = verification_status
             diagnostic = verification_diagnostic
@@ -3868,56 +3782,18 @@ def eu4_case_inspect(args: argparse.Namespace) -> dict:
             "case": str(path), "exists": False,
         }, diagnostic="unavailable",
            reason=f"case directory does not exist: {path}")
-    kind, schema, manifest, detail = _case_schema(path)
-    if kind == CASE_KIND_STRATEGY_B:
-        verification = _strategy_b_verify(path)
-        status, diagnostic, evidence = _case_verification_outcome(
-            verification, schema)
-        if not bool(getattr(args, "full", False)):
-            value = _compact_case_view(path, schema, manifest, verification)
-            return _bounded_envelope(_envelope(
-                "eu4_case_inspect", status, value,
-                reason="; ".join(str(item) for item in
-                                 (verification.get("problems") or [])),
-                diagnostic=diagnostic, evidence=evidence, qualified=False))
-        value = {
-            "schema": schema,
-            "case_id": manifest.get("case_id"),
-            "title": manifest.get("title"),
-            "verification": _case_verification_view(verification),
-            "diagnosis": _diagnosis_report(path, manifest),
-            "reproduction": (manifest.get("reproduction")
-                             or (verification.get("sequence") or {}).get(
-                                 "reproduction") or {}),
-            "graph": _optional_json(path / "graph.json"),
-            "reproduction_scope": manifest.get("reproduction_scope"),
-            "terminal_failure": manifest.get("terminal_failure"),
-            "replay_command": manifest.get("replay_command"),
-            "verify_command": manifest.get("verify_command"),
-            "files": len(manifest.get("files") or []),
-        }
-        if schema == gfx_replay_case.SEQUENCE_SCHEMA:
-            value["sequence"] = _case_sequence_view(path)
-            value["reproduction"] = (manifest.get("reproduction")
-                                     or value["sequence"].get("reproduction")
-                                     or {})
-        return _envelope(
-            "eu4_case_inspect", status, value,
-            reason="; ".join(str(item) for item in
-                             (verification.get("problems") or [])),
-            diagnostic=diagnostic, evidence=evidence, qualified=False)
-    if kind != CASE_KIND_LEGACY:
+    kind, schema, manifest, detail = gfx_replay_case.case_schema(path)
+    if kind == gfx_replay_case.CASE_KIND_STRATEGY_B:
+        return _strategy_b_verify_result(
+            path, schema, manifest, _strategy_b_verify(path),
+            compact=not bool(getattr(args, "full", False)), tool="eu4_case_inspect")
+    if kind != gfx_replay_case.CASE_KIND_LEGACY:
         return _case_invalid_envelope(
             "eu4_case_inspect", path, kind, schema, detail)
-    value = gfx_case.inspect_case(path)
-    verdict = {
-        "pass": "equal", "fail": "different", "unverified": "unverified",
-    }.get(str(value.get("comparison_status") or ""))
+    value = gfx_replay_case.inspect_legacy_case(path)
     return _envelope("eu4_case_inspect", "ok", value, diagnostic="complete",
-                     verdict=verdict,
-                     evidence=("valid" if value.get("comparison_status")
-                               in ("pass", "fail", "unverified") else "unverified"),
-                     qualified=None)
+                     verdict=_verdict_from_status(value.get("comparison_status")),
+                     evidence="unverified", qualified=False)
 
 
 # ---------------------------------------------------------------------------

@@ -393,17 +393,22 @@ class BaselineIdentityTests(unittest.TestCase):
     def test_changing_required_build_dependency_invalidates_reuse(self):
         case_baseline.record(self.case, self.baseline)
         baseline = json.loads(self.baseline.read_text())
-        current = case_baseline.identity(self.case)
-        sources = dict(current["implementation_sources"])
-        self.assertIn("automation/gfx_independent_replay.py", sources)
-        sources["automation/gfx_independent_replay.py"] = "e" * 64
-        current["implementation_sources"] = sources
-        current["fingerprint"] = hashlib.sha256(json.dumps(
-            {key: value for key, value in current.items()
-             if key != "fingerprint"},
-            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        checked = case_baseline.evaluate(current, baseline)
-        self.assertFalse(checked["reusable"])
+        digest = case_baseline.sha256_file
+        for name in (
+            "gfx_independent_replay.py", "gfx_artifacts.py",
+            "replay_host_dependencies.py", "m6_compare.py", "gfx_observation.py",
+        ):
+            source = case_baseline.ROOT / "automation" / name
+            member = f"automation/{name}"
+            with self.subTest(source=name):
+                self.assertEqual(baseline["identity"]["implementation_sources"][member],
+                                 digest(source))
+                with mock.patch.object(case_baseline, "sha256_file",
+                                       side_effect=lambda path: "e" * 64
+                                       if path == source else digest(path)):
+                    current = case_baseline.identity(self.case)
+                self.assertEqual(current["implementation_sources"][member], "e" * 64)
+                self.assertFalse(case_baseline.evaluate(current, baseline)["reusable"])
 
     def test_changing_policy_invalidates_reuse(self):
         case_baseline.record(self.case, self.baseline)

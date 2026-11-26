@@ -517,10 +517,11 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
     control_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_setup = prepare_sequence_checkpoints(
         frames, out_dir, validation, shaders=shaders)
-    command = [
-        str(host_path), "--sequence", ",".join(map(str, frames)),
-        "--shaders", str(Path(shaders).expanduser().resolve()),
-        "--out", str(out_dir), "--control-dir", str(control_dir),
+    shader_dir = Path(shaders).expanduser().resolve()
+    command = m6_frame.replay_host_command(
+        host_path, frames=frames, shaders=shader_dir, out=out_dir)
+    command += [
+        "--control-dir", str(control_dir),
         "--control-timeout-ms", "120000",
         "--sequence-checkpoints", checkpoint_setup["directory"],
         "--frame-timeout-ms", str(int(frame_timeout * 1000)),
@@ -530,7 +531,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         "status": "running",
         "host": str(host_path),
         "out_dir": str(out_dir),
-        "shaders": str(Path(shaders).expanduser().resolve()),
+        "shaders": str(shader_dir),
         "max_pending": max_pending,
         "max_frames": max_frames,
         "max_bytes": max_bytes,

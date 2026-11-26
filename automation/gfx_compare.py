@@ -28,6 +28,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from automation.m6_compare import measure_pixel_deltas
+
 EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_INVALID = 2
@@ -454,66 +459,29 @@ def _png_rgb(path: Path, width: int, height: int, rgba: bytes) -> None:
 
 def _stats(reference: bytes, candidate: bytes, width: int, height: int,
            tolerance: int) -> dict:
-    per_channel_max = [0, 0, 0, 0]
-    per_channel_sum = [0, 0, 0, 0]
-    mismatched = 0
-    alpha_mismatched = 0
-    worst = 0
-    worst_index = -1
-    grid = [[0] * 8 for _ in range(8)]
-    total = width * height
-    for index in range(total):
-        base = index * 4
-        deltas = [
-            abs(reference[base + c] - candidate[base + c]) for c in range(4)
-        ]
-        local_max = max(deltas)
-        for channel in range(4):
-            delta = deltas[channel]
-            if delta > per_channel_max[channel]:
-                per_channel_max[channel] = delta
-            per_channel_sum[channel] += delta
-        if local_max > worst:
-            worst = local_max
-            worst_index = index
-        if local_max > tolerance:
-            mismatched += 1
-            x = index % width
-            y = index // width
-            grid[min(7, y * 8 // height)][min(7, x * 8 // width)] += 1
-        if deltas[3] > tolerance:
-            alpha_mismatched += 1
-    coverage = [
-        {"row": row, "column": column, "pixels": grid[row][column]}
-        for row in range(8)
-        for column in range(8)
-        if grid[row][column]
-    ]
+    deltas = measure_pixel_deltas(reference, candidate, width, height, tolerance)
+    total = deltas["pixels"]
+    worst = deltas["max_channel_error"]
+    worst_index = deltas["worst_index"]
+    mismatched = deltas["mismatched_pixels"]
+    sums = deltas["channel_sums"]
     return {
         "pixels": total,
         "max_channel_error": worst,
-        "mean_abs_error": (
-            sum(per_channel_sum) / (total * 4) if total else 0.0
-        ),
-        "per_channel_max_error": {
-            "r": per_channel_max[0],
-            "g": per_channel_max[1],
-            "b": per_channel_max[2],
-            "a": per_channel_max[3],
-        },
+        "mean_abs_error": sum(sums) / (total * 4) if total else 0.0,
+        "per_channel_max_error": dict(zip("rgba", deltas["channel_maxima"])),
         "per_channel_mean_error": {
-            "r": per_channel_sum[0] / total if total else 0.0,
-            "g": per_channel_sum[1] / total if total else 0.0,
-            "b": per_channel_sum[2] / total if total else 0.0,
-            "a": per_channel_sum[3] / total if total else 0.0,
+            channel: value / total if total else 0.0
+            for channel, value in zip("rgba", sums)
         },
         "mismatched_pixels": mismatched,
         "mismatched_fraction": mismatched / total if total else 0.0,
-        "alpha_mismatched_pixels": alpha_mismatched,
-        "worst_pixel": None
-        if worst_index < 0
-        else {"x": worst_index % width, "y": worst_index // width, "error": worst},
-        "failure_grid": coverage,
+        "alpha_mismatched_pixels": deltas["alpha_mismatched_pixels"],
+        "worst_pixel": (
+            None if worst_index is None else
+            {"x": worst_index % width, "y": worst_index // width, "error": worst}),
+        "failure_grid": [{"row": index // 8, "column": index % 8, "pixels": count}
+                         for index, count in enumerate(deltas["grid_counts"]) if count],
     }
 
 

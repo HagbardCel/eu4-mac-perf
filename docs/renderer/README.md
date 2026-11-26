@@ -13,7 +13,7 @@ for recovery status.
   live-drawable equivalence and exact output. M7 event 1 uses offscreen
   framebuffer 6 and remains outside this route.
   [Driver](../../automation/gfx_gl_control_renderer.py) ·
-  [Native executor](../../benchmark/eu4_gfx_draw_control.c) ·
+  [Native executor](../../renderer/gl/eu4_gfx_draw_control.c) ·
   [Qualification and limitations](metal.md#selected-draw-opengl-control)
 - [Faithful Metal](metal.md) covers captured-state replay and exact attachment comparison.
 - [Optimized Metal](metal_optimized.md) records the proposed workload, measurement and qualification requirements.

@@ -7,6 +7,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,8 +47,17 @@ class CaseVerificationTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def test_valid_case_verifies(self):
-        value = gfx_replay_case.verify(self.root)
+    def test_valid_case_verifies_once_before_replay(self):
+        with mock.patch.object(
+                gfx_replay_case, "_declared_inventory",
+                wraps=gfx_replay_case._declared_inventory) as inventory, \
+             mock.patch.object(
+                gfx_replay_case.gfx_independent_replay, "replay",
+                return_value={"status": "partial"}) as execute:
+            report = gfx_replay_case.replay_case(self.root, self.root.parent / "out")
+        inventory.assert_called_once()
+        execute.assert_called_once()
+        value = report["case_verification"]
         self.assertTrue(value["ok"], value["problems"])
         self.assertEqual(value["graph_status"], "partial")
 

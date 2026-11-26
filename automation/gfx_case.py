@@ -12,19 +12,19 @@ from __future__ import annotations
 import datetime as dt
 import json
 import shutil
-import sys
 from pathlib import Path
 
-from automation import gfx_align, gfx_frame_compare, gfx_qualification
+from automation import gfx_align, gfx_frame_compare, gfx_qualification, gfx_replay_case
+from automation.gfx_artifacts import sha256_file
 
-SCHEMA = "gfx-diagnostic-case/v1"
+SCHEMA = gfx_replay_case.LEGACY_SCHEMA
 
 CONFIRMED_RENDERING = "rendering_difference"
 UNALIGNED = "unaligned"
 GPU_FAILURE = "gpu_execution_failure"
 PROCESS_FAILURE = "process_failure"
 INSTRUMENTATION = "instrumentation_failure"
-INCOMPLETE = "incomplete_evidence"
+INCOMPLETE = gfx_replay_case.LEGACY_INCOMPLETE
 MATCH = "match"
 
 
@@ -51,7 +51,7 @@ def _copy(src: Path, dest: Path) -> dict:
     return {
         "path": str(dest),
         "bytes": dest.stat().st_size,
-        "sha256": gfx_frame_compare._sha256(dest),
+        "sha256": sha256_file(dest),
     }
 
 
@@ -233,165 +233,68 @@ def _choose_pair(result: dict, pair_index: int | None = None) -> dict | None:
 
 
 def _analysis(result: dict, pair: dict | None, comparison: dict | None,
-              classification: str, artifacts: dict) -> str:
-    scenario = result.get("scenario") or {}
-    stop = result.get("stop") or {}
-    health = result.get("health") or {}
+              classification: str, frame_files: dict) -> str:
     lines = [
-        "# Diagnostic case",
-        "",
-        f"Session: `{result.get('session_id')}`  ",
-        f"Scenario: `{scenario.get('name')}` (`{scenario.get('digest')}`)  ",
-        f"Classification: **{classification}**  ",
-        f"Stop: `{stop.get('reason')}` ({stop.get('trigger')})",
-        "",
-        "## Confirmed observations",
-        "",
+        "# Diagnostic case", "",
+        f"Session `{result.get('session_id')}` · **{classification}**", "",
+        "## Confirmed observations", "",
+        "- [Result](result.json) records the stop reason and selected pair.",
+        "- [Frame comparison](difference/statistics.json) records alignment, "
+        "pixel and region metrics, and the packaged frame identities.",
+        "- [GPU health](gpu/health.json) and [raw failures](gpu/raw-failures.json) "
+        "record execution observations.",
+        "- [Manifest](manifest.json) records process provenance and the artifact budget.",
     ]
-    if pair:
-        alignment = (comparison or {}).get("alignment") or {}
+    statistics = (comparison or {}).get("statistics") or {}
+    if statistics:
         lines += [
-            f"- Paired logical frame: reference {pair.get('frame_index')}, "
-            f"candidate {pair.get('candidate_frame_index')}.",
-            f"- Alignment evidence: {', '.join(alignment.get('evidence', [])) or 'none'}.",
-            f"- Extent relation: {json.dumps(alignment.get('extent'))}.",
+            f"- Differing pixels: {statistics.get('mismatched_pixels')} / "
+            f"{statistics.get('pixels')} ({statistics.get('mismatched_fraction')}).",
+            f"- Max channel error: {statistics.get('max_channel_error')}. "
+            f"Mean absolute error: {statistics.get('mean_abs_error')}.",
         ]
-        statistics = (comparison or {}).get("statistics") or {}
-        if statistics:
-            lines += [
-                f"- Differing pixels: {statistics.get('mismatched_pixels')} / "
-                f"{statistics.get('pixels')} ({statistics.get('mismatched_fraction')}).",
-                f"- Max channel error: {statistics.get('max_channel_error')}; "
-                f"mean absolute error: {statistics.get('mean_abs_error')}.",
-                f"- Difference bounding box: {statistics.get('difference_bbox')}.",
-            ]
-        regions = (comparison or {}).get("regions") or {}
-        for name, region in regions.items():
-            lines.append(
-                f"- Region `{name}` ({region.get('rect')}): "
-                f"{region.get('mismatched_fraction')} differing, "
-                f"structural correlation {region.get('structural_correlation')}, "
-                f"mirror {region.get('mirror', {}).get('mirrored')}."
-            )
-        if (comparison or {}).get("mirrored_regions"):
-            lines.append(
-                "- Horizontal mirroring is positively indicated in: "
-                + ", ".join(comparison["mirrored_regions"])
-            )
-    else:
-        lines.append("- No paired frame with preserved raw payloads was available.")
-        for role, process in sorted((result.get("processes") or {}).items()):
-            if isinstance(process, dict) and process.get("exit_code") is not None:
-                lines.append(f"- {role} process exit code: {process.get('exit_code')}.")
+    mirrored = (comparison or {}).get("mirrored_regions")
+    if mirrored:
+        lines.append("- Horizontal mirroring was observed in " + ", ".join(mirrored) + ".")
     lines += [
-        f"- GPU health verdict: `{health.get('verdict')}`; first failure: "
-        f"`{(health.get('first_failure') or {}).get('kind')}`.",
+        "", "## Excluded explanations", "",
+        "- The comparator accounts for row origin and pixel format. A scaled "
+        "candidate cannot qualify as bit-identical under an exact policy.",
+        "", "## Remaining hypotheses", "",
     ]
-    if (comparison or {}).get("status") == gfx_frame_compare.PASS \
-            and classification != MATCH:
-        campaign = campaign_status(result)
-        verdict = (
-            f"`{campaign['status']}`" if campaign["consistent"]
-            else "unresolved (" + "; ".join(campaign["problems"]) + ")")
-        lines.append(
-            "- Local pixel equality is recorded here, but it does not qualify "
-            f"the campaign: the campaign verdict is {verdict}. A packaged case "
-            "cannot claim stronger equivalence than its source campaign."
-        )
-    if (comparison or {}).get("status") == gfx_frame_compare.FAIL \
-            and classification != CONFIRMED_RENDERING:
-        campaign = campaign_status(result)
-        detail = "; ".join(campaign["problems"]) or (
-            f"the campaign verdict is `{campaign['recorded_status']}`")
-        lines.append(
-            "- The local pixel difference is recorded here, but renderer "
-            f"attribution is withheld: {detail}. A packaged case cannot claim "
-            "stronger attribution than its source campaign."
-        )
-    lines += [
-        f"- Artifact budget: {artifacts.get('bytes')} / {artifacts.get('max_bytes')} bytes; "
-        f"dropped {artifacts.get('dropped')}.",
-        "",
-        "## Excluded explanations",
-        "",
-        "- Row-origin and BGRA/RGBA differences are decoded before comparison; they are "
-        "recorded in `frames/` provenance rather than treated as renderer errors.",
-        "- The candidate's 2x extent is normalized by area downscale and recorded; a "
-        "scale-normalized candidate cannot pass an `exact` policy as bit-identical.",
-        "- A pair whose caller composition/draw count/extent does not corroborate "
-        "alignment is classified as `unaligned`, not as a rendering difference.",
-        "",
-        "## Remaining hypotheses",
-        "",
-    ]
+    status = (comparison or {}).get("status")
     if classification == CONFIRMED_RENDERING:
-        lines += [
-            "- The difference is real at the compared frame; the responsible pass is "
-            "not yet localized to one operation in this package.",
-            "- Candidate causes consistent with the observed regions include texture-unit "
-            "or resource binding, state decoding, resolve/orientation, or missing draws. "
-            "These are hypotheses, not findings.",
-        ]
-    elif classification == UNALIGNED:
-        lines += [
-            "- Correspondence for this pair is not strong enough to justify a pixel "
-            "verdict. The next step is additional semantic evidence, not renderer debugging.",
-        ]
-    elif classification == GPU_FAILURE:
-        lines += [
-            "- The first actionable GPU/API failure is recorded in `gpu/`; visual "
-            "debugging would be premature until it is corrected.",
-        ]
+        lines.append("- The aligned frame differs. Inspect the first differing "
+                     "pass before attributing the change to a particular operation.")
     elif classification == PROCESS_FAILURE:
-        lines += [
-            "- A game process terminated abnormally; this is an execution failure, "
-            "not an established pixel difference.",
-            "- Inspect the process exit code, the last observation and the native "
-            "crash/log evidence before comparing pixels.",
-        ]
-    elif (classification == INCOMPLETE and comparison
-          and comparison.get("status") == gfx_frame_compare.FAIL):
-        evidence = difference_evidence(result, pair, comparison)
-        lines += [
-            "- A pixel difference was measured, but renderer attribution is "
-            "withheld: the qualification preconditions are not all satisfied. "
-            "The pair may be two different render stages or a non-static scene; "
-            "this is not an established renderer difference.",
-            "- Qualification blockers: "
-            + "; ".join(evidence["problems"]),
-            "- The numerical difference is preserved in `difference/`; withholding "
-            "attribution does not discard the measurement.",
-        ]
+        lines.append("- Inspect the recorded process exit and crash logs for "
+                     "the execution failure.")
+    elif classification == GPU_FAILURE:
+        lines.append("- Inspect the first GPU or API failure before comparing pixels.")
+    elif status in (gfx_frame_compare.PASS, gfx_frame_compare.FAIL) and classification != MATCH:
+        campaign = campaign_status(result)
+        blockers = campaign["problems"]
+        if status == gfx_frame_compare.FAIL and classification == INCOMPLETE:
+            blockers = blockers + difference_evidence(result, pair, comparison)["problems"]
+        detail = "; ".join(blockers) or f"campaign verdict `{campaign['recorded_status']}`"
+        scope = ("Local pixel equality does not qualify the campaign"
+                 if status == gfx_frame_compare.PASS else "Local pixels differ, but renderer attribution is withheld")
+        lines.append(f"- {scope} ({detail}).")
+    elif classification == UNALIGNED:
+        lines.append("- The pair needs corroborating frame correspondence.")
     else:
-        lines += [
-            "- The package does not contain a confirmed renderer difference.",
-        ]
+        lines.append("- The package establishes no renderer difference.")
+    lines += ["", "## Missing evidence", ""]
+    for role in ("reference", "candidate"):
+        if role not in frame_files:
+            lines.append(f"- Packaged {role} pixels.")
     lines += [
-        "",
-        "## Missing evidence",
-        "",
-    ]
-    missing = []
-    if pair and not (pair.get("dumps") or {}).get("reference", {}).get("found"):
-        missing.append("- Reference raw frame for the paired index.")
-    if pair and not (pair.get("dumps") or {}).get("candidate", {}).get("found"):
-        missing.append("- Candidate raw frame for the paired index.")
-    missing.append(
-        "- Per-draw operation prefix (caller/shader/uniform/sampler/target) "
-        "for the failing frame."
-    )
-    lines += missing or ["- None identified for the compared frame."]
-    lines += [
-        "",
-        "## Next inspection point",
-        "",
-        "- Inspect `difference/statistics.json` and the worst region, then compare the "
-        "per-draw operation prefix around the first differing pass.",
-        "- If a per-draw prefix is absent, a targeted capture of the failing caller/event "
-        "is required; do not start a full campaign merely to reproduce the same frame.",
-        "",
-        f"Another EU4 launch is needed for this package: **{'yes' if missing else 'no'}**.",
-        "",
+        "- A per-draw operation prefix for pass-level attribution.",
+        "", "## Next inspection point", "",
+        "- Replay the packaged image comparison and inspect the worst region. "
+        "Use a retained per-draw capture to localize the difference when available.",
+        "", "Another EU4 launch is needed for this package only if a targeted "
+        "observation is required and the retained evidence cannot supply it.", "",
     ]
     return "\n".join(lines)
 
@@ -456,6 +359,7 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
             continue
         copied = _copy(raw, case_dir / "frames" / f"{role}-frame-{index}.bgra")
         copied.update({
+            "path": f"frames/{role}-frame-{index}.bgra",
             "role": role,
             "frame_index": index,
             "width": meta.get("width"),
@@ -471,9 +375,9 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
                 pixel_format=str(meta.get("pixel_format", "BGRA8")),
             )
             if role == "candidate" and "reference" in frame_files:
-                reference_meta = next(iter((dumps.get("reference") or {}).get("found", {}).values()))
+                reference_meta = frame_files["reference"]
                 reference_image = gfx_frame_compare.decode_frame(
-                    Path(reference_meta["raw_file"]).read_bytes(),
+                    (case_dir / reference_meta["path"]).read_bytes(),
                     int(reference_meta["width"]), int(reference_meta["height"]),
                     origin=str(reference_meta.get("origin", "top_left")),
                     pixel_format=str(reference_meta.get("pixel_format", "BGRA8")),
@@ -489,8 +393,7 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
                     case_dir / "frames" / "reference.png", reference_image)
                 diff = gfx_frame_compare.difference_image(reference_image, normalized)
                 gfx_frame_compare.write_png(case_dir / "difference" / "difference.png", diff)
-                difference = {"scale": normalized.shape[1] // reference_image.shape[1] if False else None,
-                              "method": "top-left RGBA difference, amplification x4"}
+                difference = {"scale": None, "method": "top-left RGBA difference, amplification x4"}
             else:
                 gfx_frame_compare.write_png(case_dir / "frames" / f"{role}.png", image)
         except (OSError, KeyError, gfx_frame_compare.CompareError, ValueError) as exc:
@@ -513,12 +416,12 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
         "comparison": comparison,
         "frames": frame_files,
         "policy": (result.get("scenario") or {}).get("comparison"),
-        "command": f"python3 -m automation.gfx_case compare --case {case_dir}",
+        "command": f"python3 -m automation.agent_tools eu4_replay case --case {case_dir}",
         "note": "Re-run the offline comparator on the packaged payloads.",
     }
     _write_json(case_dir / "repro" / "repro.json", repro)
     (case_dir / "analysis.md").write_text(
-        _analysis(result, pair, comparison, classification, artifacts),
+        _analysis(result, pair, comparison, classification, frame_files),
         encoding="utf-8"
     )
     packaged = {
@@ -532,90 +435,6 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
     }
     _write_json(case_dir / "case.json", packaged)
     return packaged
-
-
-def compare_case(case_dir: Path, *, write: bool = True) -> dict:
-    """Re-run the offline comparator from the packaged repro description.
-
-    ``write`` defaults to the historical behaviour (a ``repro/comparison.json``
-    inside the case). Agent surfaces pass ``write=False`` so replaying evidence
-    discovered in another worktree never mutates it.
-    """
-    case_dir = Path(case_dir)
-    repro = _read_json(case_dir / "repro" / "repro.json")
-    if repro is None:
-        raise ValueError(f"no repro/repro.json in {case_dir}")
-    frames = repro.get("frames") or {}
-    reference = frames.get("reference")
-    candidate = frames.get("candidate")
-    if not reference or not candidate:
-        result = {"schema": "gfx-case-repro/v1", "status": INCOMPLETE,
-                  "reason": "both packaged raw frames are required"}
-    else:
-        policy = repro.get("policy") or {"policy": "tolerant"}
-        compare_policy = {
-            "policy": policy.get("policy", "tolerant"),
-            "pixel_tolerance": policy.get("max_channel_error", 0),
-            "max_mismatched_fraction": policy.get("max_mismatched_fraction", 0.0),
-            "max_mean_abs_error": policy.get("max_mean_abs_error", 0.0),
-            "allow_scale_normalization": policy.get(
-                "allow_scale_normalization", True),
-        }
-        reference_meta = {
-            "width": reference["width"], "height": reference["height"],
-            "origin": reference.get("origin"), "pixel_format": reference.get("pixel_format"),
-            "sha256": reference.get("sha256"),
-        }
-        candidate_meta = {
-            "width": candidate["width"], "height": candidate["height"],
-            "origin": candidate.get("origin"), "pixel_format": candidate.get("pixel_format"),
-            "sha256": candidate.get("sha256"),
-        }
-        try:
-            reference_bytes = Path(reference["path"]).read_bytes()
-            candidate_bytes = Path(candidate["path"]).read_bytes()
-            if reference.get("sha256") and gfx_frame_compare._sha256(
-                Path(reference["path"])
-            ) != reference["sha256"]:
-                raise ValueError("packaged reference frame digest does not match")
-            if candidate.get("sha256") and gfx_frame_compare._sha256(
-                Path(candidate["path"])
-            ) != candidate["sha256"]:
-                raise ValueError("packaged candidate frame digest does not match")
-            result = gfx_frame_compare.compare_payloads(
-                reference_bytes, reference_meta,
-                candidate_bytes, candidate_meta,
-                policy=compare_policy,
-                regions=policy.get("regions") or {},
-            )
-            result["schema"] = "gfx-case-repro/v1"
-        except (OSError, KeyError, TypeError, ValueError,
-                gfx_frame_compare.CompareError) as exc:
-            result = {"schema": "gfx-case-repro/v1", "status": INCOMPLETE,
-                      "reason": f"{type(exc).__name__}: {exc}"}
-    if write:
-        _write_json(case_dir / "repro" / "comparison.json", result)
-    return result
-
-
-def inspect_case(case_dir: Path) -> dict:
-    case_dir = Path(case_dir)
-    manifest = _read_json(case_dir / "manifest.json") or {}
-    result = _read_json(case_dir / "result.json") or {}
-    return {
-        "schema": SCHEMA,
-        "case_dir": str(case_dir),
-        "classification": result.get("classification"),
-        "session_id": manifest.get("session_id"),
-        "scenario": manifest.get("scenario"),
-        "stop": result.get("stop"),
-        "health": (result.get("health") or {}).get("verdict"),
-        "comparison_status": (result.get("comparison") or {}).get("status"),
-        "analysis": str(case_dir / "analysis.md"),
-        "files": sorted(
-            str(path.relative_to(case_dir)) for path in case_dir.rglob("*") if path.is_file()
-        ),
-    }
 
 
 def _parser():
@@ -637,13 +456,13 @@ def _parser():
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "build":
-        value = build_case(args.run, out_dir=args.out)
+        value = build_case(args.run, out_dir=args.out, pair_index=args.pair_index)
         print(json.dumps(value, indent=2))
         return 0
     if args.command == "compare":
-        print(json.dumps(compare_case(args.case), indent=2))
+        print(json.dumps(gfx_replay_case.compare_legacy_case(args.case), indent=2))
         return 0
-    print(json.dumps(inspect_case(args.case), indent=2))
+    print(json.dumps(gfx_replay_case.inspect_legacy_case(args.case), indent=2))
     return 0
 
 

@@ -573,15 +573,9 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
     request_path = execution_dir / "checkpoint-request.json"
     request_path.write_text(json.dumps(request, indent=2) + "\n")
     shaders = execution_dir / "shaders"
-    translation_cache = run_root / "cache" / "translation"
-    command = [
-        sys.executable, "-m", "automation.m6_frame", "translate",
-        "--frame", str(frame_dir), "--out", str(shaders),
-        "--cache-dir", str(translation_cache),
-    ]
-    translated = subprocess.run(
-        command, cwd=str(ROOT), capture_output=True, text=True,
-        timeout=300, check=False)
+    translated = m6_frame.translate_for_replay(
+        frame_dir, shaders, cache_dir=run_root / "cache" / "translation",
+        timeout=300)
     if translated.returncode != 0:
         raise PrefixCheckError(
             "trusted shader translation failed: "
@@ -625,11 +619,9 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
                 f"trusted replay host build failed: {exc}") from exc
     replay_dir = execution_dir / "metal"
     replay_dir.mkdir()
-    host_argv = [
-        "--frame", str(replay_input), "--shaders", str(shaders),
-        "--out", str(replay_dir), "--checkpoints", str(request_path),
-    ]
-    replay_command = [str(host), *host_argv]
+    replay_command = m6_frame.replay_host_command(
+        host, frame=replay_input, shaders=shaders, out=replay_dir,
+        checkpoints=request_path)
     # Serialize the trusted GPU execution host-wide.  A stop or an expired
     # operator deadline that happened while this execution waited for the lock
     # must prevent the replay host from starting.

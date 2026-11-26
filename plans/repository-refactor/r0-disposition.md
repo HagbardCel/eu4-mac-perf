@@ -114,6 +114,18 @@ The R7 gross set is `dsh/scripts/{m7-event3,run-campaign,run-pilot}.sh`, `automa
 
 The original R0 publication added **1,031 authored lines** against the pin. This amendment adds a net **96**, bringing R0 to **+1,127 LOC**. The planned cumulative enabling change is **−1,143 LOC** through R6 and **−3,103 LOC** through R7, excluding pure moves and new scientific development. Carry forward only verified removals and recalculate cumulatively after each PR. [Validation targets and measured opportunity](r0-measurements.md#optimization-budget)
 
+### R2b completion record
+
+The operator approved the functional implementation at [`07453ebc`](https://github.com/HagbardCel/eu4-mac-perf/commit/07453ebc4a3ad4294311995babfc6f65f408331d). On that head the focused OpenGL gate passed 170 tests, the full native rerun `20261126T183651Z-86e8d36b` passed 4,433 executed tests, and portable CI passed 3,919 executed tests. The authority was independently approved after native execution, then verified with the registered operator key on the 16-pixel synthetic reference. The protected M5–M7 and November 14 dual-run execution records retain their original revision identities. [Independent review and final verification](https://github.com/HagbardCel/eu4-mac-perf/pull/304) · [Portable CI](https://github.com/HagbardCel/eu4-mac-perf/actions/runs/45842694018) · [OpenGL evidence](../../docs/evidence-retention.md#r2b-opengl-authority)
+
+The original planning estimate remains **−560 LOC**. R2a brought forward 61 lines of consolidation, leaving **−499 LOC** for R2b. Against `21f15f4c`, the reviewed implementation recorded 1,144 additions and 1,267 deletions, **−123 net LOC**, a **376-line shortfall**. The closure records add **27** net documentation lines, for **−96 net LOC** and a **403-line shortfall** in the full PR. Pure moves and local evidence bytes are excluded. Distinct execution, provenance and qualification checks, the maintained deployment, and their regression coverage account for retained responsibilities. [R2a carry-forward record](https://github.com/HagbardCel/eu4-mac-perf/pull/303)
+
+**R2b complete.** The operator explicitly approved the savings-target exception for PR #304.
+
+### R5a test reliability observation
+
+On `07453ebc`, initial native gate `20261126T144935Z-166da0a9` failed `BoundedWorkerTests.test_worker_hanging_halfway_through_a_sequence_is_bounded`. The test expected frame 1 before the timeout and recorded no frames. All 68 supervisor tests passed separately on reviewed base `459dad5c` (`20261126T183006Z-24590b1a`) and candidate `07453ebc` (`20261126T145849Z-0a9d96ad`). The same candidate passed the complete native rerun `20261126T183651Z-86e8d36b`. R5a owns follow-up on this timing-sensitive observation. [Verification record](https://github.com/HagbardCel/eu4-mac-perf/pull/304)
+
 ## Reproducible family selectors
 
 Apply the first matching regular expression to each tracked path from the pinned Git snapshot. The final selector covers the 13 top-level controls, indexes and historical reports. Regenerate LOC and logical bytes using the [audit recipe](r0-audit.md#reproducibility).

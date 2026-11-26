@@ -1692,32 +1692,50 @@ class SamplerBindingValidationTests(unittest.TestCase):
 class ShippedAuthorityRegistryTests(unittest.TestCase):
     """The production registry pins exactly the reviewed renderer."""
 
-    def test_the_shipped_registry_pins_the_reviewed_renderer(self):
-        self.assertEqual(
-            authorities.SCHEMA,
-            "gfx-gl-control-renderer-authorities/v2")
-        self.assertEqual(len(authorities.AUTHORITIES), 1)
-        digest, entry = next(iter(authorities.AUTHORITIES.items()))
-        self.assertEqual(len(digest), 64)
-        self.assertEqual(_sha(Path(qualification.__file__).parents[1]
-                              / "automation"
-                              / "gfx_gl_control_renderer.py"), digest)
-        self.assertEqual(entry["name"], "m7-original-gl-control")
-        self.assertEqual(entry["api"], "opengl")
-        self.assertTrue(entry["qualified"])
-        self.assertIn("independent review of exact head", entry["qualified_by"])
-        self.assertEqual(len(entry["public_key"]), 64)
-        roles = {item["role"]: item["sha256"] for item in entry["components"]}
-        self.assertEqual(set(roles), {"native-gl-executor",
-                                      "replay-input-verifier",
-                                      "receipt-signer"})
+    def test_the_shipped_registry_pins_both_reviewed_renderers(self):
+        from automation import native_build
+
+        self.assertEqual(authorities.SCHEMA, "gfx-gl-control-renderer-authorities/v2")
         root = Path(qualification.__file__).parents[1]
-        self.assertEqual(
-            roles["replay-input-verifier"],
-            _sha(root / "automation" / "gfx_gl_replay_input.py"))
-        self.assertEqual(
-            roles["receipt-signer"],
-            _sha(root / "automation" / "gfx_ed25519.py"))
+        driver = root / "automation/gfx_gl_control_renderer.py"
+        historical = "19f819b444738888b84ddbbb68e413af0e908ba35c738db5811d689257b8b70b"
+        replacement = "153fd9647236bde7eb1b60d91074fa0f3370d22782d62c5e88718f79d6cb3feb"
+        self.assertEqual(_sha(driver), historical)
+        self.assertEqual(hashlib.sha256(driver.read_bytes() + native_build._GL_DRIVER_SUFFIX)
+                         .hexdigest(), replacement)
+        expected_native = {
+            historical: "254618ef8ab232fd1b3c42e6186d642702e714e70d79c92f6d2d908cfa3abc7a",
+            replacement: "092a3cdb9075974116fbf8458e7375b83e04d619872a23f1323744a3509cb617",
+        }
+        self.assertEqual(set(authorities.AUTHORITIES), set(expected_native))
+        self.assertEqual(native_build._GL_DRIVER_SHA256, replacement)
+        self.assertEqual(native_build._GL_EXECUTABLE_SHA256, expected_native[replacement])
+        components = {
+            "replay-input-verifier": "6c93974f4df9612c45c0645ad27a0d6cd5b3a7885ea2b6829be43b5401c02166",
+            "receipt-signer": "52e03dd0c0b80c10c4e8acf2f72d4307a07c2c0321a06bd1107e0903f3ffa3b4",
+        }
+        self.assertEqual(_sha(root / "automation/gfx_gl_replay_input.py"),
+                         components["replay-input-verifier"])
+        self.assertEqual(_sha(root / "automation/gfx_ed25519.py"), components["receipt-signer"])
+        for digest, executor in expected_native.items():
+            with self.subTest(digest=digest):
+                entry = authorities.AUTHORITIES[digest]
+                self.assertEqual(entry["name"], "m7-original-gl-control")
+                self.assertEqual(entry["api"], "opengl")
+                self.assertEqual(entry["public_key"],
+                                 "b129e1bcd834600e8a3986159b7d9a540d1951f09f30ce3bfd4881844247a727")
+                self.assertTrue(qualification._load_authority(digest)["qualified"])
+                self.assertEqual(len(entry["components"]), 3)
+                self.assertEqual({row["role"]: row["sha256"] for row in entry["components"]},
+                                 {**components, "native-gl-executor": executor})
+        self.assertEqual(authorities.AUTHORITIES[historical]["qualified_by"],
+                         "independent review of exact head 283c3e12: review-fixes and "
+                         "review-integrated (DSH subagents), both APPROVE; see "
+                         "analysis/m7/final-review-279.md")
+        review = authorities.AUTHORITIES[replacement]["qualified_by"]
+        self.assertIn("independent native review by native_authority_review", review)
+        self.assertIn("459dad5c613eaf74d96cc1465da6e4097f435599", review)
+        self.assertIn("e8816ecb0aaf6ee1c5c2ea5fe89ec914f39ec30bf62ecb34032e9c5973283db0", review)
 
     def test_an_arbitrary_renderer_digest_is_refused_without_a_registry_entry(self):
         authority = qualification._load_authority("f" * 64)

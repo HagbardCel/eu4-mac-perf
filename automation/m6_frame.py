@@ -32,6 +32,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from automation import (  # noqa: E402
@@ -706,7 +707,7 @@ def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
     if verify_blobs:
         blobs: dict[str, str] = {}
         for event in events:
-            members = list(_iter_blob_members(event))
+            members = list(iter_blob_members(event))
             # Vertex attribute payloads use "data" rather than "file".
             for attribute in event.get("attributes") or []:
                 if isinstance(attribute, dict) and attribute.get("data"):
@@ -731,7 +732,7 @@ def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
                 blobs[name] = digest
         if prefix is not None:
             for record in prefix["records"]:
-                for member in _iter_blob_members(record):
+                for member in iter_blob_members(record):
                     blob_name = member.get("file")
                     if not blob_name or blob_name in blobs:
                         continue
@@ -943,18 +944,6 @@ def load_notification(output: Path) -> dict:
     if notification.get("verified_reference") is not True:
         raise FrameError("consumer could not verify the sealed reference")
     return notification
-
-
-def _iter_blob_members(value):
-    """Yields every dict that declares a blob file, recursively."""
-    if isinstance(value, dict):
-        if isinstance(value.get("file"), str) and value.get("file"):
-            yield value
-        for item in value.values():
-            yield from _iter_blob_members(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _iter_blob_members(item)
 
 
 def coverage_report(trace: dict) -> dict:
@@ -2144,6 +2133,30 @@ def snapshot_replay_host(host: Path | str | None = None,
         "replay host changed repeatedly while creating the per-run snapshot")
 
 
+@contextmanager
+def replay_host_snapshot(host: Path):
+    """Keep the attested executable available through receipt production."""
+    snapshot, producer = snapshot_replay_host(host)
+    try:
+        yield snapshot, producer
+    finally:
+        snapshot.unlink(missing_ok=True)
+
+
+def replay_host_command(host: Path, *, shaders: Path, out: Path,
+                        frame: Path | None = None, frames: list[Path] | None = None,
+                        checkpoints: Path | None = None) -> list[str]:
+    """Build the invocation shared by the Metal replay CLI and its callers."""
+    if (frame is None) == (frames is None):
+        raise ValueError("provide one Metal replay frame or sequence")
+    workload = (["--frame", str(frame)] if frame is not None
+                else ["--sequence", ",".join(map(str, frames))])
+    command = [str(host), *workload, "--shaders", str(shaders), "--out", str(out)]
+    if checkpoints is not None:
+        command += ["--checkpoints", str(checkpoints)]
+    return command
+
+
 def build_replay_host(force: bool = False) -> Path:
     """Build and publish the replay host under a narrow exclusive lock.
 
@@ -2445,6 +2458,20 @@ def _publish_translation_cache(source: Path, cache_root: Path,
             shutil.rmtree(partial, ignore_errors=True)
 
 
+def translate_for_replay(frame: Path, out: Path, *, timeout: float,
+                         cache_dir: Path | None = None, force: bool = False
+                         ) -> subprocess.CompletedProcess:
+    """Invoke the same checked translator used by the standalone CLI."""
+    command = [sys.executable, "-m", "automation.m6_frame", "translate",
+               "--frame", str(frame), "--out", str(out)]
+    if cache_dir is not None:
+        command += ["--cache-dir", str(cache_dir)]
+    if force:
+        command.append("--force")
+    return subprocess.run(command, cwd=str(ROOT), capture_output=True,
+                          text=True, timeout=timeout, check=False)
+
+
 def translate_command(args: argparse.Namespace) -> int:
     from automation import gfx_shader_translate
 
@@ -2691,15 +2718,7 @@ def _replay_command_body(args: argparse.Namespace,
         _replay_mark(evidence, status="error", reason=str(exc))
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
-    command = [
-        str(host),
-        "--frame",
-        str(frame_dir),
-        "--shaders",
-        str(shaders),
-        "--out",
-        str(out),
-    ]
+    command = replay_host_command(host, frame=frame_dir, shaders=shaders, out=out)
     if args.stop_after is not None:
         command += ["--stop-after", str(args.stop_after)]
     if args.seed_marked:
@@ -2755,7 +2774,6 @@ def _replay_command_body(args: argparse.Namespace,
         child_env.pop("EU4_FRAME_REPLAY_UV2_PROBE_VARYING", None)
         child_env.update(EU4_FRAME_REPLAY_UV2_PROBE_PIXELS=sparse_uv2,
                          EU4_FRAME_REPLAY_UV2_PROBE_PRIMITIVES=sparse_primitives)
-    producer = None
     from automation import launch_lease
 
     with launch_lease.gpu_execution():
@@ -2768,16 +2786,12 @@ def _replay_command_body(args: argparse.Namespace,
             print(f"replay refused: {exc.kind}: {exc.detail}",
                   file=sys.stderr)
             return 3
-        snapshot = None
-        try:
-            if sparse_uv2:
-                snapshot, producer = snapshot_replay_host(host)
-                command[0] = str(snapshot)
+        executable = (replay_host_snapshot(host) if sparse_uv2
+                      else nullcontext((host, None)))
+        with executable as (path, producer):
+            command[0] = str(path)
             ran = subprocess.run(command, capture_output=True, text=True,
                                  check=False, timeout=1200, env=child_env)
-        finally:
-            if snapshot is not None:
-                snapshot.unlink(missing_ok=True)
     result_path = out / "replay.json"
     if ran.returncode != 0 or not result_path.is_file():
         _replay_mark(evidence, status="error", returncode=ran.returncode,
@@ -3334,9 +3348,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
     overall_deadline = time.monotonic() + args.timeout
     seal_deadline = min(overall_deadline, time.monotonic() + args.seal_timeout)
     seal_path = frame_dir / "frame-seal.json"
-    while not seal_path.is_file() and time.monotonic() < seal_deadline:
-        time.sleep(0.1)
-    if not seal_path.is_file():
+    if not _wait_for_path(seal_path, seal_deadline):
         result["status"] = "failed"
         result["error"] = "frame seal did not appear"
         (shadow / "coordinator.json").parent.mkdir(parents=True, exist_ok=True)
@@ -3372,27 +3384,10 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
             )
             return 1
     try:
-        translated = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "automation.m6_frame",
-                "translate",
-                "--frame",
-                str(frame_dir),
-                "--out",
-                str(shader_dir),
-                "--force",
-            ],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=min(
-                args.translation_timeout,
-                max(0.0, overall_deadline - time.monotonic()),
-            ),
-            check=False,
-        )
+        translated = translate_for_replay(
+            frame_dir, shader_dir, force=True,
+            timeout=min(args.translation_timeout,
+                        max(0.0, overall_deadline - time.monotonic())))
     except subprocess.TimeoutExpired:
         result["status"] = "failed"
         result["error"] = "shader translation timed out"
@@ -3760,14 +3755,10 @@ def _continuous_frame_coordinator(
         raise FrameError(f"frame {frame_index} seal did not appear")
     seal = load_seal(frame_dir)
     cache_dir = shadow / "translation-cache"
-    translated = subprocess.run(
-        [sys.executable, "-m", "automation.m6_frame", "translate",
-         "--frame", str(frame_dir), "--out", str(shader_dir),
-         "--cache-dir", str(cache_dir)],
-        cwd=str(ROOT), capture_output=True, text=True,
+    translated = translate_for_replay(
+        frame_dir, shader_dir, cache_dir=cache_dir,
         timeout=max(0.0, min(args.translation_timeout,
-                             overall_deadline - time.monotonic())),
-        check=False)
+                             overall_deadline - time.monotonic())))
     if translated.returncode != 0:
         raise FrameError(f"frame {frame_index} shader translation failed")
     graph = gfx_frame_graph.build(frame_dir)
