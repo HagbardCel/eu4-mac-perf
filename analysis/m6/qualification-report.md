@@ -145,6 +145,21 @@ delta, so it is supporting evidence and not one of the three final starts.
 shows the reflected labels; the corrected final frames are
 `.local/m6/live-start{3,4,5}/run-1/swap-frame.bgra` and the tight crops above.
 
+## Orientation fixtures and historical images
+
+The [orientation regression](../../tests/test_m6_live_accept.py#L299) ran against three tracked fixtures and the original `menu-occ300` reference PNG (2,829,688 bytes, SHA-256 `2470062bdc49dcbabb8d02ea0395a8697390aa42c6f89fc429658a6a14a87fbe`). Restore it from the independent audit-host copy `.local/r1b-evidence/m6/menu-occ300/frame-reference.png` to `.local/m6/frames/menu-occ300/frame/frame-reference.png`. The [historical frame manifest](menu-frame-evidence.json) retains its exact base Git bytes (SHA-256 `73c32a9d3d63c558cab149bdff9ec87fdaade1ca910e1bc029a903e07a1949dc`).
+
+The three historical screenshots below were recovered individually from
+`bb2eeaf80aeb239b721bd94687c13820146c3b4c` and matched the checkout bytes.
+The retained reports, manifests and tests use other files. Retrieve one with
+`git show bb2eeaf8:analysis/m6/<filename>` and check its digest.
+
+| Screenshot | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `live-title-final.png` | 9,338,262 | `8aec716b54f1463f940cd3c642d0e896b5967f31f27a514b5a46408c0569ffcd` |
+| `live-title-metal.png` | 2,168,942 | `09ffe3fdf6af563ddd41d405bffd00a4212e2f1f6028561734f51e62d9fa6f74` |
+| `live-title-metal-postfix.png` | 12,009,448 | `9c570db929fdd68c3f8aa535d1032c9cc3d990f2f2c1abc741c4e5a0b65d592e` |
+
 ## Three fresh independent starts
 
 The acceptance evidence is [live-acceptance.json](live-acceptance.json) and

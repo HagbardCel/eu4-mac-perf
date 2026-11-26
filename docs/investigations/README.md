@@ -21,7 +21,6 @@ their canonical results and current limits live in [../status.md](../status.md)
 and the active documents above. The removed text remains in git history; no
 measured evidence was deleted.
 
-`docs/repo-lifecycle.csv`, `docs/repo-inventory.csv`, `docs/repo-edges.csv` and
-`docs/repo-map.md` are generated snapshots pinned by `docs/repo-audit-context.json`
-(`source.ref`), not assertions about the current tree. Regenerate with
-`python3 -m tooling.common.repo_audit --write`; do not edit them by hand.
+The frozen P1 inventory, dependency edges and lifecycle table are recoverable
+from the publication commit. Generate current views in a disposable
+worktree. [Audit recovery and generation](../repo-map.md)

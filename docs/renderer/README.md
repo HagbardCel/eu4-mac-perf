@@ -1,7 +1,9 @@
 # Renderer knowledge
 
-Start with [project status](../status.md) for current capabilities and with
-[harness operations](../harness.md) for commands and recovery.
+Start with [project status](../status.md) for current capabilities,
+[harness operations](../harness.md) for commands, and
+[protected evidence](../evidence-retention.md#protected-collections-and-recovery-status)
+for recovery status.
 
 ## Components and backends
 
@@ -54,10 +56,9 @@ The six dossier families describe 92 functions at the static semantic level.
   [Recorded-original certificate](../../results/20261025T155406Z-gfx-live-cert/tier1-certificate.json) ·
   [Coverage audit](../../results/20261025T155406Z-gfx-live-analysis/e1-coverage-audit.md)
 
-  All 64 raw transcripts were unavailable at their recorded path during R0.
-  R1b owns recovery and validation from operator archive
+  All 64 raw transcripts remain outstanding from operator archive
   `pr-d-gfx-live-20261025T155406Z`.
-  [R0 recovery obligation](../../plans/repository-refactor/r0-evidence.md#protected-evidence) ·
+  [Recovery status](../evidence-retention.md#protected-collections-and-recovery-status) ·
   [Archive identity](../../results/20261025T155406Z-gfx-live-publication/publication-summary.md#operator-archive)
 
 - **`_GfxForceWireframe` · RVA `0x15ed175`.** The static contract establishes
@@ -73,6 +74,7 @@ The six dossier families describe 92 functions at the static semantic level.
 | --- | --- | --- |
 | Submission · paused-Venice observer | The completed run found zero eligible buffer-bind pairs in every phase. The observer and engagement gates failed for the tested workload and predicate. | [Observer smoke and registered run](../../analysis/gfx-subrecord-pr1-gonogo.md#pr2-observer-smoke-2026-10-04-complete--engagement-failed) |
 | Textures · present 904 | At checkpoint 15, original compressed blocks yielded 4 differing pixels versus 858 from the decoded variant, both compared with the same sealed original. The decoded variant used a transformed scratch copy. The four-pixel residual remains unexplained. | [Same-capture texture comparison](../../analysis/harness-remediation/compressed-904.md#results) |
+| Original GL and Metal · M4 Simple draw | The fixed logical comparison of `gl-reference-07` and the recorded Metal output matched all 1,930,176 pixels. Window visibility was verified separately. | [Qualification and evidence](../../analysis/m4/qualification-report.md) |
 | Metal replay · M6 `menu-occ300` | Captured-state replay encoded 326 events and matched all 1,930,176 pixels including alpha against `ff2f4e2b…`. Upstream terrain re-rendering falls outside this result. | [Captured-state replay and reference identity](../../analysis/m6/qualification-report.md#offline-captured-state-replay) |
 | Metal replay · M7 exact prefix | The trusted R0 replay of seal `47590918…` matched through event 0. Event 1 on RGB8 `tex:433` differed at 23 RGB pixels, with maximum channel error 1. Depth is diagnostic and the cause is open. | [R0 replay and event-1 coverage](../../plans/repository-refactor/r0-audit.md#event-1-observable-matrix) · [Independent prefix checker](../../automation/gfx_prefix_check.py) |
 | M7 event 1 · axial displacement | All four one-pixel axial directions fell below the matched null for the historical 20-pixel candidate on `47590918…`. The falsification covers those directions on that candidate. | [Matched-null experiment](../../analysis/m7/event1-investigation.md#experiments) |

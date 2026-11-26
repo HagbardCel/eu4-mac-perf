@@ -2,7 +2,6 @@
 """Tests for the repository audit tooling (inventory, graph, lifecycle)."""
 import csv
 import io
-import json
 import shutil
 import subprocess
 import sys
@@ -13,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tooling.common import repo_audit, repo_graph, repo_inventory, repo_lifecycle  # noqa: E402
+from tooling.common import repo_graph, repo_inventory, repo_lifecycle  # noqa: E402
 from tooling.common import repo_snapshot as snapshot_mod  # noqa: E402
 
 GIT = shutil.which("git")
@@ -583,21 +582,6 @@ class RealRepoAuditTests(unittest.TestCase):
             if r["path"].startswith("results/") and r["evidence_qualification"] == "preserved_historical_evidence"
         ]
         self.assertTrue(others, "expected unqualified preserved evidence under results/")
-
-    def test_committed_artifacts_reproduce(self):
-        context_path = ROOT / "docs" / "repo-audit-context.json"
-        if not context_path.exists():
-            self.skipTest("no committed audit artifacts")
-        context = json.loads(context_path.read_text(encoding="utf-8"))
-        ref = context["source"]["ref"]
-        outputs, _stats = repo_audit.generate(ROOT, ref, False, repo_lifecycle.DEFAULT_POLICY_PATH)
-        block = outputs.pop("__map_block__")
-        for relpath, content in outputs.items():
-            self.assertEqual((ROOT / relpath).read_text(encoding="utf-8"), content, relpath)
-        map_text = (ROOT / "docs" / "repo-map.md").read_text(encoding="utf-8")
-        start = map_text.index(repo_audit.BEGIN_MARKER) + len(repo_audit.BEGIN_MARKER)
-        end = map_text.index(repo_audit.END_MARKER)
-        self.assertEqual(map_text[start:end].strip(), block.strip())
 
 
 if __name__ == "__main__":
