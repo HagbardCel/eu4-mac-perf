@@ -113,7 +113,9 @@ input verifier and receipt signer for the default-framebuffer route. Run
 `python3.14 -m automation.native_build gl-control` to deploy the pinned pair.
 The [operator invocation](../agent-tools.md#eu4_capture) uses both reported
 paths and the authorized signing-key file. The [native review record](https://github.com/HagbardCel/eu4-mac-perf/pull/304)
-records the toolchain and tested signed synthetic draw.
+records the toolchain and tested signed synthetic draw. The [authority evidence inventory](../evidence-retention.md#r2b-opengl-authority)
+locates the retained native review, exact executables, and the synthetic and
+production receipts.
 
 Historical driver `19f819b4…`, executor `254618ef…` and their component
 bindings remain available for validating older receipts with the recorded
