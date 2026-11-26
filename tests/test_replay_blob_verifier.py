@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
-CORE = BENCH / "eu4_gfx_frame_replay.mm"
+CORE = ROOT / "renderer/metal" / "eu4_gfx_frame_replay.mm"
 HOST = ROOT / "tests" / "gfx_replay_blob_host.mm"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))

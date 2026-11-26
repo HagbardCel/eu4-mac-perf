@@ -25,8 +25,8 @@ if str(ROOT) not in sys.path:
 
 from automation import m6_compare, m6_frame, native_build  # noqa: E402
 
-CORE = BENCH / "eu4_gfx_frame_replay.mm"
-CLI = BENCH / "eu4_gfx_frame_replay_cli.mm"
+CORE = ROOT / "renderer/metal" / "eu4_gfx_frame_replay.mm"
+CLI = ROOT / "renderer/metal" / "eu4_gfx_frame_replay_cli.mm"
 ABI_HOST = ROOT / "tests" / "gfx_metal_replay_abi_host.mm"
 SHADOW_BRIDGE = BENCH / "eu4_gfx_shadow_bridge.mm"
 SHADOW_REPORT_HOST = ROOT / "tests" / "gfx_shadow_report_host.mm"

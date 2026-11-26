@@ -18,7 +18,7 @@ EU4 (original OpenGL, authoritative)
 
 Entry points: [frame trace](../../benchmark/eu4_gfx_frame_trace.c),
 [shadow bridge](../../benchmark/eu4_gfx_shadow_bridge.mm),
-[replay core](../../benchmark/eu4_gfx_frame_replay.mm),
+[replay core](../../renderer/metal/eu4_gfx_frame_replay.mm),
 [independent replay](../../automation/gfx_independent_replay.py),
 [continuous supervisor](../../automation/m7_continuous.py).
 

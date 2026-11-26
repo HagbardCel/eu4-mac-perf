@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
 from automation import m7_continuous, native_build  # noqa: E402
 BENCH = ROOT / "benchmark"
 HOST = ROOT / "tests" / "gfx_metal_replay_abi_host.mm"
-CORE = BENCH / "eu4_gfx_frame_replay.mm"
+CORE = ROOT / "renderer/metal" / "eu4_gfx_frame_replay.mm"
 
 
 def _sha(path: Path) -> str:

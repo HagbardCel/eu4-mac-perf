@@ -28,11 +28,11 @@ The six dossier families describe 92 functions at the static semantic level.
 | Family | Maintained implementation and evidence |
 | --- | --- |
 | [Init, context and presentation](../../analysis/reconstruction/gfx-semantic/v1/init/) | [Native lifecycle hooks](../../benchmark/eu4_gfx_init.mm) |
-| [Buffers](../../analysis/reconstruction/gfx-semantic/v1/buffers/) | [Native buffer code](../../benchmark/eu4_gfx_buffers.mm) |
-| [Shaders and uniforms](../../analysis/reconstruction/gfx-semantic/v1/shaders/) | [Shader lifecycle](../../benchmark/eu4_gfx_shader.mm) · [Translation](../../automation/gfx_shader_translate.py) |
-| [Textures, targets and resolves](../../analysis/reconstruction/gfx-semantic/v1/textures/) | [Native texture code](../../benchmark/eu4_gfx_texture.mm) |
-| [Render state](../../analysis/reconstruction/gfx-semantic/v1/state/) | [Faithful replay state](../../benchmark/eu4_gfx_frame_replay.mm) |
-| [Draw and submission](../../analysis/reconstruction/gfx-semantic/v1/draw/) | [Metal encoder](../../benchmark/eu4_gfx_draw_encode.mm) · [Independent replay](../../automation/gfx_independent_replay.py) |
+| [Buffers](../../analysis/reconstruction/gfx-semantic/v1/buffers/) | [Native buffer code](../../renderer/metal/eu4_gfx_buffers.mm) |
+| [Shaders and uniforms](../../analysis/reconstruction/gfx-semantic/v1/shaders/) | [Shader lifecycle](../../renderer/metal/eu4_gfx_shader.mm) · [Translation](../../automation/gfx_shader_translate.py) |
+| [Textures, targets and resolves](../../analysis/reconstruction/gfx-semantic/v1/textures/) | [Native texture code](../../renderer/metal/eu4_gfx_texture.mm) |
+| [Render state](../../analysis/reconstruction/gfx-semantic/v1/state/) | [Faithful replay state](../../renderer/metal/eu4_gfx_frame_replay.mm) |
+| [Draw and submission](../../analysis/reconstruction/gfx-semantic/v1/draw/) | [Metal encoder](../../renderer/metal/eu4_gfx_draw_encode.mm) · [Independent replay](../../automation/gfx_independent_replay.py) |
 
 ### Initial function entries
 

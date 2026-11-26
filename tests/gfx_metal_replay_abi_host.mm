@@ -5,7 +5,7 @@
  */
 #import <Foundation/Foundation.h>
 
-#include "eu4_gfx_metal_replay.h"
+#include "../renderer/metal/eu4_gfx_metal_replay.h"
 
 #include <stdio.h>
 #include <stdlib.h>

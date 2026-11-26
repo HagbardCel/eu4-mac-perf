@@ -1,4 +1,4 @@
-#include "eu4_gfx_replay_semantics.h"
+#include "../renderer/engine/eu4_gfx_replay_semantics.h"
 #include <stdio.h>
 
 int main(void) {

@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST_SOURCE = ROOT / "tests" / "gfx_shader_host.mm"
-SHADER = ROOT / "benchmark" / "eu4_gfx_shader.mm"
+SHADER = ROOT / "renderer/metal" / "eu4_gfx_shader.mm"
 EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
 HOST = ROOT / "benchmark" / ".build" / "gfx_shader_host"
 

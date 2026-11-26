@@ -22,16 +22,17 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
 HOST_SOURCE = ROOT / "tests" / "gfx_m5_replay_host.mm"
 HOST = BENCH / ".build" / "gfx_m5_replay_host"
-HEADERS = sorted(BENCH.glob("*.h"))
+METAL = ROOT / "renderer/metal"
+HEADERS = sorted(BENCH.glob("*.h")) + sorted(METAL.glob("*.h"))
 SOURCES = [
-    BENCH / "eu4_gfx_shader.mm",
-    BENCH / "eu4_gfx_buffers.mm",
-    BENCH / "eu4_gfx_texture.mm",
+    METAL / "eu4_gfx_shader.mm",
+    METAL / "eu4_gfx_buffers.mm",
+    METAL / "eu4_gfx_texture.mm",
     BENCH / "eu4_gfx_init.mm",
     BENCH / "eu4_gfx_frame_observe.c",
-    BENCH / "eu4_gfx_simple_draw.mm",
-    BENCH / "eu4_gfx_sprite_draw.mm",
-    BENCH / "eu4_gfx_draw_encode.mm",
+    METAL / "eu4_gfx_simple_draw.mm",
+    METAL / "eu4_gfx_sprite_draw.mm",
+    METAL / "eu4_gfx_draw_encode.mm",
     BENCH / "eu4_gfx_logical_capture.mm",
     BENCH / "eu4_metal_events.c",
 ]

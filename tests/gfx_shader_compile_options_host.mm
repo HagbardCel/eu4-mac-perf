@@ -1,5 +1,5 @@
 /* Exercise the actual in-process function cache with a CPU-only fake compiler. */
-#include "../benchmark/eu4_gfx_frame_replay.mm"
+#include "../renderer/metal/eu4_gfx_frame_replay.mm"
 
 #include <assert.h>
 

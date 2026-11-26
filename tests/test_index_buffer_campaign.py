@@ -129,7 +129,7 @@ class IndexReceiptTests(unittest.TestCase):
 @unittest.skipUnless(sys.platform == "darwin", "Metal index-buffer checker runs on macOS")
 class IndexCheckerTests(unittest.TestCase):
     def test_candidate_header_edit_is_visible(self) -> None:
-        observed, detail = accept.header_edit_observed(ROOT / "benchmark" / "eu4_gfx_buffers.h")
+        observed, detail = accept.header_edit_observed(ROOT / "renderer/metal" / "eu4_gfx_buffers.h")
         self.assertTrue(observed, detail)
 
     def test_unmodified_worktree_fails_for_missing_registration(self) -> None:

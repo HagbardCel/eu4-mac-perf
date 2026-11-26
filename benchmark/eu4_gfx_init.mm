@@ -1,6 +1,6 @@
-#import "eu4_gfx_buffers.h"
+#import "../renderer/metal/eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
-#import "eu4_gfx_texture.h"
+#import "../renderer/metal/eu4_gfx_texture.h"
 
 /* Hosts that link this file without the shader module must still link; the
    runtime cache is optional for the lifecycle-only diagnostics, so it is

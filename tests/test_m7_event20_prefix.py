@@ -1151,7 +1151,7 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
         return workspace, sidecar_path
 
     def _patch_replay(self, workspace: Path, body: str) -> None:
-        path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
+        path = workspace / "renderer/metal" / "eu4_gfx_frame_replay.mm"
         source = path.read_text()
         anchor = (
             "static void run_checkpoint_readbacks(NSArray *items, NSUInteger index,\n"
@@ -1205,7 +1205,7 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
         self._patch_replay(workspace, self._attack_body())
         # The attack needs an absolute replay-input path.  It is deliberately
         # absent from the sanitized frame the candidate receives.
-        replay_path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
+        replay_path = workspace / "renderer/metal" / "eu4_gfx_frame_replay.mm"
         source = replay_path.read_text()
         anchor = "#import <Metal/Metal.h>\n"
         self.assertIn(anchor, source)
@@ -1243,7 +1243,7 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
     def test_external_candidate_include_is_not_attested(self):
         base = Path(tempfile.mkdtemp(dir=self.temporary.name))
         workspace, sidecar = self._candidate()
-        path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
+        path = workspace / "renderer/metal" / "eu4_gfx_frame_replay.mm"
         path.write_text(path.read_text() + '\n#include "/etc/passwd"\n')
         result = gfx_prefix_check.evaluate(
             self.frame, None, require_end=0, trusted_execution=True,
@@ -1256,10 +1256,10 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
         self.assertFalse((base / "run").exists())
 
     def _assert_patch_built(self, result: dict, workspace: Path) -> None:
-        expected = _sha(workspace / "benchmark" / "eu4_gfx_frame_replay.mm")
+        expected = _sha(workspace / "renderer/metal" / "eu4_gfx_frame_replay.mm")
         self.assertEqual(
             result["execution"]["candidate"]["source_digests"][
-                "benchmark/eu4_gfx_frame_replay.mm"], expected)
+                "renderer/metal/eu4_gfx_frame_replay.mm"], expected)
 
     def test_checkpoint_output_interception_is_caught(self):
         workspace, sidecar = self._candidate()
@@ -1311,7 +1311,7 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
             for path in (first_execution / "metal").glob("*.bgra")
         }
         # A second candidate revision changes checkpoint bytes by one byte.
-        replay_path = workspace / "benchmark" / "eu4_gfx_frame_replay.mm"
+        replay_path = workspace / "renderer/metal" / "eu4_gfx_frame_replay.mm"
         source = replay_path.read_text().replace(
             "        if (capture_target_to_file(info, path, &checkpoint_error,\n",
             "        if (capture_target_to_file(info, path, &checkpoint_error,\n",
@@ -1548,11 +1548,11 @@ class ExecutionReceiptTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
-        source = root / "benchmark" / "eu4_gfx_frame_replay.mm"
+        source = root / "renderer/metal" / "eu4_gfx_frame_replay.mm"
         source.parent.mkdir(parents=True)
         source.write_text("// baseline\n")
         for header in ("eu4_gfx_frame_replay_cli.mm",):
-            (root / "benchmark" / header).write_text("// cli\n")
+            (source.parent / header).write_text("// cli\n")
         before = gfx_prefix_check._candidate_source_digests(root)
         source.write_text("// changed\n")
         after = gfx_prefix_check._candidate_source_digests(root)

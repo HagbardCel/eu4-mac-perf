@@ -1,4 +1,4 @@
-#import "eu4_gfx_buffers.h"
+#import "../renderer/metal/eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
 #import "eu4_metal_events.h"
 

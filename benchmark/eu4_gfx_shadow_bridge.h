@@ -2,7 +2,7 @@
 #define EU4_GFX_SHADOW_BRIDGE_H
 
 #include "eu4_gfx_frame_seal.h"
-#include "eu4_gfx_metal_replay.h"
+#include "../renderer/metal/eu4_gfx_metal_replay.h"
 
 /* Opt-in in-process single-frame Metal shadow bridge.
  *

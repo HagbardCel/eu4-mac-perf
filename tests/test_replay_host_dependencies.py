@@ -20,64 +20,59 @@ class DependencyClosureTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
-        self.bench = self.root / "benchmark"
-        self.bench.mkdir()
-        self.semantics = self.bench / "eu4_gfx_replay_semantics.h"
-        self.nested = self.bench / "nested.h"
-        self.metal = self.bench / "eu4_gfx_metal_replay.h"
-        self.replay = self.bench / "eu4_gfx_frame_replay.mm"
-        self.cli = self.bench / "eu4_gfx_frame_replay_cli.mm"
-        self.semantics.write_text('#include "nested.h"\n')
-        self.nested.write_text("nested\n")
-        self.metal.write_text("metal\n")
-        self.replay.write_text(
-            '#include "eu4_gfx_replay_semantics.h"\n'
-            '#include "eu4_gfx_metal_replay.h"\n')
-        self.cli.write_text(
-            '#include "eu4_gfx_metal_replay.h"\n'
-            "#include <stdio.h>\n")
+        metal = self.root / "renderer/metal"
+        engine = self.root / "renderer/engine"
+        metal.mkdir(parents=True)
+        engine.mkdir()
+        self.semantics = engine / "nested.h"
+        self.semantics.write_text("// engine semantics\n")
+        header = metal / "eu4_gfx_metal_replay.h"
+        header.write_text('#include "../engine/nested.h"\n')
+        for relative in replay_host_dependencies.REPLAY_SOURCES:
+            (self.root / relative).write_text(
+                '#include "eu4_gfx_metal_replay.h"\n#include <stdio.h>\n')
 
     def tearDown(self):
         self.temporary.cleanup()
 
-    def _sources(self):
-        return (self.replay, self.cli)
-
     def test_closure_includes_headers_and_ignores_system_includes(self):
-        paths = replay_host_dependencies.dependency_paths(
-            self.root, self._sources())
-        self.assertEqual(set(paths), {
-            "benchmark/eu4_gfx_frame_replay.mm",
-            "benchmark/eu4_gfx_frame_replay_cli.mm",
-            "benchmark/eu4_gfx_metal_replay.h",
-            "benchmark/eu4_gfx_replay_semantics.h",
-            "benchmark/nested.h",
+        native = replay_host_dependencies.dependency_paths(self.root, strict=True)
+        with mock.patch.object(replay_host_dependencies, "_native_dependency_scan",
+                               return_value=False):
+            portable = replay_host_dependencies.dependency_paths(self.root, strict=True)
+            (self.root / "benchmark").mkdir()
+            (self.root / "benchmark/nested.h").write_text("// obsolete path\n")
+            self.semantics.unlink()
+            with self.assertRaisesRegex(OSError, "unattested source include"):
+                replay_host_dependencies.dependency_paths(self.root, strict=True)
+        self.assertEqual(native, portable)
+        self.assertEqual(set(portable), {
+            *replay_host_dependencies.REPLAY_SOURCES,
+            "renderer/metal/eu4_gfx_metal_replay.h", "renderer/engine/nested.h",
         })
+        with self.assertRaisesRegex(OSError, "unattested source include"):
+            replay_host_dependencies.dependency_paths(self.root, strict=True)
 
     def test_header_change_changes_the_fingerprint(self):
-        first = replay_host_dependencies.relative_dependencies(
-            self.root, self._sources())
-        self.semantics.write_text('#include "nested.h"\n// changed\n')
-        second = replay_host_dependencies.relative_dependencies(
-            self.root, self._sources())
-        self.assertNotEqual(first["benchmark/eu4_gfx_replay_semantics.h"],
-                            second["benchmark/eu4_gfx_replay_semantics.h"])
-        self.assertNotEqual(first, second)
+        first = replay_host_dependencies.build_identity(self.root)
+        self.semantics.write_text("// changed\n")
+        second = replay_host_dependencies.build_identity(self.root)
+        self.assertNotEqual(first["fingerprint"], second["fingerprint"])
 
     def test_build_identity_accounts_for_flags_and_compiler(self):
         with mock.patch.object(
                 replay_host_dependencies, "compiler_identity",
                 return_value={"path": "/usr/bin/clang", "version": "one"}):
             first = replay_host_dependencies.build_identity(
-                self.root, self._sources())
+                self.root)
             second = replay_host_dependencies.build_identity(
-                self.root, self._sources(), flags=("-O0",))
+                self.root, flags=("-O0",))
         self.assertNotEqual(first["fingerprint"], second["fingerprint"])
         with mock.patch.object(
                 replay_host_dependencies, "compiler_identity",
                 return_value={"path": "/usr/bin/clang", "version": "two"}):
             third = replay_host_dependencies.build_identity(
-                self.root, self._sources())
+                self.root)
         self.assertNotEqual(first["fingerprint"], third["fingerprint"])
 
     def test_baseline_closure_matches_build_closure(self):

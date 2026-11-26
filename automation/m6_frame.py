@@ -230,7 +230,7 @@ def iter_blob_members(value):
 def _producer_writes_color(producer: dict) -> bool:
     """Whether a graph producer can make its resource current for sampling.
 
-    Mirrors ``g_frame_written`` in ``benchmark/eu4_gfx_frame_replay.mm``:
+    Mirrors ``g_frame_written`` in ``renderer/metal/eu4_gfx_frame_replay.mm``:
     draws and copy/resolve destinations write colour; a clear counts only when
     its flags include a colour write.
     """
@@ -2008,8 +2008,8 @@ def capture(args: argparse.Namespace) -> int:
 # Shader translation, replay and comparison
 # ---------------------------------------------------------------------------
 
-REPLAY_HOST_SOURCE = BENCH / "eu4_gfx_frame_replay.mm"
-REPLAY_HOST_CLI_SOURCE = BENCH / "eu4_gfx_frame_replay_cli.mm"
+REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE = (
+    ROOT / source for source in replay_host_dependencies.REPLAY_SOURCES)
 REPLAY_HOST = BENCH / ".build" / "gfx_frame_replay"
 
 

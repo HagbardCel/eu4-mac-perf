@@ -9,7 +9,7 @@
 // SDL_GL_CreateContext, then destroying both. That call is not patched.
 // Earlier OpenGL activity is outside this result.
 // A1 exits after the clear. Bootstrap returns this window and stops at _glewInit.
-#import "eu4_gfx_buffers.h"
+#import "../renderer/metal/eu4_gfx_buffers.h"
 #import "eu4_gfx_draw_capture.h"
 #import "eu4_gfx_draw_route.h"
 #import "eu4_gfx_checkpoint.h"
@@ -19,8 +19,8 @@
 /* The pinned boot build list compiles only this translation unit; include the
    shared production component instead of a second view implementation. */
 #import "eu4_metal_geometry_view.m"
-#import "eu4_gfx_shader.h"
-#import "eu4_gfx_texture.h"
+#import "../renderer/metal/eu4_gfx_shader.h"
+#import "../renderer/metal/eu4_gfx_texture.h"
 #import "eu4_metal_boot_patch.h"
 #import "eu4_metal_events.h"
 

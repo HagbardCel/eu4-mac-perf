@@ -1,9 +1,9 @@
 #import "eu4_gfx_draw_route.h"
 
-#import "eu4_gfx_draw_encode.h"
-#import "eu4_gfx_generic_draw.h"
-#import "eu4_gfx_shader.h"
-#import "eu4_gfx_texture.h"
+#import "../renderer/metal/eu4_gfx_draw_encode.h"
+#import "../renderer/metal/eu4_gfx_generic_draw.h"
+#import "../renderer/metal/eu4_gfx_shader.h"
+#import "../renderer/metal/eu4_gfx_texture.h"
 
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_init.h"

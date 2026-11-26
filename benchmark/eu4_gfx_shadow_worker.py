@@ -34,8 +34,8 @@ def build():
         str(ROOT / "benchmark" / "eu4_gfx_shadow_worker.mm"),
         str(ROOT / "benchmark" / "eu4_gfx_init.mm"),
         str(ROOT / "benchmark" / "eu4_gfx_frame_observe.c"),
-        str(ROOT / "benchmark" / "eu4_gfx_buffers.mm"),
-        str(ROOT / "benchmark" / "eu4_gfx_texture.mm"),
+        str(ROOT / "renderer/metal" / "eu4_gfx_buffers.mm"),
+        str(ROOT / "renderer/metal" / "eu4_gfx_texture.mm"),
         str(ROOT / "benchmark" / "eu4_metal_events.c"),
     ]
     built = subprocess.run(command, capture_output=True, text=True, check=False)

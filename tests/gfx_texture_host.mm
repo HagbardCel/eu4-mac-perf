@@ -1,4 +1,4 @@
-#import "eu4_gfx_texture.h"
+#import "../renderer/metal/eu4_gfx_texture.h"
 
 #import <Metal/Metal.h>
 #import <stdio.h>

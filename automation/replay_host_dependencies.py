@@ -21,8 +21,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REPLAY_SOURCES = (
-    "benchmark/eu4_gfx_frame_replay.mm",
-    "benchmark/eu4_gfx_frame_replay_cli.mm",
+    "renderer/metal/eu4_gfx_frame_replay.mm",
+    "renderer/metal/eu4_gfx_frame_replay_cli.mm",
 )
 BUILD_FLAGS = (
     "-arch",
@@ -108,25 +108,17 @@ def _quoted_dependency_paths(source: Path, root: Path, *,
     seen: set[Path] = set()
     while pending:
         path = pending.pop()
-        try:
-            resolved = path.resolve()
-        except OSError:
-            continue
+        resolved = path.resolve()
         if resolved in seen or not resolved.is_file():
             continue
         seen.add(resolved)
         closure.append(resolved)
-        try:
-            text = resolved.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
+        text = resolved.read_text(encoding="utf-8", errors="replace")
         for match in _LOCAL_INCLUDE.finditer(text):
-            candidate = (resolved.parent / match.group(1)).resolve()
-            if not candidate.is_file():
-                candidate = (root / "benchmark" / match.group(1)).resolve()
-            if (candidate.is_file()
-                    and (_relative(candidate, root) is not None
-                         or _system_dependency(candidate))):
+            include = Path(match.group(1))
+            candidate = (resolved.parent / include).resolve()
+            if (not include.is_absolute() and candidate.is_file()
+                    and _relative(candidate, root) is not None):
                 pending.append(candidate)
             elif strict:
                 raise OSError(
@@ -146,8 +138,8 @@ def _compiler_dependencies(path: Path, compiler: str | None) -> list[Path]:
     cached = _COMPILER_DEP_CACHE.get(key)
     if cached is not None:
         dependencies, stamps = cached
-        if all(Path(item).stat().st_mtime_ns == stamp
-               for item, stamp in stamps if Path(item).is_file()):
+        if all(Path(item).is_file() and Path(item).stat().st_mtime_ns == stamp
+               for item, stamp in stamps):
             return dependencies
     completed = subprocess.run(
         [compiler_path, "-arch", "arm64", "-fobjc-arc", "-MM", "-MT", "dep",
@@ -199,27 +191,11 @@ def dependency_paths(root: Path | str = ROOT,
         source = Path(item) if Path(item).is_absolute() else root / item
         if not source.is_file():
             raise OSError(f"replay source is absent: {source}")
-        if strict:
-            # Explicit guard so an absolute/escaping quoted include fails with a
-            # dependency error before the compiler reads the host file.  The
-            # compiler output below remains the closure authority.
-            try:
-                text = source.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                text = ""
-            for match in _LOCAL_INCLUDE.finditer(text):
-                candidate = (source.parent / match.group(1)).resolve()
-                if not candidate.is_file():
-                    candidate = (root / "benchmark" / match.group(1)).resolve()
-                if (candidate.is_file()
-                        and _relative(candidate, root) is None
-                        and not _system_dependency(candidate)):
-                    raise OSError(
-                        f"unattested source include {match.group(1)!r} in "
-                        f"{_relative(source, root) or source}")
-        deps = (_compiler_dependencies(source, compiler)
-                if _native_dependency_scan()
-                else _quoted_dependency_paths(source, root, strict=strict))
+        native = _native_dependency_scan()
+        if strict and _relative(source, root) is None:
+            raise OSError(f"unattested replay source outside the checkout: {source}")
+        quoted = _quoted_dependency_paths(source, root, strict=strict) if strict or not native else []
+        deps = _compiler_dependencies(source, compiler) if native else quoted
         for dependency in [source, *deps]:
             try:
                 resolved = dependency.resolve()
@@ -345,8 +321,8 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
     output = Path(output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     sources = [snapshot_root / relative for relative in REPLAY_SOURCES]
-    if any(not source.is_file() for source in sources):
-        raise OSError("snapshot is missing a replay translation unit")
+    identity = build_identity(snapshot_root, sources=REPLAY_SOURCES,
+                              compiler=compiler, strict=True)
     compiler_info = compiler_identity(compiler)
     command = build_command(output, sources, compiler=compiler)
     build_env = environment or build_environment()
@@ -357,8 +333,6 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
         raise OSError(
             (completed.stderr or completed.stdout or
              "replay host build failed").strip()[-4000:])
-    identity = build_identity(snapshot_root, sources=REPLAY_SOURCES,
-                              compiler=compiler, strict=True)
     return {
         "schema": "gfx-replay-host-candidate-build/v1",
         "command": command,

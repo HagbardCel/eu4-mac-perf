@@ -11,11 +11,11 @@
  *   gfx_m5_replay_host --reference <gl-ref-dir> --out <dir> [--constant-words <n>]
  */
 
-#import "eu4_gfx_buffers.h"
-#import "eu4_gfx_draw_encode.h"
+#import "../renderer/metal/eu4_gfx_buffers.h"
+#import "../renderer/metal/eu4_gfx_draw_encode.h"
 #import "eu4_gfx_init.h"
-#import "eu4_gfx_shader.h"
-#import "eu4_gfx_sprite_draw.h"
+#import "../renderer/metal/eu4_gfx_shader.h"
+#import "../renderer/metal/eu4_gfx_sprite_draw.h"
 #import "eu4_metal_events.h"
 
 #import <CommonCrypto/CommonDigest.h>

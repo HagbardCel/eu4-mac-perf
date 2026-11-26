@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HOST_SOURCE = ROOT / "tests" / "gfx_shader_stage_host.mm"
 HOST = ROOT / "benchmark" / ".build" / "gfx_shader_stage_host"
-SHADER = ROOT / "benchmark" / "eu4_gfx_shader.mm"
+SHADER = ROOT / "renderer/metal" / "eu4_gfx_shader.mm"
 EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
 IDENTITY = "simple-lua-Simple/asset-maincode-v0"
 
