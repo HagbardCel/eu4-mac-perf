@@ -10,9 +10,9 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from oracle.certify.build_record import RE1_SOURCE_FILES
 from tests.oracle_certify_acceptance.re1_harness import (
     BUILD_FLAGS,
-    RE1_SOURCE_FILES,
     build_re1_harness,
 )
 

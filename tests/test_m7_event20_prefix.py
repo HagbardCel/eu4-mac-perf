@@ -1133,7 +1133,7 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
                 "workspace": str(workspace),
                 "workspace_base": "infra",
                 "policy": {
-                    "allowed_paths": ["benchmark/**"],
+                    "allowed_paths": ["renderer/metal/**"],
                     "forbidden_paths": ["automation/**", "campaigns/**",
                                         "dsh/**"],
                 },
