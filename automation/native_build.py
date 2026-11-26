@@ -27,7 +27,10 @@ timeout or execution error into a skip.
 
 from __future__ import annotations
 
+import argparse
 import datetime as _datetime
+import json
+import os
 import platform
 import shutil
 import subprocess
@@ -36,6 +39,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Callable
+
+from automation.gfx_artifacts import sha256_file
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG_ROOT = ROOT / ".local" / "native-builds"
@@ -206,3 +211,86 @@ def require_build(argv, *, label: str, sources=(), tools=("clang",),
         require_arm64=require_arm64, require_macos=require_macos,
         reason=reason)
     return build(argv, label=label, timeout=timeout, runner=runner)
+
+
+# The reviewed build outputs are pinned here for deployment integrity.
+# gfx_gl_control_authorities separately controls which receipts are trusted.
+_GL_DRIVER_SHA256 = "153fd9647236bde7eb1b60d91074fa0f3370d22782d62c5e88718f79d6cb3feb"
+_GL_EXECUTABLE_SHA256 = "092a3cdb9075974116fbf8458e7375b83e04d619872a23f1323744a3509cb617"
+_GL_SOURCE_SHA256 = "9cbb09f45f4e455887e810c4827e50baec93869093a04cb08e7b4467255ed1ae"
+_GL_DRIVER_SUFFIX = b"\n# R2b authority for the UUID-linked macOS OpenGL executor.\n"
+_GL_DRIVER = "gfx_gl_control_renderer.py"
+_GL_EXECUTABLE = "eu4_gfx_draw_control"
+_GL_CLANG = "Apple clang version 21.0.0 (clang-2100.4.1.1)"
+_GL_SDK_BUILD = "26B118"
+
+
+def _gl_control_paths(directory: Path) -> dict[str, str]:
+    driver = directory / _GL_DRIVER
+    executable = directory / _GL_EXECUTABLE
+    for path, expected in ((driver, _GL_DRIVER_SHA256), (executable, _GL_EXECUTABLE_SHA256)):
+        if path.is_symlink() or not path.is_file() or sha256_file(path) != expected:
+            raise ValueError(f"OpenGL authority has an unexpected build identity at {path}")
+    if not os.access(executable, os.X_OK):
+        raise ValueError(f"OpenGL authority executable has no execute permission: {executable}")
+    return {"renderer": str(driver), "executable": str(executable)}
+
+
+def deploy_gl_control() -> dict[str, str]:
+    """Build and publish the reviewed UUID-bearing selected-draw artifacts."""
+    parent = ROOT / ".local/native-builds/gl-control"
+    if parent.resolve() != parent:
+        raise ValueError(f"OpenGL authority deployment parent contains a symlink: {parent}")
+    destination = parent / _GL_DRIVER_SHA256
+    if destination.is_symlink():
+        raise ValueError(f"OpenGL authority deployment is a symlink: {destination}")
+    if destination.exists():
+        return _gl_control_paths(destination)
+
+    def xcrun(*args: str) -> str:
+        return subprocess.check_output(
+            ["xcrun", "--sdk", "macosx", *args], text=True, timeout=30,
+            stderr=subprocess.PIPE).strip()
+
+    source = ROOT / "renderer/gl/eu4_gfx_draw_control.c"
+    if sha256_file(source) != _GL_SOURCE_SHA256:
+        raise ValueError("OpenGL authority native source does not match the reviewed digest")
+    clang = xcrun("--find", "clang")
+    version = subprocess.check_output([clang, "--version"], text=True, timeout=30)
+    sdk_build = xcrun("--show-sdk-build-version")
+    if not version.startswith(_GL_CLANG + "\n") or sdk_build != _GL_SDK_BUILD:
+        raise ValueError(f"OpenGL authority requires {_GL_CLANG} and SDK build {_GL_SDK_BUILD}")
+    sdk = xcrun("--show-sdk-path")
+    parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".build-", dir=parent) as temporary:
+        stage = Path(temporary) / "install"
+        stage.mkdir()
+        (stage / _GL_DRIVER).write_bytes(
+            (ROOT / "automation" / _GL_DRIVER).read_bytes() + _GL_DRIVER_SUFFIX)
+        build([clang, "-target", "arm64-apple-macos27.0", "-isysroot", sdk,
+               "-O2", "-g0", "-w", "-o", stage / _GL_EXECUTABLE, source,
+               "-framework", "OpenGL"], label="gl-control-authority")
+        _gl_control_paths(stage)
+        try:
+            stage.rename(destination)
+        except OSError:
+            # A concurrent deployment can only be reused after verification.
+            if destination.is_symlink() or not destination.is_dir():
+                raise
+        return _gl_control_paths(destination)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Deploy a pinned native build")
+    parser.add_argument("target", choices=("gl-control",))
+    parser.parse_args(argv)
+    try:
+        print(json.dumps(deploy_gl_control(), indent=2))
+    except (AssertionError, OSError, subprocess.SubprocessError, ValueError) as exc:
+        print(f"OpenGL authority deployment refused: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -79,4 +79,26 @@ AUTHORITIES: dict[str, dict] = {
             "renderer/gl/eu4_gfx_draw_control.c + "
             "automation/gfx_gl_control_renderer.py"),
     },
+    "153fd9647236bde7eb1b60d91074fa0f3370d22782d62c5e88718f79d6cb3feb": {
+        "name": "m7-original-gl-control",
+        "api": "opengl",
+        "qualified": True,
+        "qualified_by": (
+            "independent native review by native_authority_review at "
+            "459dad5c613eaf74d96cc1465da6e4097f435599, PR #304; "
+            "test receipt e8816ecb0aaf6ee1c5c2ea5fe89ec914f39ec30bf62ecb34032e9c5973283db0"),
+        "public_key": (
+            "b129e1bcd834600e8a3986159b7d9a540d1951f09f30ce3bfd4881844247a727"),
+        "components": [
+            {"role": "native-gl-executor",
+             "sha256": "092a3cdb9075974116fbf8458e7375b83e04d619872a23f1323744a3509cb617"},
+            {"role": "replay-input-verifier",
+             "sha256": "6c93974f4df9612c45c0645ad27a0d6cd5b3a7885ea2b6829be43b5401c02166"},
+            {"role": "receipt-signer",
+             "sha256": "52e03dd0c0b80c10c4e8acf2f72d4307a07c2c0321a06bd1107e0903f3ffa3b4"},
+        ],
+        "source": (
+            "renderer/gl/eu4_gfx_draw_control.c + "
+            "automation/gfx_gl_control_renderer.py via automation.native_build gl-control"),
+    },
 }

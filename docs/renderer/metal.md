@@ -107,11 +107,21 @@ campaign checker.
 
 ## Selected-draw OpenGL control
 
-The [authority registry](../../automation/gfx_gl_control_authorities.py) pins the
-reviewed OpenGL driver `19f819b4…`, native executor `254618ef…`, input verifier
-and signer for the supported default-framebuffer route. The [independent review](../../analysis/m7/final-review-279.md)
-and the reviewed implementation establish the OpenGL execution path. The
-Ed25519 receipt authenticates the registered execution identity, challenge,
+The [authority registry](../../automation/gfx_gl_control_authorities.py) pins
+the UUID-linked driver `153fd964…`, native executor `092a3cdb…`, restricted
+input verifier and receipt signer for the default-framebuffer route. Run
+`python3.14 -m automation.native_build gl-control` to deploy the pinned pair.
+The [operator invocation](../agent-tools.md#eu4_capture) uses both reported
+paths and the authorized signing-key file. The [native review record](https://github.com/HagbardCel/eu4-mac-perf/pull/304)
+records the toolchain and tested signed synthetic draw.
+
+Historical driver `19f819b4…`, executor `254618ef…` and their component
+bindings remain available for validating older receipts with the recorded
+files. The executor's original link recipe lacks `LC_UUID`. Preserve the
+historic files at their recorded paths when rechecking an archived receipt.
+[Historical independent review](../../analysis/m7/final-review-279.md)
+
+The Ed25519 receipt authenticates the registered execution identity, challenge,
 capture and selected draw, effective input package, output digest and geometry,
 and completed status. The [qualifier](../../automation/gfx_gl_control_qualification.py)
 separately verifies same-seal input and checkpoint identity, live-drawable
