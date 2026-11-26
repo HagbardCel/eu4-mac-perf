@@ -12,13 +12,14 @@ SCHEMA = "eu4-oracle-trusted-build/v1"
 _PRODUCTION_BUILD_RECORD_PATH = (
     Path(__file__).resolve().parents[2] / "docs" / "oracle" / "policies"
     / "re1-gfx-set-constant-buffer-trusted-build.json")
-RECON_DIR = (Path(__file__).resolve().parents[2] / "analysis" / "reconstruction"
-             / "_GfxSetConstantBuffer" / "reconstruction")
+ROOT = Path(__file__).resolve().parents[2]
+ENGINE_DIR = ROOT / "renderer" / "engine"
+RECON_DIR = ROOT / "analysis/reconstruction/_GfxSetConstantBuffer/reconstruction"
 RE1_SOURCE_FILES = (
-    "arith_literals.cpp",
-    "gfx_set_constant_buffer.cpp",
-    "gfx_set_constant_buffer.hpp",
-    "harness.cpp",
+    RECON_DIR / "arith_literals.cpp",
+    ENGINE_DIR / "gfx_set_constant_buffer.cpp",
+    ENGINE_DIR / "gfx_set_constant_buffer.hpp",
+    RECON_DIR / "harness.cpp",
 )
 TRUSTED_BUILD_FLAGS = (
     "-std=c++20",
@@ -36,8 +37,8 @@ _SHA256_RE = __import__("re").compile(r"\A[0-9a-f]{64}\Z")
 def frozen_re1_source_sha256() -> str:
     """Digest of tracked RE1 sources (four behavior-defining files)."""
     digest = sha256()
-    for name in sorted(RE1_SOURCE_FILES):
-        path = RECON_DIR / name
+    for path in sorted(RE1_SOURCE_FILES, key=lambda path: path.name):
+        name = path.name
         try:
             data = path.read_bytes()
         except OSError as error:

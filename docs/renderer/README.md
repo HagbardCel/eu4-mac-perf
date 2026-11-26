@@ -51,7 +51,8 @@ The six dossier families describe 92 functions at the static semantic level.
   0–2, lacked slots 3–5 and zero input, and measured 10 distinct behaviors
   against a floor of 12.
   [Static ABI](../../analysis/reconstruction/_GfxSetConstantBuffer/contract.md) ·
-  [C++ source](../../analysis/reconstruction/_GfxSetConstantBuffer/reconstruction/gfx_set_constant_buffer.cpp) ·
+  [C++ source](../../renderer/engine/gfx_set_constant_buffer.cpp) ·
+  [Native and ABI tests](../../tests/test_reconstruction_faithful.py) ·
   [P-code differential](../../analysis/reconstruction/_GfxSetConstantBuffer/differential/README.md) ·
   [Recorded-original certificate](../../results/20261025T155406Z-gfx-live-cert/tier1-certificate.json) ·
   [Coverage audit](../../results/20261025T155406Z-gfx-live-analysis/e1-coverage-audit.md)

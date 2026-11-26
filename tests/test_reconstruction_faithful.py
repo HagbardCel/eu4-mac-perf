@@ -39,8 +39,9 @@ from unittest import mock
 from reverse_engineering import reconstruction_pilot as pilot
 
 RECON_DIR = pilot.FUNCTION_DIR / "reconstruction"
-HEADER = RECON_DIR / "gfx_set_constant_buffer.hpp"
-IMPLEMENTATION = RECON_DIR / "gfx_set_constant_buffer.cpp"
+ENGINE_DIR = Path(__file__).resolve().parents[1] / "renderer/engine"
+HEADER = ENGINE_DIR / "gfx_set_constant_buffer.hpp"
+IMPLEMENTATION = ENGINE_DIR / "gfx_set_constant_buffer.cpp"
 HARNESS_SOURCE = RECON_DIR / "harness.cpp"
 ARITH_LITERALS = RECON_DIR / "arith_literals.cpp"
 ABI_SOURCE = RECON_DIR / "abi_check.cpp"
@@ -251,7 +252,7 @@ def _build_harness(workdir: Path, compiler: str,
     the supported CI runner. A sanitized build that merely fails is a defect, so it raises
     instead of falling back to an unsanitized run.
     """
-    sources = [str(IMPLEMENTATION), str(HARNESS_SOURCE), str(ARITH_LITERALS)]
+    sources = ["-I", str(ENGINE_DIR), str(IMPLEMENTATION), str(HARNESS_SOURCE), str(ARITH_LITERALS)]
     capable, reason = _capability_probe(workdir, compiler, list(SANITIZER_FLAGS), "sanitizers",
                                         _sanitizer_env())
     if capable:
@@ -341,7 +342,7 @@ def _prepare_gates() -> None:
             binary = WORKDIR / "abi_check"
             ok, error = _compile([
                 COMPILER, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror", *flags,
-                str(IMPLEMENTATION), str(ABI_SOURCE), str(ABI_ASM), "-o", str(binary),
+                "-I", str(ENGINE_DIR), str(IMPLEMENTATION), str(ABI_SOURCE), str(ABI_ASM), "-o", str(binary),
             ])
             if not ok:
                 raise RuntimeError(f"x86-64 ABI probe did not build: {error}")
@@ -585,7 +586,7 @@ class ExhaustiveSweepTests(NeedsHarness):
         # literal encodings at once, so it cannot fold the comparison away.
         ok, error = _compile([
             COMPILER, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
-            str(IMPLEMENTATION), str(HARNESS_SOURCE), str(ARITH_LITERALS),
+            "-I", str(ENGINE_DIR), str(IMPLEMENTATION), str(HARNESS_SOURCE), str(ARITH_LITERALS),
             "-o", str(binary),
         ])
         self.assertTrue(ok, error)
