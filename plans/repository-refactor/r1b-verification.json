@@ -1,0 +1,396 @@
+{
+  "m4": {
+    "source": "producer",
+    "reference": ".local/m4/experiments/gl-reference-07",
+    "manifest_sha256": "2036dcffa5ca70b6c6bb6da77009bb7c7abbefcc609e8892312cda8786de2d2c",
+    "artifact_entries": 32,
+    "comparison": {
+      "pixels": 1930176,
+      "mismatched_pixels": 0,
+      "max_channel_error": 0
+    },
+    "presentation": {
+      "presentation:checkpoint": true,
+      "presentation:drawable": true,
+      "presentation:m4-extent": true,
+      "presentation:visible": true,
+      "presentation:drawable-scene": true
+    }
+  },
+  "m5": {
+    "source": "producer",
+    "reference": ".local/m5/experiments/sprite-gl-ref-09",
+    "manifest_sha256": "dd06ffbd28c2d5a6ff498f476fd60713a902945633773f2ad89ac790ce6ade57",
+    "artifact_entries": 12,
+    "comparison": {
+      "pixels": 1930176,
+      "mismatched_pixels": 0,
+      "max_channel_error": 0
+    },
+    "live_engine": {
+      "identity": "1794502738-18265",
+      "engine_reach": true,
+      "composition": true,
+      "pixel_qualification": false
+    }
+  },
+  "m6": {
+    "source": "producer",
+    "blobs": 1125,
+    "encoded": 326,
+    "comparison": {
+      "pixels": 1930176,
+      "mismatched_pixels": 0,
+      "alpha_different_pixels": 0,
+      "max_channel_error": 0
+    },
+    "settled_live": [
+      {
+        "identity": "1794678332-33516",
+        "swap_frame_sha256": "d0063c0914da5b55e5361fb76525a3c4ca9acf5b126c372e2c4897db929cedbe",
+        "accepted": true
+      },
+      {
+        "identity": "1794678828-35589",
+        "swap_frame_sha256": "ff08cf7f87d6cd947274497aea12a54da0d2fc1075549a8f6e7461ed0abcf206",
+        "accepted": true
+      },
+      {
+        "identity": "1794679203-37056",
+        "swap_frame_sha256": "3bb4f73b933a3ad9dec1cea2cc64f947a4def6d2dbfe6695b327696b97a18e09",
+        "accepted": true
+      }
+    ],
+    "historical_manifest_sha256": "73c32a9d3d63c558cab149bdff9ec87fdaade1ca910e1bc029a903e07a1949dc",
+    "live_acceptance_sha256": "6a788b5b11bb1f6b5ddf49fcfe537cc0dd7ee1d163ad95d2eafcf1a6d10781b5",
+    "reference_png_sha256": "2470062bdc49dcbabb8d02ea0395a8697390aa42c6f89fc429658a6a14a87fbe"
+  },
+  "m7_prefix": {
+    "verdict": "FIRST_DIVERGENCE",
+    "status": "divergent",
+    "verified_prefix": {
+      "start": 0,
+      "end": 0
+    },
+    "first_divergence": 1,
+    "problems_count": 0,
+    "expected_request_sha256": "928312d4124a7785f33086f8ee4e9eca82f60ec87cd38711074daad967f18e76",
+    "session_id": "47590918-d63a-4798-9737-df00285ad51b",
+    "root_sha256": "b3e3d7b5d1e4cefe814f460c99a19c32011242d100a8b0c5bdd97aa9e485756c",
+    "shader_receipt_sha256": "3e6f2a389b1599bfe73fb3dd3d1b9258eafcaf75afa38b70adfd5651f2826a3f",
+    "replay_sha256": "ddb3d4aa4856908053484f84ee81e52e2050ba1164f69b11073d350401dd0b1f",
+    "old_report_sha256": "10572ef172e87c1b9ec93631057db6e635b6b047155c8142cd5c12aef8a367ae",
+    "mismatched_pixels_rgb": 23,
+    "max_channel_error_rgb": 1,
+    "independent_report_sha256": "b055927ef586f3a463e2e52744331a4a2c11aeba0fa7d946a0f5461cfbd3fcc2",
+    "event_1": {
+      "resource": "tex:433",
+      "status": "divergent",
+      "reference_sha256": "1af2bbb3e6123aa2f1fb7e9c07dbc24ae6ea9013c61737fd15cfe13cc4886d6f",
+      "metal_sha256": "054c645f7418534c7d001e3b3aa328835d4c2bee63a357a09ecce1b3f8da4f78",
+      "compared_channels": "RGB",
+      "alpha_applicable": false
+    }
+  },
+  "m7_seals": {
+    "616": {
+      "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+      "seal_sha256": "577f629cc8c64caaf9505752a6d4e6a7cb7c6d33c2fe02559e6afce3496dc1c2",
+      "trace_manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+      "present": 616
+    },
+    "904": {
+      "session_id": "afd444f2-6478-459f-8db6-e565c49dbd63",
+      "seal_sha256": "889bf02531216a2da7c7ab7a529a40801b77cd3b846ecc86f653a572af9e8e2f",
+      "trace_manifest_sha256": "faf201f01583daf54a44a06432c3be674f00aca3bc7f20736b6986ec69d3027d",
+      "present": 904
+    },
+    "90825686": {
+      "session_id": "90825686-5154-4173-99b6-d2704893839e",
+      "seal_sha256": "07f54bcee877cc017872cc58e1c15cc641ec5c98e50ed5283d5c081e5da0c8ce",
+      "trace_manifest_sha256": "25a413fc08a280af7db28f3765b924fa9a9fb43c65663960b11863a6db996260",
+      "present": 72
+    },
+    "482a6500": {
+      "session_id": "482a6500-fc8b-4dfe-8d01-073a5ec7da7b",
+      "seal_sha256": "eb459233578fd78e9f6c7b3ba09863ec0eea6a8a8eeadc7c2b1ee439f65a0d46",
+      "trace_manifest_sha256": "41aba804007d39e6305219f945f29ae19f9cbf83a290ae10bc0338ccb06837b3",
+      "present": 72
+    },
+    "1efc8880": {
+      "session_id": "1efc8880-e438-44aa-9f5b-07a21330c22b",
+      "seal_sha256": "d9010c0035958e586b6f99da9b16f486101e2641209197b39e9be5092ffad194",
+      "trace_manifest_sha256": "f4fd1a411abf6283ceb10ba20dcb1152896d94a90e864869c55bab40fadc2a2a",
+      "present": 72
+    }
+  },
+  "strategy_b": {
+    "key": "47590918-d63a-4798-9737-df00285ad51b-1-e3ab1d62cbbc86dc",
+    "manifest_sha256": "560f412259c9961e0bb823feb3ad86f1e0c162eee8a073c0c6ac571bed5f181c",
+    "safe_to_reuse": true,
+    "verified_files": 1317,
+    "graph_status": "invalid"
+  },
+  "test_runner_records": {
+    "focused": {
+      "id": "20261125T222918Z-6f790862",
+      "label": "r1b-focused",
+      "argv": [
+        "-m",
+        "unittest",
+        "tests.test_repo_inventory",
+        "tests.test_check_doc_links",
+        "tests.test_m6_live_accept",
+        "tests.test_case_locator",
+        "tests.test_evidence_index"
+      ],
+      "profile": "offline",
+      "counts": {
+        "errors": 0,
+        "executed": 137,
+        "failures": 0,
+        "ran": 137,
+        "skipped": 0
+      },
+      "duration_seconds": 10.275,
+      "status": "passed",
+      "failures": [],
+      "original_record_sha256": "a2ff4bc87016529efe2ed9ff850c6c6df939a00ed584382a7232cb76734d39f5"
+    },
+    "m6_orientation": {
+      "id": "20261126T073740Z-d261800a",
+      "label": "r1b-orientation",
+      "argv": [
+        "-m",
+        "unittest",
+        "tests.test_m6_live_accept.TextOrientationTests.test_known_defective_capture_fails_and_reference_passes"
+      ],
+      "profile": "offline",
+      "counts": {
+        "errors": 0,
+        "executed": 1,
+        "failures": 0,
+        "ran": 1,
+        "skipped": 0
+      },
+      "duration_seconds": 0.127,
+      "status": "passed",
+      "failures": [],
+      "original_record_sha256": "be12a7c5e33a84d627a3430c03c237021973378ddc49b652dac477dfa36b2aab"
+    },
+    "native_candidate": {
+      "id": "20261125T223508Z-fb352235",
+      "label": "r1b-dependent",
+      "argv": [
+        "-m",
+        "unittest",
+        "tests.test_m4_accept",
+        "tests.test_m5_accept",
+        "tests.test_m6_frame",
+        "tests.test_m7_event20_prefix",
+        "tests.test_m7_frame_seal",
+        "tests.test_gfx_infra_frozen",
+        "tests.test_oracle_function_fixture",
+        "tests.test_oracle_certify_certificate",
+        "tests.test_reconstruction_pilot",
+        "tests.test_reconstruction_differential",
+        "tests.test_gfx_draw_accept"
+      ],
+      "profile": "offline",
+      "counts": {
+        "errors": 1,
+        "executed": 310,
+        "failures": 5,
+        "ran": 321,
+        "skipped": 11
+      },
+      "duration_seconds": 35.328,
+      "status": "failed",
+      "failures": [
+        {
+          "id": "test_m7_event20_prefix.CandidateTrustBoundaryTests.setUpClass",
+          "kind": "error",
+          "owner": "test_m7_event20_prefix.CandidateTrustBoundaryTests",
+          "test": "setUpClass"
+        },
+        {
+          "id": "test_m6_frame.IsolationOrderingTests.test_pre_image_survives_the_selected_draw",
+          "kind": "failure",
+          "owner": "test_m6_frame.IsolationOrderingTests.test_pre_image_survives_the_selected_draw",
+          "test": "test_pre_image_survives_the_selected_draw"
+        },
+        {
+          "id": "test_m6_frame.IsolationOrderingTests.test_replay_divisor_and_constant_descriptor",
+          "kind": "failure",
+          "owner": "test_m6_frame.IsolationOrderingTests.test_replay_divisor_and_constant_descriptor",
+          "test": "test_replay_divisor_and_constant_descriptor"
+        },
+        {
+          "id": "test_m6_frame.SparseIndexReplayTests.test_missing_origin_cannot_fetch_the_captured_vertices",
+          "kind": "failure",
+          "owner": "test_m6_frame.SparseIndexReplayTests.test_missing_origin_cannot_fetch_the_captured_vertices",
+          "test": "test_missing_origin_cannot_fetch_the_captured_vertices"
+        },
+        {
+          "id": "test_m6_frame.SparseIndexReplayTests.test_sparse_index_with_nonzero_origin_rebases_into_the_capture",
+          "kind": "failure",
+          "owner": "test_m6_frame.SparseIndexReplayTests.test_sparse_index_with_nonzero_origin_rebases_into_the_capture",
+          "test": "test_sparse_index_with_nonzero_origin_rebases_into_the_capture"
+        },
+        {
+          "id": "test_m6_frame.TraceStateHostTests.test_texture_probe_preserves_bindings_and_active_unit",
+          "kind": "failure",
+          "owner": "test_m6_frame.TraceStateHostTests.test_texture_probe_preserves_bindings_and_active_unit",
+          "test": "test_texture_probe_preserves_bindings_and_active_unit"
+        }
+      ],
+      "original_record_sha256": "ccb875a574436599cd596c4f6a354a602f3a51a9dd6d8201bca24cfed5ba3e94"
+    },
+    "native_base": {
+      "id": "20261125T223508Z-65763eb1",
+      "label": "r1b-base",
+      "argv": [
+        "-m",
+        "unittest",
+        "tests.test_m4_accept",
+        "tests.test_m5_accept",
+        "tests.test_m6_frame",
+        "tests.test_m7_event20_prefix",
+        "tests.test_m7_frame_seal",
+        "tests.test_gfx_infra_frozen",
+        "tests.test_oracle_function_fixture",
+        "tests.test_oracle_certify_certificate",
+        "tests.test_reconstruction_pilot",
+        "tests.test_reconstruction_differential",
+        "tests.test_gfx_draw_accept"
+      ],
+      "profile": "offline",
+      "counts": {
+        "errors": 1,
+        "executed": 310,
+        "failures": 5,
+        "ran": 321,
+        "skipped": 11
+      },
+      "duration_seconds": 35.393,
+      "status": "failed",
+      "failures": [
+        {
+          "id": "test_m7_event20_prefix.CandidateTrustBoundaryTests.setUpClass",
+          "kind": "error",
+          "owner": "test_m7_event20_prefix.CandidateTrustBoundaryTests",
+          "test": "setUpClass"
+        },
+        {
+          "id": "test_m6_frame.IsolationOrderingTests.test_pre_image_survives_the_selected_draw",
+          "kind": "failure",
+          "owner": "test_m6_frame.IsolationOrderingTests.test_pre_image_survives_the_selected_draw",
+          "test": "test_pre_image_survives_the_selected_draw"
+        },
+        {
+          "id": "test_m6_frame.IsolationOrderingTests.test_replay_divisor_and_constant_descriptor",
+          "kind": "failure",
+          "owner": "test_m6_frame.IsolationOrderingTests.test_replay_divisor_and_constant_descriptor",
+          "test": "test_replay_divisor_and_constant_descriptor"
+        },
+        {
+          "id": "test_m6_frame.SparseIndexReplayTests.test_missing_origin_cannot_fetch_the_captured_vertices",
+          "kind": "failure",
+          "owner": "test_m6_frame.SparseIndexReplayTests.test_missing_origin_cannot_fetch_the_captured_vertices",
+          "test": "test_missing_origin_cannot_fetch_the_captured_vertices"
+        },
+        {
+          "id": "test_m6_frame.SparseIndexReplayTests.test_sparse_index_with_nonzero_origin_rebases_into_the_capture",
+          "kind": "failure",
+          "owner": "test_m6_frame.SparseIndexReplayTests.test_sparse_index_with_nonzero_origin_rebases_into_the_capture",
+          "test": "test_sparse_index_with_nonzero_origin_rebases_into_the_capture"
+        },
+        {
+          "id": "test_m6_frame.TraceStateHostTests.test_texture_probe_preserves_bindings_and_active_unit",
+          "kind": "failure",
+          "owner": "test_m6_frame.TraceStateHostTests.test_texture_probe_preserves_bindings_and_active_unit",
+          "test": "test_texture_probe_preserves_bindings_and_active_unit"
+        }
+      ],
+      "original_record_sha256": "ac4f216f93388634350fe490638e7657f1393f41c9339a271ef1e4ac742717f9"
+    },
+    "local_linux_arm64": {
+      "id": "20261125T223707Z-2e1f4318",
+      "label": "full",
+      "argv": [
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests"
+      ],
+      "profile": "offline",
+      "counts": {
+        "errors": 0,
+        "executed": 3900,
+        "failures": 0,
+        "ran": 4394,
+        "skipped": 494
+      },
+      "duration_seconds": 165.215,
+      "status": "passed",
+      "failures": [],
+      "original_record_sha256": "aea16f8b1fb40ee6ecb31db08f055214129e51977276b08eb61f681a4ceb8215"
+    },
+    "native_comparison": {
+      "verdict": "no_new_failures",
+      "comparable": true,
+      "counts": {
+        "base": 6,
+        "candidate": 6,
+        "fixed": 0,
+        "new": 0,
+        "preexisting": 6
+      },
+      "preexisting_failures": [
+        "test_m6_frame.IsolationOrderingTests.test_pre_image_survives_the_selected_draw",
+        "test_m6_frame.IsolationOrderingTests.test_replay_divisor_and_constant_descriptor",
+        "test_m6_frame.SparseIndexReplayTests.test_missing_origin_cannot_fetch_the_captured_vertices",
+        "test_m6_frame.SparseIndexReplayTests.test_sparse_index_with_nonzero_origin_rebases_into_the_capture",
+        "test_m6_frame.TraceStateHostTests.test_texture_probe_preserves_bindings_and_active_unit",
+        "test_m7_event20_prefix.CandidateTrustBoundaryTests.setUpClass"
+      ],
+      "new_failures": []
+    }
+  },
+  "m7_historical_receipts": {
+    "exp-canonical-check": {
+      "receipt_sha256": "1c1d13f27a085a95d34d4a029e4338f37c045acc23641ab227d871d02c464e85",
+      "renderer_sha256": "787670d93816de787b513289388107b5f4e3615844e58b13343c029362dd15c7",
+      "recipe_sha256": "533ca57d1609a3a7faf4e058aad194b52d53ef74b4d73fade0e8120272df1675",
+      "shader_identity": {
+        "shaders_json_sha256": "05185d534a25785c1d6d41dfc7b70f8984194729af04b3a61272a86ea58cc42c",
+        "artifacts_sha256": "514ae1739ff97eb1185067320728755af63c75924ca88755b235c7c0791a22a3",
+        "artifact_count": 91
+      },
+      "scope": "recorded diagnostic"
+    },
+    "exp-fastdiv": {
+      "receipt_sha256": "f97891f630aec035d4419a2816864898f445060c28c78830bc0bb8d44a66d9b8",
+      "renderer_sha256": "787670d93816de787b513289388107b5f4e3615844e58b13343c029362dd15c7",
+      "recipe_sha256": "28abd20c04eb95bf4dd8c5cf9770de7d14bde3f43af0937fae81ca83eeab2602",
+      "shader_identity": {
+        "shaders_json_sha256": "05185d534a25785c1d6d41dfc7b70f8984194729af04b3a61272a86ea58cc42c",
+        "artifacts_sha256": "55b3bfd02246906ac72108ad432b200dc750b0898c9855ce4c3931580e7a5fd2",
+        "artifact_count": 91
+      },
+      "scope": "recorded diagnostic"
+    },
+    "exp-div-rcp": {
+      "receipt_sha256": "ada9692010cd9a3fc026ebde1f1fb0dcd835e52f313afa5f8c759383a0bdecf6",
+      "renderer_sha256": "705b4bd16944ae848b6fe6fc1920391755dc6c083374f4e30ee6b6587b142960",
+      "recipe_sha256": "b7fc95281ad4971d000e856e6fef4489d475cb2290ece4e8d9ff6c175045c4ba",
+      "shader_identity": {
+        "shaders_json_sha256": "05185d534a25785c1d6d41dfc7b70f8984194729af04b3a61272a86ea58cc42c",
+        "artifacts_sha256": "c94d09a4e6fcbeb7f52ba2d9c985ddda1695bbd07391fabbce64f6daa88d2a38",
+        "artifact_count": 91
+      },
+      "scope": "recorded diagnostic"
+    }
+  }
+}

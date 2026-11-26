@@ -147,14 +147,7 @@ shows the reflected labels; the corrected final frames are
 
 ## Orientation fixtures and historical images
 
-The registered test reads the `menu-occ300` reference PNG and three tracked
-fixtures. R1b restored the PNG from the independent private copy at
-`.local/r1b-evidence/m6/menu-occ300/frame-reference.png` on the audit host,
-checked its size and SHA-256 against the manifest, and ran the test with
-all four inputs. Restore that PNG from the audit host or its operator copy to
-the manifest path in a fresh checkout. Keep the raw BGRA reference and the
-settled-live swap frames with their original manifests. [Frame manifest](menu-frame-evidence.json)
-· [Registered test](../../tests/test_m6_live_accept.py)
+The [orientation regression](../../tests/test_m6_live_accept.py#L299) ran against three tracked fixtures and the original `menu-occ300` reference PNG (2,829,688 bytes, SHA-256 `2470062bdc49dcbabb8d02ea0395a8697390aa42c6f89fc429658a6a14a87fbe`). Restore it from the independent audit-host copy `.local/r1b-evidence/m6/menu-occ300/frame-reference.png` to `.local/m6/frames/menu-occ300/frame/frame-reference.png`. The [historical frame manifest](menu-frame-evidence.json) retains its exact base Git bytes (SHA-256 `73c32a9d3d63c558cab149bdff9ec87fdaade1ca910e1bc029a903e07a1949dc`).
 
 The three historical screenshots below were recovered individually from
 `bb2eeaf80aeb239b721bd94687c13820146c3b4c` and matched the checkout bytes.
