@@ -245,6 +245,14 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
         "record execution observations.",
         "- [Manifest](manifest.json) records process provenance and the artifact budget.",
     ]
+    statistics = (comparison or {}).get("statistics") or {}
+    if statistics:
+        lines += [
+            f"- Differing pixels: {statistics.get('mismatched_pixels')} / "
+            f"{statistics.get('pixels')} ({statistics.get('mismatched_fraction')}).",
+            f"- Max channel error: {statistics.get('max_channel_error')}. "
+            f"Mean absolute error: {statistics.get('mean_abs_error')}.",
+        ]
     mirrored = (comparison or {}).get("mirrored_regions")
     if mirrored:
         lines.append("- Horizontal mirroring was observed in " + ", ".join(mirrored) + ".")
