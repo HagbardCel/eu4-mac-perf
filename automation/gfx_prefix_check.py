@@ -32,6 +32,7 @@ from automation import (
     campaign_guard, dsh_campaign, gfx_frame_graph, gfx_independent_replay,
     gfx_observation, launch_lease, m6_frame, replay_host_dependencies, state,
 )
+from automation.gfx_artifacts import sha256_file as _sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,14 +49,6 @@ def _read_json(path: Path) -> dict:
     if not isinstance(value, dict):
         raise PrefixCheckError(f"not an object: {path}")
     return value
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _require(condition: bool, problems: list[str], message: str) -> None:
@@ -258,13 +251,6 @@ def resolve_trusted_reference(configured: str | Path | None,
         "record exists; configure the exact seal directory")
 
 
-def _path_overlap(left: Path, right: Path) -> bool:
-    left = left.resolve()
-    right = right.resolve()
-    return (left == right or left in right.parents
-            or right in left.parents)
-
-
 def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
                              *, source_note: str = "",
                              read_only: bool = True, copy: bool = True,
@@ -282,7 +268,7 @@ def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
     destination = Path(destination).expanduser().resolve()
     if not frame_dir.is_dir():
         raise PrefixCheckError(f"frame directory does not exist: {frame_dir}")
-    if _path_overlap(frame_dir, destination):
+    if gfx_independent_replay._path_overlap(frame_dir, destination):
         raise PrefixCheckError(
             "trusted evidence destination overlaps the source frame")
     if validate:

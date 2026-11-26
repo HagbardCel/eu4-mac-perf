@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from automation.gfx_artifacts import sha256_file as _sha256
+
 ROOT = Path(__file__).resolve().parents[1]
 REPLAY_SOURCES = (
     "renderer/metal/eu4_gfx_frame_replay.mm",
@@ -69,14 +71,6 @@ def candidate_sources(trusted_root: Path | str, baseline_commit: str) -> tuple[s
                 entry.startswith(("100644 blob ", "100755 blob ")) for entry in entries.values()):
             return sources
     raise OSError(f"missing, incomplete or ambiguous replay source layout at {baseline_commit}")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _relative(path: Path, root: Path) -> str | None:

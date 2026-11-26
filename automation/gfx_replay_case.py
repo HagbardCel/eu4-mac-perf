@@ -22,6 +22,7 @@ import tempfile
 from pathlib import Path
 
 from automation import gfx_frame_graph, gfx_independent_replay, m6_compare, m6_frame
+from automation.gfx_artifacts import sha256_file as _sha
 
 SCHEMA = "gfx-strategy-b-case/v1"
 SEQUENCE_SCHEMA = "gfx-strategy-b-case/v2"
@@ -34,14 +35,6 @@ class CaseError(RuntimeError):
         super().__init__(kind if not detail else f"{kind}: {detail}")
         self.kind = kind
         self.detail = detail
-
-
-def _sha(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _relative_files(root: Path) -> list[dict]:
