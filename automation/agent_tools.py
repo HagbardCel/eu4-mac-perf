@@ -3327,6 +3327,34 @@ def _replay_reason(report: dict) -> str:
 
 
 def eu4_replay(args: argparse.Namespace) -> dict:
+    if args.replay_op == "qualify":
+        from automation import gfx_revision
+
+        if args.workspace is None or args.commit is None:
+            return _envelope("eu4_replay", "refused", reason="qualification requires --workspace and --commit")
+        try:
+            report = gfx_revision.qualify(
+                args.workspace, args.commit, str(args.case) if args.case is not None else None)
+        except (gfx_revision.QualificationError, OSError, RuntimeError, ValueError,
+                subprocess.SubprocessError) as exc:
+            return _envelope("eu4_replay", "refused", reason=str(exc), qualified=False)
+        if not args.full:
+            for row in report["cases"]:
+                row["coverage_count"] = len(row.pop("coverage", []))
+                row["problems"] = row.get("problems", [])[:1]
+                row.pop("validation_contract", None)
+                if controls := row.pop("controls", None):
+                    row["controls"] = {mode: {"receipt": control["receipt"],
+                                               "restore_exact": control["restore"]["exact"],
+                                               "post_exact": control["post"]["exact"]}
+                                       for mode, control in controls.items()}
+        complete = report["qualified"] or (
+            report["mode"] == "focused"
+            and report["cases"][0]["verdict"] in ("exact", "different"))
+        return _envelope(
+            "eu4_replay", "ok" if complete else "incomplete", report,
+            qualified=report["qualified"],
+            diagnostic="complete" if complete else "incomplete")
     if args.replay_op == "independent":
         if not args.frame or not args.replay_out:
             return _envelope("eu4_replay", "error",
@@ -3930,10 +3958,11 @@ def _parser() -> argparse.ArgumentParser:
     replay.add_argument(
         "replay_op",
         choices=("case", "frame", "independent", "sequence", "diagnose",
-                 "verify"),
-        help="case/frame/independent replay; M7 sequence execution, "
-             "diagnosis or case verification")
+                 "verify", "qualify"),
+        help="case/frame/independent replay, diagnosis, verification or qualification")
     replay.add_argument("--case", type=Path, default=None)
+    replay.add_argument("--workspace", type=Path, default=None)
+    replay.add_argument("--commit", default=None)
     replay.add_argument("--frame", default=None)
     replay.add_argument("--frame-dir", action="append", default=[],
                         help="one ordered M7 frame directory (repeatable)")

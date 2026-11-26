@@ -307,6 +307,7 @@ static struct {
     int prefix_end;
     int prefix_sparse;
     int prefix_event_count;
+    uint64_t prefix_caller;
     int prefix_events[FTRACE_MAX_PREFIX_EVENTS];
     int prefix_depth_stencil;
     int prefix_count;
@@ -1754,11 +1755,25 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     const char *prefix_end = getenv("EU4_GFX_FRAME_TRACE_PREFIX_END");
     const char *observe_events =
         getenv("EU4_GFX_FRAME_TRACE_OBSERVE_EVENTS");
-    if (prefix_end != NULL && prefix_end[0] != 0 &&
-        observe_events != NULL && observe_events[0] != 0) {
+    const char *observe_caller =
+        getenv("EU4_GFX_FRAME_TRACE_OBSERVE_CALLER");
+    int select_prefix = prefix_end != NULL && prefix_end[0] != 0;
+    int select_events = observe_events != NULL && observe_events[0] != 0;
+    int select_caller = observe_caller != NULL && observe_caller[0] != 0;
+    if (select_prefix + select_events + select_caller > 1) {
         return -1;
     }
-    if (prefix_end != NULL && prefix_end[0] != 0) {
+    if (select_caller) {
+        if (parse_u64(observe_caller, &g.prefix_caller) != 0 ||
+            g.prefix_caller == 0) {
+            return -1;
+        }
+        g.prefix_enabled = 1;
+        g.prefix_sparse = 1;
+        g.prefix_event_count = 1;
+        g.prefix_events[0] = -1;
+        g.prefix_end = FTRACE_MAX_PREFIX_EVENTS - 1;
+    } else if (prefix_end != NULL && prefix_end[0] != 0) {
         uint64_t value = 0;
         if (parse_u64(prefix_end, &value) != 0 ||
             value >= (uint64_t)FTRACE_MAX_PREFIX_EVENTS) {
@@ -3137,6 +3152,10 @@ static int prefix_complete_locked(void) {
 }
 
 static void prefix_reset_locked(void) {
+    if (g.prefix_caller != 0) {
+        g.prefix_events[0] = -1;
+        g.prefix_end = FTRACE_MAX_PREFIX_EVENTS - 1;
+    }
     if (g.prefix_observations != NULL) {
         fclose(g.prefix_observations);
         g.prefix_observations = NULL;
@@ -4730,6 +4749,11 @@ static int write_frame_manifest(int complete, const char *reason) {
     const char *renderer = g.gl_renderer[0] ? g.gl_renderer : "";
     const char *version = g.gl_version[0] ? g.gl_version : "";
     fputs("{\"schema\":\"gfx-frame-trace/v1\",", file);
+#if defined(__x86_64__)
+    fputs("\"process_architecture\":\"x86_64\",", file);
+#elif defined(__aarch64__)
+    fputs("\"process_architecture\":\"arm64\",", file);
+#endif
     fprintf(file, "\"complete\":%s,", bool_text(complete));
     fprintf(file, "\"reason\":\"%s\",", reason != NULL ? reason : "");
     fprintf(file, "\"truncated\":%s,", bool_text(g.truncated));
@@ -9425,6 +9449,24 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
     eu4_gfx_frame_sealed_dispatch();
 }
 
+static void observe_draw_exit_locked(uint64_t caller_rva) {
+    if (!g.prefix_enabled) {
+        return;
+    }
+    int event = g.event_count - 1;
+    if (g.prefix_caller != 0 && caller_rva == g.prefix_caller) {
+        if (event >= FTRACE_MAX_PREFIX_EVENTS || g.prefix_events[0] >= 0) {
+            fail_capture_locked("observation_caller_outside_unique_scope");
+            return;
+        }
+        g.prefix_events[0] = event;
+        g.prefix_end = event;
+    }
+    if (event <= g.prefix_end) {
+        (void)prefix_emit_locked(event, "post_event", "draw");
+    }
+}
+
 static void draw_exit_common(eu4_gfx_capture_frame *frame,
                              eu4_gfx_observe_call *call, int indexed,
                              GLint mode, int first, int count,
@@ -9471,11 +9513,7 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                     g.event_count++;
                     g.draw_events++;
                     checkpoint_clear_pending_locked();
-                    if (g.prefix_enabled &&
-                        g.event_count - 1 <= g.prefix_end) {
-                        (void)prefix_emit_locked(g.event_count - 1,
-                                                 "post_event", "draw");
-                    }
+                    observe_draw_exit_locked(call->caller_rva);
                 }
             }
         }
@@ -9541,11 +9579,7 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 g.event_count++;
                 g.draw_events++;
                 checkpoint_clear_pending_locked();
-                if (g.prefix_enabled &&
-                    g.event_count - 1 <= g.prefix_end) {
-                    (void)prefix_emit_locked(g.event_count - 1,
-                                             "post_event", "draw");
-                }
+                observe_draw_exit_locked(call->caller_rva);
             } else {
                 fail_capture_locked(g_capture_failure_reason != NULL
                                         ? g_capture_failure_reason

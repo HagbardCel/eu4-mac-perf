@@ -212,6 +212,11 @@ def _identity_conflict(expected: dict, actual: dict) -> str | None:
     return None
 
 
+def _trusted_reference(case_dir: Path) -> bool:
+    return ((case_dir / "trusted-evidence.json").exists()
+            and not (case_dir / "case.json").exists())
+
+
 def case_identity(case_dir: Path | str) -> dict:
     """Capture and manifest identity of one packaged case.
 
@@ -221,8 +226,16 @@ def case_identity(case_dir: Path | str) -> dict:
     seal keeps its manifest identity and an explicit limitation.
     """
     case_dir = Path(case_dir).resolve()
-    manifest = _json(case_dir / "case.json")
-    seal_path = gfx_replay_case.case_capture_seal_path(case_dir, manifest)
+    if _trusted_reference(case_dir):
+        from automation import gfx_prefix_check
+
+        manifest_path = case_dir / "trusted-evidence.json"
+        frame, manifest = gfx_prefix_check.trusted_frame_path(case_dir, portable=True)
+        seal_path = frame / "frame-seal.json"
+    else:
+        manifest_path = case_dir / "case.json"
+        manifest = _json(manifest_path)
+        seal_path = gfx_replay_case.case_capture_seal_path(case_dir, manifest)
     seal = _json(seal_path) if seal_path is not None else {}
     seal_file = None
     if seal_path is not None:
@@ -237,7 +250,7 @@ def case_identity(case_dir: Path | str) -> dict:
         "event_stream_sha256": seal.get("event_stream_sha256"),
         "seal_sha256": _sha(seal_path) if seal_path is not None else None,
         "seal_file": seal_file,
-        "manifest_sha256": _sha(case_dir / "case.json"),
+        "manifest_sha256": _sha(manifest_path),
         "schema": manifest.get("schema"),
     }
 
@@ -250,7 +263,9 @@ def locator_key(identity: dict) -> str:
                          str(identity.get("session_id") or "session"))[:80]
         frame = re.sub(r"[^A-Za-z0-9._-]+", "-",
                        str(identity.get("capture_frame_id") or "frame"))[:40]
-        return f"{session}-{frame}-{seal[:16]}"
+        key = f"{session}-{frame}-{seal[:16]}"
+        return (f"{key}-reference" if identity.get("schema") in
+                ("gfx-trusted-evidence/v1", "m7-trusted-evidence/v1") else key)
     manifest = identity.get("manifest_sha256")
     if not isinstance(manifest, str) or len(manifest) != 64:
         raise CaseLocatorError("case_identity", "case has no usable identity")
@@ -258,6 +273,8 @@ def locator_key(identity: dict) -> str:
 
 
 def _limitations(identity: dict, verification: dict) -> list[str]:
+    if identity.get("schema") in ("gfx-trusted-evidence/v1", "m7-trusted-evidence/v1"):
+        return ["verified original evidence; workload applicability is evaluated separately"]
     limitations: list[str] = []
     if not identity.get("seal_sha256"):
         limitations.append(
@@ -295,6 +312,16 @@ def _verification_summary(verification: dict) -> dict:
 
 def _verify(case_dir: Path) -> dict:
     try:
+        if _trusted_reference(case_dir):
+            from automation import gfx_prefix_check, m6_frame
+
+            problem = _symlink_problem(case_dir)
+            if problem:
+                return {"ok": False, "problems": [problem]}
+            frame, _ = gfx_prefix_check.trusted_frame_path(case_dir, portable=True)
+            trusted = gfx_prefix_check.verify_trusted_evidence(case_dir, frame)
+            m6_frame.load_seal(frame, trusted_evidence=trusted)
+            return {"ok": True, "files": len(trusted["files"]) + 1}
         return gfx_replay_case.verify(case_dir)
     except Exception as exc:  # noqa: BLE001 - every verifier failure is closed
         return {"ok": False,
@@ -569,9 +596,14 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
                 raise CaseLocatorError(
                     "publish_identity_changed",
                     f"copied case identity changed: {conflict}")
-            target.parent.mkdir(parents=True, exist_ok=True)
             try:
-                os.rename(staging, target)
+                if _trusted_reference(staging):
+                    # A read-only directory cannot be reparented on macOS.
+                    # Publish its writable staging parent instead.
+                    os.rename(staging_parent, target.parent)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.rename(staging, target)
             except OSError as exc:
                 # A concurrent publisher may have won the same key.  Verify
                 # both its bytes and its complete identity before adopting it.
@@ -802,8 +834,6 @@ def _resolve_match(root: Path, locator: dict) -> dict:
             current_verification="missing_payload",
             recorded_verification=locator.get("verification")))
     verification = _verify(target)
-    identity = case_identity(target)
-    expected = locator.get("identity") or {}
     if verification.get("ok") is not True:
         return _identity_view(locator, dict(
             locator, state="digest_mismatch", resolved_path=str(target),
@@ -813,7 +843,8 @@ def _resolve_match(root: Path, locator: dict) -> dict:
             verification=_verification_summary(verification),
             detail="; ".join(str(item) for item in
                              (verification.get("problems") or [])[:4])))
-    conflict = _identity_conflict(expected, identity)
+    identity = case_identity(target)
+    conflict = _identity_conflict(locator.get("identity") or {}, identity)
     if conflict is not None:
         return _identity_view(locator, dict(
             locator, state="digest_mismatch", resolved_path=str(target),

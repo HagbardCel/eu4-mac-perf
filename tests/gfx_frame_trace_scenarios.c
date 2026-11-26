@@ -127,6 +127,8 @@ static void reset_env(void) {
     unsetenv("EU4_GFX_FRAME_TRACE_MAX_CHECKPOINTS");
     unsetenv("EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES");
     unsetenv("EU4_GFX_FRAME_TRACE_PREFIX_END");
+    unsetenv("EU4_GFX_FRAME_TRACE_OBSERVE_EVENTS");
+    unsetenv("EU4_GFX_FRAME_TRACE_OBSERVE_CALLER");
     unsetenv("EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES");
     unsetenv("EU4_GFX_FRAME_TRACE_PREFIX_MAX_NS");
 }
@@ -1057,7 +1059,7 @@ static void report_seal(const char *scenario, const seal_state *state) {
    so every post-event observation is a distinct reference image. */
 /* A sparse late-event selection: 130 events, observations only at 118, 120
    and 129.  No earlier post-event image is read back. */
-static int scenario_prefix_late(const char *directory) {
+static int scenario_prefix_late(const char *directory, int by_caller) {
     seal_state state;
     memset(&state, 0, sizeof(state));
     reset_env();
@@ -1066,7 +1068,11 @@ static int scenario_prefix_late(const char *directory) {
     setenv("EU4_GFX_FRAME_SEAL", "1", 1);
     setenv("EU4_GFX_FRAME_TRACE_MIN_DRAWS", "1", 1);
     setenv("EU4_GFX_FRAME_TRACE_MAX_DRAWS", "140", 1);
-    setenv("EU4_GFX_FRAME_TRACE_OBSERVE_EVENTS", "118,120,129", 1);
+    if (by_caller) {
+        setenv("EU4_GFX_FRAME_TRACE_OBSERVE_CALLER", "0x2000", 1);
+    } else {
+        setenv("EU4_GFX_FRAME_TRACE_OBSERVE_EVENTS", "118,120,129", 1);
+    }
     setenv("EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES", "1048576", 1);
     eu4_gfx_frame_trace_test_reset_seal();
     if (eu4_gfx_frame_sealed_subscribe(seal_test_callback, &state) != 0) {
@@ -1078,8 +1084,9 @@ static int scenario_prefix_late(const char *directory) {
     arm_via_present();
     clear_one();
     for (int index = 1; index <= 129; index++) {
-        draw(true, 0x1000);
-        draw(false, 0x1000);
+        uint64_t caller = by_caller && index == 120 ? 0x2000 : 0x1000;
+        draw(true, caller);
+        draw(false, caller);
     }
     finish_via_present();
     report_seal("prefix-late", &state);
@@ -1279,7 +1286,10 @@ int main(int argc, char **argv) {
         return scenario_prefix_seal(directory);
     }
     if (strcmp(scenario, "prefix-late") == 0) {
-        return scenario_prefix_late(directory);
+        return scenario_prefix_late(directory, 0);
+    }
+    if (strcmp(scenario, "observe-caller") == 0) {
+        return scenario_prefix_late(directory, 1);
     }
     if (strcmp(scenario, "prefix-r32f") == 0) {
         return scenario_prefix_r32f(directory);

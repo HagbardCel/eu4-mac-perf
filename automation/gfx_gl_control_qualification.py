@@ -44,6 +44,7 @@ from pathlib import Path
 from automation import gfx_ed25519
 from automation import gfx_gl_replay_input as replay_input
 from automation import m6_compare
+from automation.gfx_artifacts import sha256_file as _sha
 
 SCHEMA = "gfx-gl-control-qualification/v4"
 COMPARISON_SCHEMA = "gfx-gl-control-comparison/v1"
@@ -66,10 +67,6 @@ class QualificationError(RuntimeError):
         super().__init__(kind if not detail else f"{kind}: {detail}")
         self.kind = kind
         self.detail = detail
-
-
-def _sha(path: Path) -> str:
-    return replay_input.sha256_bytes(Path(path).read_bytes())
 
 
 def _sha_or_none(path: Path) -> str | None:
@@ -1427,6 +1424,116 @@ def attribution(qualification: dict) -> dict:
             "attribute the residual to Metal"),
         "qualification": qualification,
     }
+
+
+def preflight_reference(frame_dir: Path, trace: dict, seal: dict, trusted: dict,
+                        selection: dict) -> dict:
+    """Classify original evidence before a renderer is built or executed."""
+    from automation import gfx_frame_graph, gfx_observation
+
+    if gfx_observation.authority(trace, seal) != "authentic":
+        return {"verdict": "invalid_provenance", "problems": ["reference is not original EU4"]}
+    events = trace["_events"]
+    draw_id = selection.get("draw")
+    resource = selection.get("resource")
+    workload = selection.get("workload")
+    if workload is not None:
+        matches = []
+        for event in events:
+            draw = event.get("draw") or {}
+            color = (event.get("target") or {}).get("color_attachment") or {}
+            shaders = (event.get("program") or {}).get("shaders") or []
+            if (event.get("kind") == "draw"
+                    and draw.get("caller_rva") == workload["caller_rva"]
+                    and {row["stage"]: row["sha256"] for row in shaders}
+                    == workload["shader_sha256"]
+                    and all(color.get(key) == value for key, value in
+                            workload["color_attachment"].items())):
+                matches.append(event)
+        if len(matches) != 1:
+            return {"verdict": "inapplicable_reference",
+                    "problems": ["semantic workload does not identify a unique original draw"]}
+        selected = matches[0]
+        if draw_id is not None and selected.get("index") != draw_id:
+            return {"verdict": "invalid_provenance",
+                    "problems": ["selected event disagrees with the workload identity"]}
+        draw_id = selected.get("index")
+        resource = resource or f"tex:{selected['target']['color_attachment']['name']}"
+    draw = _event(events, draw_id)
+    if not draw or draw.get("kind") != "draw":
+        return {"verdict": "invalid_provenance", "problems": ["selected draw is absent"]}
+    checkpoint_id = selection.get("checkpoint", draw_id)
+    scope = {"draw": draw_id, "resource": resource, "checkpoint": checkpoint_id}
+    if resource == DEFAULT_RESOURCE:
+        facts = replay_input.derive_evidence(
+            trace, seal, draw_event=draw_id, checkpoint_event=checkpoint_id,
+            resource=resource, width=seal["width"], height=seal["height"])
+        missing = list(facts.get("missing") or [])
+        unsupported = list(facts.get("unsupported") or [])
+        if (facts.get("drawable") or {}).get("depth_bits") == 32:
+            missing.append("lossless original D32 depth observation")
+        verdict = ("missing_original_observation" if missing else
+                   "inapplicable_reference" if unsupported else "eligible")
+        return {"verdict": verdict, "scope": scope, "problems": missing + unsupported}
+
+    graph = gfx_frame_graph.build(frame_dir, trace, trusted_evidence=trusted)
+    target = draw.get("target") or {}
+    attachment = target.get("color_attachment") or {}
+    if (resource != f"tex:{attachment.get('name')}" or attachment.get("type") != "texture"
+            or attachment.get("level") != 0 or attachment.get("internal_format") != "RGBA8"):
+        return {"verdict": "inapplicable_reference", "scope": scope,
+                "problems": ["selected target is outside the color-only RGBA8 level-0 scope"]}
+    if graph.get("status") == "invalid":
+        return {"verdict": "invalid_provenance", "scope": scope,
+                "problems": graph.get("reasons") or ["sealed graph is invalid"]}
+    producers = (graph.get("resources", {}).get(resource) or {}).get("producers") or []
+    earlier = [item for item in producers if item["event"] < draw_id]
+    missing = []
+    clear = None
+    if earlier and (earlier[-1].get("coverage") or {}).get("color_full"):
+        clear = events[earlier[-1]["event"]].get("color")
+    if not (isinstance(clear, list) and len(clear) == 4
+            and all(component in (0, 1) for component in clear)):
+        missing.append("proved full endpoint-valued color clear for the selected lifetime")
+    missing.extend(replay_input._state_problems(draw_id, draw.get("state") or {}))
+    direct = next((row for row in (graph.get("prefix") or {}).get("post_events") or []
+                   if row.get("event") == draw_id and row.get("resource") == resource), None)
+    if direct is None:
+        history = gfx_frame_graph.load_frame_history(frame_dir, trace)
+        if history.get("status") == "invalid":
+            return {"verdict": "invalid_provenance", "scope": scope,
+                    "problems": history.get("reasons") or ["invalid texture history"]}
+        read = _event(events, checkpoint_id) or {}
+        fetched = [
+            level for texture in read.get("textures") or []
+            if texture.get("name") == attachment["name"]
+            for level in texture.get("levels") or [] if level.get("level") == 0]
+        if len(fetched) != 1:
+            missing.append("unique later readback of the selected original subresource")
+        elif history.get("status") != "verified":
+            missing.append("sealed texture lifecycle between production and later readback")
+        else:
+            # A later sampled texture inventory lacks an authenticated
+            # immediate observation and freshness witness for this contract.
+            missing.append("authenticated freshness and lifetime of the later readback")
+        missing.append("direct original attachment observation including depth/stencil applicability")
+    else:
+        fmt = gfx_observation.format_scope(direct)
+        missing.extend(fmt.get("problems") or [])
+        if fmt.get("compared_channels") != "RGBA":
+            missing.append("lossless original RGBA observation")
+        for field in ("depth", "stencil"):
+            if (direct.get(field) or {}).get("status") != "not_present":
+                missing.append(f"verified absence of original {field} attachment")
+        if not missing:
+            expected = direct["color"]
+            payload = (frame_dir / "blobs" / expected["file"]).read_bytes()
+            pixel = bytes(int(component) * 255 for component in clear)
+            if payload == pixel * (len(payload) // 4):
+                return {"verdict": "inapplicable_reference", "scope": scope,
+                        "problems": ["original RGBA output is identical to its clear seed"]}
+    return {"verdict": "missing_original_observation" if missing else "eligible",
+            "scope": scope, "problems": missing}
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -62,6 +62,11 @@ The six dossier families describe 92 functions at the static semantic level.
   [Recovery status](../evidence-retention.md#protected-collections-and-recovery-status) ·
   [Archive identity](../../results/20261025T155406Z-gfx-live-publication/publication-summary.md#operator-archive)
 
+  The revision validator's `constant-buffer` case builds the selected Git
+  implementation and compares its memory and return-register effects over
+  414 frozen P-code inputs. This is emulated-original qualification.
+  [Validator interface](../agent-tools.md#eu4_replay)
+
 - **`_GfxForceWireframe` · RVA `0x15ed175`.** The static contract establishes
   the single store of `SIL` to `[RDI + 0x194]` and preservation of `RAX`.
   Caller liveness remains open. The implementation handoff is prospective,

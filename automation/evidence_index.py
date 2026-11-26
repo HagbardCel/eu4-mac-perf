@@ -22,12 +22,12 @@ No database is introduced: session directories and their ``result.json`` /
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import os
 from pathlib import Path
 
 from automation import case_locator
+from automation.gfx_artifacts import sha256_file
 
 SCHEMA = "gfx-evidence-index/v1"
 ROOT_ENV = "EU4_EVIDENCE_ROOT"
@@ -93,11 +93,7 @@ def _read_json(path: Path) -> dict:
 
 def _sha256(path: Path) -> str | None:
     try:
-        digest = hashlib.sha256()
-        with path.open("rb") as source:
-            for block in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(block)
-        return digest.hexdigest()
+        return sha256_file(path)
     except OSError:
         return None
 

@@ -114,6 +114,10 @@ The R7 gross set is `dsh/scripts/{m7-event3,run-campaign,run-pilot}.sh`, `automa
 
 The original R0 publication added **1,031 authored lines** against the pin. This amendment adds a net **96**, bringing R0 to **+1,127 LOC**. The planned cumulative enabling change is **−1,143 LOC** through R6 and **−3,103 LOC** through R7, excluding pure moves and new scientific development. Carry forward only verified removals and recalculate cumulatively after each PR. [Validation targets and measured opportunity](r0-measurements.md#optimization-budget)
 
+### R3 enabling-code removal candidates
+
+Keep the R0 estimate of 400 additions, 600 verified removals and net −200 enabling lines. The first candidates are duplicated M7 event-20 reference admission and verdict plumbing, overlapping candidate worktree/path validation, and repeated ordinary file digest routines in evidence discovery and GL qualification. Existing campaign callers, historic receipt formats and no-follow evidence digests keep their established semantics. Count removed bodies once and record the consuming tests before removal. Measure native state observation and offscreen renderer behavior separately. The verified deletion total, cumulative result and any exception belong in the closure review.
+
 ### R2b completion record
 
 The operator approved the functional implementation at [`07453ebc`](https://github.com/HagbardCel/eu4-mac-perf/commit/07453ebc4a3ad4294311995babfc6f65f408331d). On that head the focused OpenGL gate passed 170 tests, the full native rerun `20261126T183651Z-86e8d36b` passed 4,433 executed tests, and portable CI passed 3,919 executed tests. The authority was independently approved after native execution, then verified with the registered operator key on the 16-pixel synthetic reference. The protected M5–M7 and November 14 dual-run execution records retain their original revision identities. [Independent review and final verification](https://github.com/HagbardCel/eu4-mac-perf/pull/304) · [Portable CI](https://github.com/HagbardCel/eu4-mac-perf/actions/runs/45842694018) · [OpenGL evidence](../../docs/evidence-retention.md#r2b-opengl-authority)

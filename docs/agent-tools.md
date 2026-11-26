@@ -436,6 +436,36 @@ launch guards and the explicit live opt-in.
 
 ### `eu4_replay`
 
+The revision qualifier uses an operator-supplied policy from outside the
+candidate worktree. Set `EU4_QUALIFICATION_POLICY` to that document and
+`EU4_QUALIFICATION_POLICY_SHA256` to its approved SHA-256 in the trusted
+launcher environment. The policy names the approved validator revision,
+protected output root, evidence roots, and per-case exact, diagnostic or
+optional requirements. The DSH adapter takes the workspace from the session
+and imports the Python core from the configured trusted checkout.
+
+```sh
+python3.14 -m automation.agent_tools eu4_replay qualify \
+  --workspace /path/to/candidate --commit <full-git-commit>
+```
+
+Use `--case <id>` for one focused execution and `--full` for the expanded
+report. Focused runs never qualify a revision. The validator writes execution
+receipts at their actual revisions. A function case can name a protected
+earlier receipt through `reuse_receipt`; the validator verifies applicability
+and referenced output bytes before the qualification record can link to it.
+
+The native candidate path supports the reviewed synthetic GL fixture and its
+draw-omission control. Authentic GL currently stops at reference preflight.
+The retained M7
+window draw lacks drawable equivalence and lossless depth. The event 273
+offscreen draw lacks sealed texture lifetime evidence for its later readback.
+These assessments do not qualify a candidate draw. For a separately
+authorized capture, use `m6_frame capture --seal --observe-caller <rva>
+--observe-depth-stencil` with the established capture options. The sealed
+frame must contain one matching caller. Qualification verifies the shader
+identities and attachment contract against the selected workload.
+
 ```sh
 # v1 single-frame and v2 ordered-prefix Strategy B cases are recognized by the
 # same schema dispatch; omit --out to verify, pass it to replay.

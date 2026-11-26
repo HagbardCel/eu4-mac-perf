@@ -347,20 +347,32 @@ def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
     return record
 
 
+def trusted_frame_path(trusted_root: Path | str, *, portable: bool = False) -> tuple[Path, dict]:
+    """Read the existing evidence descriptor and resolve its frame path."""
+    root = Path(trusted_root).expanduser().resolve()
+    record = _read_json(root / "trusted-evidence.json")
+    if record.get("schema") not in (
+            "gfx-trusted-evidence/v1", "m7-trusted-evidence/v1"):
+        raise PrefixCheckError("unexpected trusted-evidence schema")
+    relative = record.get("frame_relative")
+    if portable and (record.get("frame_path") or not isinstance(relative, str)
+                     or not relative or Path(relative).is_absolute()
+                     or ".." in Path(relative).parts):
+        raise PrefixCheckError("trusted reference has no portable frame path")
+    if record.get("frame_path"):
+        frame = Path(str(record["frame_path"])).expanduser().resolve()
+    else:
+        frame = (root / str(relative or "")).resolve()
+    if portable and (frame == root or not frame.is_relative_to(root)):
+        raise PrefixCheckError("trusted frame escapes its publication root")
+    return frame, record
+
+
 def verify_trusted_evidence(trusted_root: Path | str,
                             frame_dir: Path | str) -> dict:
     """Verify a digest-bound trusted root and return its record."""
     trusted_root = Path(trusted_root).expanduser().resolve()
-    record_path = trusted_root / "trusted-evidence.json"
-    record = _read_json(record_path)
-    if record.get("schema") not in (
-            "gfx-trusted-evidence/v1", "m7-trusted-evidence/v1"):
-        raise PrefixCheckError("unexpected trusted-evidence schema")
-    if record.get("frame_path"):
-        expected_frame = Path(str(record["frame_path"])).expanduser().resolve()
-    else:
-        expected_frame = (trusted_root /
-                          str(record.get("frame_relative") or "")).resolve()
+    expected_frame, record = trusted_frame_path(trusted_root)
     if Path(frame_dir).expanduser().resolve() != expected_frame:
         raise PrefixCheckError(
             "frame directory is not the trusted-evidence frame")
@@ -547,7 +559,8 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
                         graph: dict | None = None,
                         candidate_workspace: Path | str | None = None,
                         candidate_sidecar: Path | str | None = None,
-                        diagnostics: dict | None = None) -> dict:
+                        diagnostics: dict | None = None,
+                        fenced_host: tuple[Path, dict] | None = None) -> dict:
     """Execute one Metal replay in a fresh, self-contained execution directory.
 
     ``run_dir`` is a campaign output root.  Every call creates a unique child
@@ -570,8 +583,19 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
     replay_input = execution_dir / "replay-input"
     input_record = m6_frame.materialize_replay_input(
         frame_dir, trace, replay_input, graph=graph)
+    if fenced_host is not None and input_record["shared_input_outputs"]:
+        raise PrefixCheckError("fenced Metal input overlaps protected original outputs")
     request_path = execution_dir / "checkpoint-request.json"
-    request_path.write_text(json.dumps(request, indent=2) + "\n")
+    native_request = request
+    if fenced_host is not None:
+        fields = ("event", "target", "file", "resource", "timing")
+        native_request = {
+            "schema": request["schema"],
+            "checkpoints": [{key: row[key] for key in fields if key in row}
+                            for row in request["checkpoints"]],
+        }
+    request_path.write_text(json.dumps(native_request, indent=2) + "\n")
+    executed_request_sha = _sha256(request_path)
     shaders = execution_dir / "shaders"
     translated = m6_frame.translate_for_replay(
         frame_dir, shaders, cache_dir=run_root / "cache" / "translation",
@@ -611,6 +635,8 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
             after, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         candidate["snapshot_files"] = snapshot["files"]
         candidate["build"] = candidate_build
+    elif fenced_host is not None:
+        host, candidate = fenced_host
     else:
         try:
             host = m6_frame.build_replay_host()
@@ -630,23 +656,37 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         # refusal rather than a generic execution failure.
         campaign_guard.require_active_from_env()
         started = time.time()
-        completed = subprocess.run(
-            replay_command, cwd=str(execution_dir),
-            env=_execution_environment(execution_dir),
-            capture_output=True, text=True, timeout=600, check=False)
+        if fenced_host is None:
+            completed = subprocess.run(
+                replay_command, cwd=str(execution_dir),
+                env=_execution_environment(execution_dir),
+                capture_output=True, text=True, timeout=600, check=False)
+        else:
+            from automation import qualification_sandbox
+
+            completed = qualification_sandbox.run(
+                replay_command, writable=replay_dir,
+                readable=(replay_input, shaders, request_path), graphics="metal", timeout=600)
         finished = time.time()
     if completed.returncode != 0:
         raise PrefixCheckError(
-            "trusted Metal replay failed: "
-            + (completed.stderr.strip() or completed.stdout.strip())[-400:])
-    if candidate is not None:
-        if _sha256(host) != candidate["build"]["host_sha256"]:
-            raise PrefixCheckError(
-                "candidate replay host changed after execution")
+            f"trusted Metal replay exited with {completed.returncode}: "
+            + (completed.stderr.strip() or completed.stdout.strip())[-2400:])
+    if candidate is not None and _sha256(host) != candidate["build"]["host_sha256"]:
+        raise PrefixCheckError("candidate replay host changed after execution")
+    if candidate is not None and fenced_host is None:
         post_execution = replay_host_dependencies.relative_dependencies(workspace, sources, strict=True)
         if post_execution != candidate["source_digests"]:
             raise PrefixCheckError(
                 "candidate renderer source changed after the trusted build")
+    if fenced_host is not None:
+        if _sha256(request_path) != executed_request_sha:
+            raise PrefixCheckError("fenced replay request changed during execution")
+        allowed = {"replay.json", "metal-frame.bgra", "replay-provenance.jsonl"}
+        allowed.update(row["file"] for row in request["checkpoints"])
+        if any(path.name not in allowed or path.is_symlink() or not path.is_file()
+               or path.stat().st_nlink != 1 for path in replay_dir.iterdir()):
+            raise PrefixCheckError("fenced replay produced unexpected files")
     replay_path = replay_dir / "replay.json"
     replay = _read_json(replay_path)
     if replay.get("status") != "ok" or replay.get("failed") != 0:
@@ -667,7 +707,9 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
             outputs.append({"file": path.name, "bytes": path.stat().st_size,
                             "sha256": _sha256(path)})
     isolation = None
-    if candidate is not None:
+    if fenced_host is not None:
+        isolation = {"mechanism": "seatbelt", "reference_roots": [str(frame_dir)]}
+    elif candidate is not None:
         isolation = {
             "mechanism": "input-separation",
             "trust": (
@@ -689,6 +731,7 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         "frame_dir": str(frame_dir),
         "replay_input": input_record,
         "request_sha256": _sha256(replay_dir / "checkpoint-request.json"),
+        "executed_request_sha256": executed_request_sha,
         "replay_host": str(host),
         "replay_host_sha256": _sha256(host),
         "shaders_json_sha256": _sha256(shaders / "shaders.json")
@@ -809,7 +852,8 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
              trusted_root: Path | str | None = None,
              trusted_run_dir: Path | str | None = None,
              candidate_workspace: Path | str | None = None,
-             candidate_sidecar: Path | str | None = None) -> dict:
+             candidate_sidecar: Path | str | None = None,
+             fenced_host: tuple[Path, dict] | None = None) -> dict:
     """Verify one sealed frame's exact prefix against its Metal replay.
 
     ``frame_dir`` contains the seal, event stream, blobs and observation file.
@@ -869,7 +913,7 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
         "event_stream_sha256": seal.get("event_stream_sha256"),
         "reference_sha256": seal.get("reference_sha256"),
     }
-    graph = gfx_frame_graph.build(frame_dir, trace=trace)
+    graph = gfx_frame_graph.build(frame_dir, trace=trace, trusted_evidence=trusted_record)
     overlap = m6_frame.replay_input_overlap(trace, frame_dir, graph=graph)
     result["shared_input_outputs"] = overlap
     for item in overlap:
@@ -939,7 +983,7 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                 trace=trace, graph=graph,
                 candidate_workspace=candidate_workspace,
                 candidate_sidecar=candidate_sidecar,
-                diagnostics=execution_diagnostics)
+                diagnostics=execution_diagnostics, fenced_host=fenced_host)
         except campaign_guard.CampaignRefusal as exc:
             problems.append(f"trusted replay refused: {exc}")
             result["failed_execution"] = execution_diagnostics
@@ -1027,8 +1071,10 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
              problems, "Metal replay event count does not match the frame")
     _require(replay.get("encoded") == replay.get("events"), problems,
              "Metal replay did not encode every event")
+    executed_request_sha = (execution.get("executed_request_sha256", request_sha)
+                            if fenced_host is not None and trusted_execution else request_sha)
     for field, value in (
-            ("checkpoint_request_sha256", request_sha),
+            ("checkpoint_request_sha256", executed_request_sha),
             ("checkpoint_request_file", request_file.name)):
         if replay.get(field) is not None:
             _require(replay.get(field) == value, problems,

@@ -195,6 +195,25 @@ class Event20PrefixTests(unittest.TestCase):
             capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_read_only_trusted_reference_can_be_published_and_verified(self):
+        from automation import case_locator
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            frame = root / "producer"
+            self._sealed_frame(frame)
+            source = root / "trusted"
+            gfx_prefix_check.prepare_trusted_evidence(frame, source)
+            publication = case_locator.publish(source, root / "evidence", min_free_bytes=0)
+            self.assertTrue(publication["key"].endswith("-reference"))
+            resolved = case_locator.locate(root / "evidence", key=publication["key"])
+            self.assertTrue(resolved["safe_to_reuse"], resolved)
+            member = Path(resolved["matches"][0]["resolved_path"]) / "frame/frame-trace.json"
+            member.chmod(0o644)
+            member.write_text("{}")
+            refused = case_locator.locate(root / "evidence", key=publication["key"])
+            self.assertEqual(refused["state"], "digest_mismatch")
+
     def _make_r32f_event20_fixture(self, frame: Path) -> None:
         """Rewrite event 11 as an authenticated R32F clear with its reference."""
         manifest = json.loads((frame / "frame-trace.json").read_text())
@@ -584,6 +603,18 @@ class Event20PrefixTests(unittest.TestCase):
                          "refused")
         self.assertTrue(any("operator_stop" in problem
                             for problem in result["problems"]))
+
+    def test_selected_caller_observes_only_its_post_draw_boundary(self):
+        directory = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        completed = subprocess.run(
+            [str(self.binary), "observe-caller", str(directory)],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        trace = m6_frame.load_trace(directory)
+        observations = trace["_prefix"]
+        self.assertEqual(observations["events"], [120])
+        self.assertEqual(trace["_events"][120]["draw"]["caller_rva"], "0x2000")
+        self.assertTrue(m6_frame.load_seal(directory, trace=trace)["sealed"])
 
     def test_selected_late_events_do_not_claim_a_prefix(self):
         directory = Path(tempfile.mkdtemp(dir=self.temporary.name))

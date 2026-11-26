@@ -36,9 +36,9 @@ const number = (description) => ({ type: 'number', description })
 const boolean = (description) => ({ type: 'boolean', description })
 
 export function definitions(run) {
-  const safe = (toolName) => async (args, _exec) => {
+  const safe = (toolName) => async (args, exec) => {
     try {
-      return await run(toolName, args || {})
+      return await run(toolName, args || {}, exec)
     } catch (error) {
       return {
         schema: 'eu4-agent-tool/v2',
@@ -198,8 +198,9 @@ export function definitions(run) {
         'Read outcome.execution, outcome.diagnostic, outcome.evidence and outcome.qualified ' +
         'together; completed execution and saved pixels alone cannot qualify evidence.',
       {
-        op: { type: 'string', enum: ['case', 'frame', 'independent', 'sequence', 'diagnose', 'verify'], description: 'replay/verification kind' },
-        case: string('case directory (case/verify)'),
+        op: { type: 'string', enum: ['case', 'frame', 'independent', 'sequence', 'diagnose', 'verify', 'qualify'], description: 'replay/verification kind' },
+        case: string('case directory or focused qualification case identifier'),
+        commit: string('full Git revision to qualify in the session workspace'),
         frame: string('captured frame directory (frame/independent/diagnose)'),
         frame_dirs: { type: 'array', items: { type: 'string' }, description: 'ordered M7 frame directories (sequence)' },
         metal: string('already-produced Metal result directory (diagnose)'),
@@ -264,8 +265,15 @@ export function apply(ctx, config = {}) {
   } else {
     ctx.logger?.info?.(`[eu4-tools] Python core: ${python}`)
   }
-  const run = config.runner || ((toolName, args) => {
+  const run = config.runner || ((toolName, args, exec) => {
     if (pythonError) return Promise.reject(new Error(pythonError))
+    if (toolName === 'eu4_replay' && args.op === 'qualify') {
+      const workspace = exec?.agent?.session?.header?.cwd
+      if (!config.infra || !workspace || !args.commit) {
+        return Promise.reject(new Error('qualification needs a configured trusted checkout, session workspace, and commit'))
+      }
+      args = { op: args.op, commit: args.commit, workspace, case: args.case, full: args.full }
+    }
     return runTool(toolName, args, {
       python,
       cwd,

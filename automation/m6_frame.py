@@ -1231,13 +1231,22 @@ def checkpoint_options_error(args) -> str | None:
         return "--checkpoint-max-bytes must be positive"
     prefix_end = getattr(args, "prefix_end", None)
     observe_events = getattr(args, "observe_events", None)
-    if prefix_end is not None and observe_events:
-        return "--prefix-end and --observe-events are mutually exclusive"
+    observe_caller = getattr(args, "observe_caller", None)
+    if sum((prefix_end is not None, bool(observe_events), observe_caller is not None)) > 1:
+        return "--prefix-end, --observe-events and --observe-caller are mutually exclusive"
+    if observe_caller is not None and (
+            not 0 < observe_caller < 2**64 or not getattr(args, "seal", False)
+            or getattr(args, "continuous", False)):
+        return "--observe-caller requires a positive RVA and a single sealed frame"
+    if getattr(args, "observe_depth_stencil", False) and (
+            not getattr(args, "seal", False)
+            or (prefix_end is None and not observe_events and observe_caller is None)):
+        return "--observe-depth-stencil requires --seal and a bounded observation selection"
     selection_problem = observation_selection_error(
         observe_events, int(getattr(args, "max_draws", 0) or 0))
     if selection_problem is not None:
         return selection_problem
-    if observe_events and (
+    if (observe_events or observe_caller is not None) and (
             int(getattr(args, "prefix_max_bytes", 0) or 0) <= 0 or
             int(getattr(args, "prefix_max_ns", 0) or 0) <= 0):
         return "--prefix-max-bytes and --prefix-max-ns must be positive"
@@ -1401,6 +1410,10 @@ def capture(args: argparse.Namespace) -> int:
             print(f"capture refused: {exc.kind}: {exc.detail}",
                   file=sys.stderr)
             return 3
+    if getattr(args, "observe_caller", None) is not None and capture_guard is None:
+        print("capture refused: caller observation requires an operator-authorized "
+              "controlled_capture", file=sys.stderr)
+        return 3
     # The coordinator record is bound to this capture before any process is
     # started, so a stale record can never settle this launch.
     capture_id = str(uuid.uuid4())
@@ -1496,22 +1509,18 @@ def capture(args: argparse.Namespace) -> int:
             checkpoint_budget)
     prefix_end = getattr(args, "prefix_end", None)
     observe_events = getattr(args, "observe_events", None)
-    if prefix_end is not None and observe_events:
-        return "--prefix-end and --observe-events are mutually exclusive"
-    selection_problem = observation_selection_error(
-        observe_events, int(getattr(args, "max_draws", 0) or 0))
-    if selection_problem is not None:
-        return selection_problem
-    if observe_events and (
-            int(getattr(args, "prefix_max_bytes", 0) or 0) <= 0 or
-            int(getattr(args, "prefix_max_ns", 0) or 0) <= 0):
-        return "--prefix-max-bytes and --prefix-max-ns must be positive"
+    observe_caller = getattr(args, "observe_caller", None)
+    if observe_events:
+        env_extra["EU4_GFX_FRAME_TRACE_OBSERVE_EVENTS"] = str(observe_events)
+    if observe_caller is not None:
+        env_extra["EU4_GFX_FRAME_TRACE_OBSERVE_CALLER"] = hex(observe_caller)
     if prefix_end is not None:
         env_extra["EU4_GFX_FRAME_TRACE_PREFIX_END"] = str(prefix_end)
-        env_extra["EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES"] = str(
-            int(getattr(args, "prefix_max_bytes", 384 * 1024 * 1024)))
-        env_extra["EU4_GFX_FRAME_TRACE_PREFIX_MAX_NS"] = str(
-            int(getattr(args, "prefix_max_ns", 10_000_000_000)))
+    if observe_events or observe_caller is not None or prefix_end is not None:
+        env_extra["EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES"] = str(args.prefix_max_bytes)
+        env_extra["EU4_GFX_FRAME_TRACE_PREFIX_MAX_NS"] = str(args.prefix_max_ns)
+    if getattr(args, "observe_depth_stencil", False):
+        env_extra["EU4_GFX_FRAME_TRACE_OBSERVE_DEPTH_STENCIL"] = "1"
     sparse_uv2 = getattr(args, "uv2_probe_pixels", None)
     if sparse_uv2:
         if (capture_guard is None or not getattr(args, "seal", False)
@@ -1751,8 +1760,10 @@ def capture(args: argparse.Namespace) -> int:
                 args, "checkpoint_max_bytes", None),
             "prefix_end": getattr(args, "prefix_end", None),
             "observe_events": getattr(args, "observe_events", None),
+            "observe_caller": hex(observe_caller) if observe_caller is not None else None,
             "prefix_max_bytes": getattr(args, "prefix_max_bytes", None),
             "prefix_max_ns": getattr(args, "prefix_max_ns", None),
+            "observe_depth_stencil": bool(getattr(args, "observe_depth_stencil", False)),
         },
     }
     status = 0
@@ -4200,6 +4211,11 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument(
         "--prefix-max-ns", type=int, default=10_000_000_000,
         help="aggregate readback-time budget for exact-prefix observations")
+    cap.add_argument("--observe-caller", type=lambda value: int(value, 0), metavar="RVA",
+                     help="observe the post-draw attachment for one caller in a sealed frame")
+    cap.add_argument("--observe-depth-stencil", action="store_true",
+                     help="record original depth/stencil observations or verified absence "
+                          "for the bounded sealed observation selection")
     cap.add_argument("--seal", action="store_true",
                      help="publish the authoritative frame-seal/v1 handoff")
     cap.add_argument(

@@ -242,6 +242,32 @@ def build_candidate(
     }
 
 
+def materialize_commit(repo: Path, revision: str, destination: Path,
+                       paths: tuple[str, ...]) -> dict[str, str]:
+    """Stage only approved regular files from the pinned Git tree."""
+    entries = _git(repo, "--no-replace-objects", "ls-tree", "-z", revision, "--", *paths)
+    files = {}
+    for row in filter(None, entries.split("\0")):
+        metadata, name = row.split("\t", 1)
+        mode, kind, object_id = metadata.split()
+        if name not in paths or mode not in (MODE_FILE, MODE_EXEC) or kind != "blob":
+            raise SnapshotError(f"ineligible source in candidate tree: {name}")
+        files[name] = object_id
+    if files.keys() != set(paths):
+        raise SnapshotError(f"candidate source is missing: {sorted(set(paths) - files.keys())}")
+    destination.mkdir()
+    result = {}
+    for name, object_id in files.items():
+        content = subprocess.check_output(
+            ["/usr/bin/git", "--no-replace-objects", "-C", str(repo),
+             "cat-file", "blob", object_id], timeout=60)
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        result[name] = hashlib.sha256(content).hexdigest()
+    return result
+
+
 def raw_diff(repo: Path, base: str, candidate: str) -> list[dict]:
     """Paths, modes and status letters between two commits (rename-aware)."""
     raw = subprocess.run(

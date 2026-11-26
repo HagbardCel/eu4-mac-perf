@@ -104,29 +104,9 @@ def main(argv: list[str]) -> int:
     workspace = Path(positional[0]).expanduser().resolve()
     try:
         trusted_root = _trusted_root(workspace)
-    except (gfx_prefix_check.PrefixCheckError, OSError, ValueError,
-            json.JSONDecodeError) as exc:
-        return _emit(
-            "inconclusive",
-            f"trusted reference root is not usable: {exc}")
-    try:
-        trusted_root.relative_to(workspace)
-    except ValueError:
-        pass
-    else:
-        return _emit(
-            "inconclusive",
-            "trusted evidence root is inside the candidate workspace: "
-            f"{trusted_root}")
-    record_path = trusted_root / "trusted-evidence.json"
-    try:
-        record = json.loads(record_path.read_text())
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        return _emit(
-            "inconclusive",
-            f"digest-bound trusted evidence record is unreadable: {exc}")
-    frame_dir = Path(str(record.get("frame_path") or
-                           (trusted_root / "frame"))).expanduser().resolve()
+        frame_dir, _ = gfx_prefix_check.trusted_frame_path(trusted_root)
+    except (gfx_prefix_check.PrefixCheckError, OSError, ValueError) as exc:
+        return _emit("inconclusive", f"trusted reference root is not usable: {exc}")
     if not frame_dir.is_dir():
         return _emit(
             "inconclusive",

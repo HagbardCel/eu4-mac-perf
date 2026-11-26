@@ -169,7 +169,8 @@ def prestate_bytes(corpus: dict[str, Any]) -> bytes:
 
 
 def run_harness(harness: Path, slot: int, selector: int, buffer_dword: int | None,
-                prestate: bytes, env: dict[str, str] | None = None) -> dict[str, str]:
+                prestate: bytes, env: dict[str, str] | None = None, *,
+                runner=subprocess.run) -> dict[str, str]:
     """Run one reconstruction scenario with an explicit context pre-state.
 
     The caller owns the pre-state and the interpretation of the output. This only preserves the
@@ -179,7 +180,7 @@ def run_harness(harness: Path, slot: int, selector: int, buffer_dword: int | Non
     """
     argument = "absent" if buffer_dword is None else f"{buffer_dword:08x}"
     command = [str(harness), "scenario", str(slot), f"{selector:x}", argument]
-    result = subprocess.run(command, input=prestate.hex() + "\n",
+    result = runner(command, input=prestate.hex() + "\n",
                             capture_output=True, text=True, timeout=HARNESS_TIMEOUT,
                             env=sanitizer_env() if env is None else env)
     fields: dict[str, str] = {}
@@ -193,12 +194,13 @@ def run_harness(harness: Path, slot: int, selector: int, buffer_dword: int | Non
 
 
 def run_reconstruction(harness: Path, row: dict[str, Any], corpus: dict[str, Any],
-                       env: dict[str, str] | None = None) -> dict[str, str]:
+                       env: dict[str, str] | None = None, *,
+                       runner=subprocess.run) -> dict[str, str]:
     """One corpus row through the compiled reconstruction's `scenario` harness mode."""
     dword = row["buffer_first_dword"]
     return run_harness(harness, row["slot"], pilot.hexint(row["r9d"]),
                        None if dword is None else pilot.hexint(dword),
-                       prestate_bytes(corpus), env)
+                       prestate_bytes(corpus), env, runner=runner)
 
 
 def _store_set(oracle: dict[str, Any]) -> set[tuple[int, int]]:
@@ -334,7 +336,8 @@ def compare_row(row: dict[str, Any], oracle: dict[str, Any], recon: dict[str, st
 
 
 def compare_corpus(harness: Path, corpus: dict[str, Any] | None = None,
-                   reference: dict[str, Any] | None = None) -> list[str]:
+                   reference: dict[str, Any] | None = None, *,
+                   runner=subprocess.run) -> list[str]:
     """Reconcile every frozen corpus row; returns one message per disagreement.
 
     The reference is qualified first, and a reference that fails qualification is returned as the
@@ -357,7 +360,8 @@ def compare_corpus(harness: Path, corpus: dict[str, Any] | None = None,
         if oracle is None:
             failures.append(f"{row['id']}: the reference has no row for this corpus input")
             continue
-        failures += compare_row(row, oracle, run_reconstruction(harness, row, corpus), corpus)
+        candidate = run_reconstruction(harness, row, corpus, runner=runner)
+        failures += compare_row(row, oracle, candidate, corpus)
     return failures
 
 
