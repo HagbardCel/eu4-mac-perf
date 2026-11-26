@@ -10,7 +10,7 @@
 - `Metal.framework/Headers/MTLCommandEncoder.h`
 - [loadAction](https://developer.apple.com/documentation/metal/mtlrenderpassattachmentdescriptor/loadaction)
 - [storeAction](https://developer.apple.com/documentation/metal/mtlrenderpassattachmentdescriptor/storeaction)
-- [`eu4_gfx_clear`](../../benchmark/eu4_gfx_init.h)
+- [`eu4_gfx_clear`](../../renderer/integration/eu4_gfx_init.h)
 - [`_GfxClear`](../reconstruction/gfx-semantic/v1/state/_GfxClear.md)
 
 ## Provenance

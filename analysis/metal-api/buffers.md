@@ -9,7 +9,7 @@
 - `Metal.framework/Headers/MTLBuffer.h`
 - `Metal.framework/Headers/MTLResource.h`
 - [MTLBuffer](https://developer.apple.com/documentation/metal/mtlbuffer)
-- [`eu4_gfx_buffers.h`](../../benchmark/eu4_gfx_buffers.h)
+- [`eu4_gfx_buffers.h`](../../renderer/metal/eu4_gfx_buffers.h)
 - [Index buffers](../metal-init/index-buffers/note.md)
 - [Vertex update](../automation/pilot-gfx-update-vertex-buffer-multiple/note.md)
 - [Vertex selection](../automation/pilot-gfx-set-vertex-buffers/note.md)
@@ -32,7 +32,7 @@ Reviewed 2026-11-05 against macOS SDK 27.0. `MTLBuffer.h` and `MTLResource.h` we
 
 ## Backend implications
 
-[Project-derived] Vertex and index buffers are created with `MTLResourceStorageModeShared`. An update writes the existing buffer's `contents` and does not allocate a replacement. A failed update leaves that buffer unchanged. [`eu4_gfx_vertex_slot_buffer`](../../benchmark/eu4_gfx_buffers.h) returns the registry's current buffer and does not retain a copy. Release nils buffers this backend created and does not free engine headers.
+[Project-derived] Vertex and index buffers are created with `MTLResourceStorageModeShared`. An update writes the existing buffer's `contents` and does not allocate a replacement. A failed update leaves that buffer unchanged. [`eu4_gfx_vertex_slot_buffer`](../../renderer/metal/eu4_gfx_buffers.h) returns the registry's current buffer and does not retain a copy. Release nils buffers this backend created and does not free engine headers.
 
 [Project-derived] A logical length of 0 uses a 1-byte shared allocation. That is a local shortcut in `benchmark/eu4_gfx_buffers.mm`, not an Apple rule.
 
