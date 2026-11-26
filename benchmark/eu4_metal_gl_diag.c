@@ -1,4 +1,4 @@
-#include "eu4_gfx_init.h"
+#include "../renderer/integration/eu4_gfx_init.h"
 #include "eu4_metal_events.h"
 
 #define GL_SILENCE_DEPRECATION

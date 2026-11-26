@@ -5,12 +5,12 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "benchmark" / "eu4_gfx_init.mm"
+SOURCE = ROOT / "renderer/integration" / "eu4_gfx_init.mm"
 FRAME_OBSERVE = ROOT / "benchmark" / "eu4_gfx_frame_observe.c"
 BUFFERS = ROOT / "renderer/metal" / "eu4_gfx_buffers.mm"
 TEXTURE = ROOT / "renderer/metal" / "eu4_gfx_texture.mm"
 HOST_SOURCE = ROOT / "tests" / "gfx_hidpi_host.mm"
-GEOMETRY_VIEW = ROOT / "benchmark" / "eu4_metal_geometry_view.m"
+GEOMETRY_VIEW = ROOT / "renderer/integration" / "eu4_metal_geometry_view.m"
 EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
 HOST = ROOT / "benchmark" / ".build" / "gfx_hidpi_host"
 

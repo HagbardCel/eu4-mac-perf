@@ -4,9 +4,9 @@
 
 #import "../renderer/metal/eu4_gfx_buffers.h"
 #import "eu4_gfx_draw_capture.h"
-#import "eu4_gfx_checkpoint.h"
-#import "eu4_gfx_draw_route.h"
-#import "eu4_gfx_init.h"
+#import "../renderer/integration/eu4_gfx_checkpoint.h"
+#import "../renderer/integration/eu4_gfx_draw_route.h"
+#import "../renderer/integration/eu4_gfx_init.h"
 #import "../renderer/metal/eu4_gfx_generic_draw.h"
 #import "../renderer/metal/eu4_gfx_shader.h"
 #import "../renderer/metal/eu4_gfx_simple_draw.h"

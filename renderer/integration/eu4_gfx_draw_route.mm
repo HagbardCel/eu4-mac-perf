@@ -1,15 +1,15 @@
 #import "eu4_gfx_draw_route.h"
 
-#import "../renderer/metal/eu4_gfx_draw_encode.h"
-#import "../renderer/metal/eu4_gfx_generic_draw.h"
-#import "../renderer/metal/eu4_gfx_shader.h"
-#import "../renderer/metal/eu4_gfx_texture.h"
+#import "../metal/eu4_gfx_draw_encode.h"
+#import "../metal/eu4_gfx_generic_draw.h"
+#import "../metal/eu4_gfx_shader.h"
+#import "../metal/eu4_gfx_texture.h"
 
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_init.h"
-#import "eu4_gfx_logical_capture.h"
-#import "eu4_gfx_perf.h"
-#import "eu4_metal_events.h"
+#import "../../benchmark/eu4_gfx_logical_capture.h"
+#import "../../benchmark/eu4_gfx_perf.h"
+#import "../../benchmark/eu4_metal_events.h"
 
 #import <Metal/Metal.h>
 #import <stdio.h>

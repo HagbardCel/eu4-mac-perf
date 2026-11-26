@@ -1,7 +1,7 @@
 #import "eu4_gfx_sprite_draw.h"
 
 #import "eu4_gfx_buffers.h"
-#import "../../benchmark/eu4_gfx_init.h"
+#import "../integration/eu4_gfx_init.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_texture.h"
 #import "../../benchmark/eu4_gfx_perf.h"

@@ -1,5 +1,5 @@
 #import "../renderer/metal/eu4_gfx_buffers.h"
-#import "../benchmark/eu4_gfx_init.h"
+#import "../renderer/integration/eu4_gfx_init.h"
 #import "../benchmark/eu4_metal_events.h"
 
 #import <Metal/Metal.h>

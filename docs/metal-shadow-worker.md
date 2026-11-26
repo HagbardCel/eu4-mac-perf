@@ -2,7 +2,7 @@
 
 A persistent x86-64 process that calls the existing Metal gfx functions. It does not attach to EU4, does not reimplement the renderer, and does not claim original-game equivalence.
 
-Build and speak the protocol through [benchmark/eu4_gfx_shadow_worker.py](../benchmark/eu4_gfx_shadow_worker.py). The binary links [eu4_gfx_init.mm](../benchmark/eu4_gfx_init.mm), [eu4_gfx_buffers.mm](../benchmark/eu4_gfx_buffers.mm), and [eu4_metal_events.c](../benchmark/eu4_metal_events.c). Stdout is one JSON object per line. Diagnostics and the receipt directory go to stderr.
+Build and speak the protocol through [benchmark/eu4_gfx_shadow_worker.py](../benchmark/eu4_gfx_shadow_worker.py). The binary links [eu4_gfx_init.mm](../renderer/integration/eu4_gfx_init.mm), [eu4_gfx_buffers.mm](../renderer/metal/eu4_gfx_buffers.mm), and [eu4_metal_events.c](../benchmark/eu4_metal_events.c). Stdout is one JSON object per line. Diagnostics and the receipt directory go to stderr.
 
 ## Envelope
 

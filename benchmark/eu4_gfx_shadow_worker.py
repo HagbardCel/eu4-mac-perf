@@ -32,7 +32,7 @@ def build():
         "-o",
         str(BINARY),
         str(ROOT / "benchmark" / "eu4_gfx_shadow_worker.mm"),
-        str(ROOT / "benchmark" / "eu4_gfx_init.mm"),
+        str(ROOT / "renderer/integration" / "eu4_gfx_init.mm"),
         str(ROOT / "benchmark" / "eu4_gfx_frame_observe.c"),
         str(ROOT / "renderer/metal" / "eu4_gfx_buffers.mm"),
         str(ROOT / "renderer/metal" / "eu4_gfx_texture.mm"),

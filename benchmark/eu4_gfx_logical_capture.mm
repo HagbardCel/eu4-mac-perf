@@ -1,7 +1,7 @@
 #import "eu4_gfx_logical_capture.h"
 
 #import "../renderer/metal/eu4_gfx_draw_encode.h"
-#import "eu4_gfx_init.h"
+#import "../renderer/integration/eu4_gfx_init.h"
 #import "eu4_gfx_perf.h"
 
 #import <CommonCrypto/CommonDigest.h>

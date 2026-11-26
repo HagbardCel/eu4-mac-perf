@@ -23,12 +23,14 @@ BENCH = ROOT / "benchmark"
 HOST_SOURCE = ROOT / "tests" / "gfx_m5_replay_host.mm"
 HOST = BENCH / ".build" / "gfx_m5_replay_host"
 METAL = ROOT / "renderer/metal"
-HEADERS = sorted(BENCH.glob("*.h")) + sorted(METAL.glob("*.h"))
+INTEGRATION = ROOT / "renderer/integration"
+HEADERS = sorted(header for directory in (BENCH, METAL, INTEGRATION)
+                 for header in directory.glob("*.h"))
 SOURCES = [
     METAL / "eu4_gfx_shader.mm",
     METAL / "eu4_gfx_buffers.mm",
     METAL / "eu4_gfx_texture.mm",
-    BENCH / "eu4_gfx_init.mm",
+    INTEGRATION / "eu4_gfx_init.mm",
     BENCH / "eu4_gfx_frame_observe.c",
     METAL / "eu4_gfx_simple_draw.mm",
     METAL / "eu4_gfx_sprite_draw.mm",

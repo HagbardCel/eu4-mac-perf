@@ -27,7 +27,7 @@ The six dossier families describe 92 functions at the static semantic level.
 
 | Family | Maintained implementation and evidence |
 | --- | --- |
-| [Init, context and presentation](../../analysis/reconstruction/gfx-semantic/v1/init/) | [Native lifecycle hooks](../../benchmark/eu4_gfx_init.mm) |
+| [Init, context and presentation](../../analysis/reconstruction/gfx-semantic/v1/init/) | [Native lifecycle hooks](../../renderer/integration/eu4_gfx_init.mm) |
 | [Buffers](../../analysis/reconstruction/gfx-semantic/v1/buffers/) | [Native buffer code](../../renderer/metal/eu4_gfx_buffers.mm) |
 | [Shaders and uniforms](../../analysis/reconstruction/gfx-semantic/v1/shaders/) | [Shader lifecycle](../../renderer/metal/eu4_gfx_shader.mm) · [Translation](../../automation/gfx_shader_translate.py) |
 | [Textures, targets and resolves](../../analysis/reconstruction/gfx-semantic/v1/textures/) | [Native texture code](../../renderer/metal/eu4_gfx_texture.mm) |

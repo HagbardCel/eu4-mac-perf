@@ -20,7 +20,9 @@ This repository measures and profiles the **GOG** macOS build of Europa Universa
 | Tooling | `tooling/common/` | Shared guards and future measurement infrastructure |
 | Measurements | [measurements/](measurements/INDEX.md) | Registry (PR B); historical runs in `results/` |
 | Patches | [patches/](patches/README.md) | Version-pinned modifications (future) |
-| Legacy profiler | [benchmark/](benchmark/README.md) | Current CLI entry points |
+| Renderer | [renderer/](docs/renderer/README.md) | Recovered engine contracts, native backends and EU4 integration |
+| Replay tooling | [automation/](automation/README.md) | Build, replay, evidence and qualification |
+| Benchmark | [benchmark/](benchmark/README.md) | Capture, profiling and current CLI entry points |
 | Legacy analysis | [analysis/](analysis/README.md) | Investigations and generated evidence |
 | Run outputs | [results/](results/README.md) | Timestamped captures and sealed Phase C capsule |
 

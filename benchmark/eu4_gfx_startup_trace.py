@@ -74,7 +74,7 @@ def build_library() -> Path:
         ROOT / "renderer/metal" / "eu4_gfx_frame_replay.mm", BUILD / "eu4_gfx_frame_replay.o"
     )
     bridge_object = _build_arc_object(
-        BENCH / "eu4_gfx_shadow_bridge.mm", BUILD / "eu4_gfx_shadow_bridge.o"
+        ROOT / "renderer/integration" / "eu4_gfx_shadow_bridge.mm", BUILD / "eu4_gfx_shadow_bridge.o"
     )
     command = [
         "clang",

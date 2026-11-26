@@ -1,5 +1,5 @@
-#include "../benchmark/eu4_gfx_entry_patch.h"
-#include "../benchmark/eu4_metal_boot_patch.h"
+#include "../renderer/integration/eu4_gfx_entry_patch.h"
+#include "../renderer/integration/eu4_metal_boot_patch.h"
 
 #include <dlfcn.h>
 #include <stdint.h>

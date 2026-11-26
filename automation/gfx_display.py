@@ -149,7 +149,7 @@ def ensure_placement_library(force: bool = False) -> Path:
             "-Wall", "-Wextra", "-I", str(ROOT / "benchmark"),
             "-framework", "CoreGraphics", "-framework", "Foundation",
             "-o", str(PLACEMENT), str(PLACEMENT_SOURCE),
-            str(ROOT / "benchmark" / "eu4_metal_boot_patch.c"),
+            str(ROOT / "renderer/integration" / "eu4_metal_boot_patch.c"),
         ],
         capture_output=True, text=True, check=False, timeout=120,
     )

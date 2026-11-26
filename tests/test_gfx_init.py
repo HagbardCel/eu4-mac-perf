@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "benchmark" / "eu4_gfx_init.mm"
+SOURCE = ROOT / "renderer/integration" / "eu4_gfx_init.mm"
 FRAME_OBSERVE = ROOT / "benchmark" / "eu4_gfx_frame_observe.c"
 BUFFERS = ROOT / "renderer/metal" / "eu4_gfx_buffers.mm"
 TEXTURE = ROOT / "renderer/metal" / "eu4_gfx_texture.mm"

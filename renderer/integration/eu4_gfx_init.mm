@@ -1,13 +1,13 @@
-#import "../renderer/metal/eu4_gfx_buffers.h"
+#import "../metal/eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
-#import "../renderer/metal/eu4_gfx_texture.h"
+#import "../metal/eu4_gfx_texture.h"
 
 /* Hosts that link this file without the shader module must still link; the
    runtime cache is optional for the lifecycle-only diagnostics, so it is
    resolved at run time instead of creating a link-time reference. */
 #include <dlfcn.h>
 typedef int (*eu4_gfx_cache_loader)(const char *path);
-#import "eu4_gfx_logical_capture.h"
+#import "../../benchmark/eu4_gfx_logical_capture.h"
 
 /* The frame observation module is linked into the live dylib.  Host tests link
    init.mm without it, so the references must be optional. */
@@ -31,8 +31,8 @@ int eu4_gfx_frame_observe_emit(const uint8_t *, uint32_t, uint32_t,
     EU4_OBSERVE_WEAK;
 }
 #import "eu4_gfx_checkpoint.h"
-#import "eu4_gfx_perf.h"
-#import "eu4_metal_events.h"
+#import "../../benchmark/eu4_gfx_perf.h"
+#import "../../benchmark/eu4_metal_events.h"
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>

@@ -4,7 +4,7 @@
    checks the readback against CPU sampling of the same image and transform. */
 
 #import "../renderer/metal/eu4_gfx_buffers.h"
-#import "eu4_gfx_init.h"
+#import "../renderer/integration/eu4_gfx_init.h"
 #import "../renderer/metal/eu4_gfx_shader.h"
 #import "../renderer/metal/eu4_gfx_simple_draw.h"
 #import "../renderer/metal/eu4_gfx_texture.h"
