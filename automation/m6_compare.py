@@ -18,26 +18,21 @@ normalization (row origin); anything else is a failure, not a tolerance.
 from __future__ import annotations
 
 import argparse
-import hashlib
-import os
 import json
-import math
+import os
 import sys
 from pathlib import Path
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from automation.gfx_artifacts import sha256_file as _sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class CompareError(RuntimeError):
     pass
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _read_json(path: Path) -> dict:
@@ -86,100 +81,90 @@ def _grid_span(index: int, size: int, count: int) -> tuple[int, int]:
     return start, end - start
 
 
-def compare_images(
-    reference: bytes, candidate: bytes, width: int, height: int
-) -> dict:
-    """Exact statistics without numpy, over BGRA8."""
-    total = width * height
-    mismatched = 0
-    alpha_different = 0
-    sum_abs = [0, 0, 0, 0]
-    max_error = 0
-    first_pixel = None
-    bounds_min_x = bounds_min_y = None
-    bounds_max_x = bounds_max_y = None
-    # Region grid for localization (default 8x8).
-    grid_y, grid_x = 8, 8
-    region_sum = [
-        [0] * grid_x for _ in range(grid_y)
-    ]
-    region_counts = [[0] * grid_x for _ in range(grid_y)]
-    for pixel in range(total):
-        offset = pixel * 4
-        b0, g0, r0, a0 = reference[offset:offset + 4]
-        b1, g1, r1, a1 = candidate[offset:offset + 4]
-        differences = (
-            abs(b0 - b1), abs(g0 - g1), abs(r0 - r1), abs(a0 - a1)
-        )
-        pixel_max = max(differences)
-        if pixel_max != 0:
+def measure_pixel_deltas(reference: bytes, candidate: bytes, width: int,
+                         height: int, tolerance: int) -> dict:
+    """Measure packed four-channel byte deltas in their input channel order."""
+    pixels = width * height
+    sums = [0] * 4
+    maxima = [0] * 4
+    grid_counts = [0] * 64
+    grid_sums = [0] * 64
+    mismatched = alpha = worst = 0
+    first_index = worst_index = None
+    left, top, right, bottom = width, height, -1, -1
+    for index in range(pixels):
+        offset = index * 4
+        deltas = [abs(reference[offset + channel] - candidate[offset + channel])
+                  for channel in range(4)]
+        local_max = max(deltas)
+        for channel, delta in enumerate(deltas):
+            sums[channel] += delta
+            if delta > maxima[channel]:
+                maxima[channel] = delta
+        if local_max > worst:
+            worst, worst_index = local_max, index
+        if deltas[3] > tolerance:
+            alpha += 1
+        if local_max > tolerance:
             mismatched += 1
-            x = pixel % width
-            y = pixel // width
-            if first_pixel is None:
-                first_pixel = {"x": x, "y": y, "offset": pixel}
-            if bounds_min_x is None or x < bounds_min_x:
-                bounds_min_x = x
-            if bounds_max_x is None or x > bounds_max_x:
-                bounds_max_x = x
-            if bounds_min_y is None or y < bounds_min_y:
-                bounds_min_y = y
-            if bounds_max_y is None or y > bounds_max_y:
-                bounds_max_y = y
-        if a0 != a1:
-            alpha_different += 1
-        if pixel_max > max_error:
-            max_error = pixel_max
-        for channel in range(4):
-            sum_abs[channel] += differences[channel]
-        x = pixel % width
-        y = pixel // width
-        region = (y * grid_y // height, x * grid_x // width)
-        region_sum[region[0]][region[1]] += pixel_max
-        region_counts[region[0]][region[1]] += 1
+            x, y = index % width, index // width
+            if first_index is None:
+                first_index = index
+            left, right = min(left, x), max(right, x)
+            top, bottom = min(top, y), max(bottom, y)
+            cell = (y * 8 // height) * 8 + x * 8 // width
+            grid_counts[cell] += 1
+            grid_sums[cell] += local_max
+    return {
+        "pixels": pixels,
+        "mismatched_pixels": mismatched,
+        "alpha_mismatched_pixels": alpha,
+        "max_channel_error": worst,
+        "channel_sums": sums,
+        "channel_maxima": maxima,
+        "first_index": first_index,
+        "worst_index": worst_index,
+        "bounds": (left, top, right, bottom) if mismatched else None,
+        "grid_counts": grid_counts,
+        "grid_sums": grid_sums,
+    }
+
+
+def compare_images(reference: bytes, candidate: bytes, width: int, height: int) -> dict:
+    """Exact statistics without numpy, over BGRA8."""
+    deltas = measure_pixel_deltas(reference, candidate, width, height, 0)
+    total = deltas["pixels"]
+    mismatched = deltas["mismatched_pixels"]
+    first_index = deltas["first_index"]
+    bounds = None
+    if deltas["bounds"] is not None:
+        left, top, right, bottom = deltas["bounds"]
+        bounds = {"x": left, "y": top, "width": right - left + 1,
+                  "height": bottom - top + 1}
     regions = []
-    for gy in range(grid_y):
-        for gx in range(grid_x):
-            count = region_counts[gy][gx]
-            if count == 0:
-                continue
-            mean = region_sum[gy][gx] / count
-            start_x, span_x = _grid_span(gx, width, grid_x)
-            start_y, span_y = _grid_span(gy, height, grid_y)
-            regions.append(
-                {
-                    "row": gy,
-                    "column": gx,
-                    "x": start_x,
-                    "y": start_y,
-                    "width": span_x,
-                    "height": span_y,
-                    "mean_max_channel_error": round(mean, 6),
-                }
-            )
+    for cell, error_sum in enumerate(deltas["grid_sums"]):
+        row, column = divmod(cell, 8)
+        x, span_x = _grid_span(column, width, 8)
+        y, span_y = _grid_span(row, height, 8)
+        if span_x and span_y:
+            regions.append({
+                "row": row, "column": column, "x": x, "y": y,
+                "width": span_x, "height": span_y,
+                "mean_max_channel_error": round(error_sum / (span_x * span_y), 6),
+            })
     regions.sort(key=lambda item: item["mean_max_channel_error"], reverse=True)
     return {
         "pixels": total,
         "mismatched_pixels": mismatched,
         "mismatched_fraction": mismatched / total if total else 1.0,
-        "alpha_different_pixels": alpha_different,
-        "max_channel_error": max_error,
-        "mean_abs_error": [round(value / total, 9) for value in sum_abs],
-        "mean_max_channel_error": round(
-            sum(region_sum[gy][gx] for gy in range(grid_y) for gx in range(grid_x))
-            / total,
-            9,
-        ),
-        "first_differing_pixel": first_pixel,
-        "differing_bounds": (
-            {
-                "x": bounds_min_x,
-                "y": bounds_min_y,
-                "width": bounds_max_x - bounds_min_x + 1,
-                "height": bounds_max_y - bounds_min_y + 1,
-            }
-            if first_pixel is not None else None
-        ),
+        "alpha_different_pixels": deltas["alpha_mismatched_pixels"],
+        "max_channel_error": deltas["max_channel_error"],
+        "mean_abs_error": [round(value / total, 9) for value in deltas["channel_sums"]],
+        "mean_max_channel_error": round(sum(deltas["grid_sums"]) / total, 9),
+        "first_differing_pixel": (
+            None if first_index is None else
+            {"x": first_index % width, "y": first_index // width, "offset": first_index}),
+        "differing_bounds": bounds,
         "regions": regions,
     }
 

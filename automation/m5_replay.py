@@ -11,12 +11,16 @@ renderer.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from automation.gfx_artifacts import sha256_file as _sha
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
@@ -84,14 +88,6 @@ def build_host(force: bool = False) -> Path:
     if built.returncode:
         raise ReplayError(built.stderr.strip() or "M5 replay host failed to build")
     return HOST
-
-
-def _sha(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def run_replay(reference_dir: Path, output: Path, *, force_build: bool = False) -> dict:

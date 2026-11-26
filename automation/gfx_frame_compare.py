@@ -9,10 +9,11 @@ It does not use image similarity to decide alignment.
 
 from __future__ import annotations
 
-import hashlib
 import struct
 import zlib
 from pathlib import Path
+
+from automation.gfx_artifacts import sha256_file as _sha256
 
 try:
     import numpy as np
@@ -37,14 +38,6 @@ class CompareError(RuntimeError):
 def _require_numpy():
     if np is None:
         raise CompareError("unavailable", "numpy is required for frame comparison")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def decode_frame(payload: bytes, width: int, height: int, *, origin: str,
@@ -160,22 +153,28 @@ def _correlation(left: "np.ndarray", right: "np.ndarray") -> float | None:
     return float((a * b).sum() / denominator)
 
 
-def _region_stats(reference: "np.ndarray", candidate: "np.ndarray",
-                  rect: list[int], tolerance: int, *, mirror_check: bool) -> dict:
-    _require_numpy()
-    ref = _region(reference, rect)
-    cand = _region(candidate, rect)
-    delta = np.abs(ref.astype(np.int16) - cand.astype(np.int16))
+def _delta_metrics(delta: "np.ndarray", tolerance: int) -> tuple:
     per_pixel = delta.max(axis=2)
-    mismatched = int((per_pixel > tolerance).sum())
+    mask = per_pixel > tolerance
     pixels = int(per_pixel.size)
-    normal_mae = float(delta.mean()) if pixels else 0.0
+    mismatched = int(mask.sum())
+    maximum = int(per_pixel.max()) if pixels else 0
+    mean = float(delta.mean()) if pixels else 0.0
+    return mask, pixels, mismatched, maximum, mean
+
+
+def _region_stats(reference: "np.ndarray", candidate: "np.ndarray",
+                  delta: "np.ndarray", rect: list[int], tolerance: int, *,
+                  mirror_check: bool) -> dict:
+    ref, cand = _region(reference, rect), _region(candidate, rect)
+    _, pixels, mismatched, maximum, normal_mae = _delta_metrics(
+        _region(delta, rect), tolerance)
     result = {
         "rect": rect,
         "pixels": pixels,
         "mismatched_pixels": mismatched,
         "mismatched_fraction": round(mismatched / pixels, 6) if pixels else 0.0,
-        "max_channel_error": int(per_pixel.max()) if pixels else 0,
+        "max_channel_error": maximum,
         "mean_abs_error": round(normal_mae, 6),
         "structural_correlation": None,
         "mirror": {"checked": False},
@@ -230,13 +229,9 @@ def compare_frames(
         reference, candidate, policy=policy, candidate_meta=candidate_meta or {}
     )
     delta = np.abs(reference.astype(np.int16) - candidate.astype(np.int16))
-    per_pixel = delta.max(axis=2)
-    pixels = int(per_pixel.size)
-    mismatched_mask = per_pixel > tolerance
-    mismatched = int(mismatched_mask.sum())
+    mismatched_mask, pixels, mismatched, max_error, mean_error = _delta_metrics(
+        delta, tolerance)
     fraction = mismatched / pixels if pixels else 0.0
-    max_error = int(per_pixel.max()) if pixels else 0
-    mean_error = float(delta.mean()) if pixels else 0.0
     per_channel = {}
     for index, name in enumerate(("red", "green", "blue", "alpha")):
         channel = delta[:, :, index]
@@ -245,7 +240,6 @@ def compare_frames(
             "mean": round(float(channel.mean()), 6) if channel.size else 0.0,
             "mismatched_pixels": int((channel > tolerance).sum()),
         }
-    alpha_mismatched = int((delta[:, :, 3] > tolerance).sum())
     if mismatched:
         rows = np.where(mismatched_mask.any(axis=1))[0]
         columns = np.where(mismatched_mask.any(axis=0))[0]
@@ -261,7 +255,7 @@ def compare_frames(
         if not (0 <= rect[0] < rect[1] <= reference.shape[0]
                 and 0 <= rect[2] < rect[3] <= reference.shape[1]):
             raise CompareError("region", f"region {name} is outside the frame")
-        stats = _region_stats(reference, candidate, rect, tolerance,
+        stats = _region_stats(reference, candidate, delta, rect, tolerance,
                               mirror_check=definition.get("mirror_check", True))
         region_policy = str(definition.get("policy", "tolerant"))
         stats["policy"] = region_policy
@@ -361,7 +355,7 @@ def compare_frames(
             "max_channel_error": max_error,
             "mean_abs_error": round(mean_error, 6),
             "per_channel": per_channel,
-            "alpha_mismatched_pixels": alpha_mismatched,
+            "alpha_mismatched_pixels": per_channel["alpha"]["mismatched_pixels"],
             "difference_bbox": bbox,
             "tolerance": tolerance,
             "max_mismatched_fraction": max_fraction,

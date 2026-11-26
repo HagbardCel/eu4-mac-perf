@@ -83,7 +83,10 @@ The ordered replay supervisor uses the same host with its sequence inputs.
 [Portable case tools](../../automation/gfx_replay_case.py) verify Strategy B
 v1/v2 and compare legacy dual-run packages through `eu4_replay case`.
 Historic absolute frame paths resolve to the copied payloads under `frames/`
-after relocation. The legacy builder remains available for dual-run results.
+after relocation. The reader verifies both packaged digests before reporting
+a valid pixel comparison. Independent renderer qualification requires the
+Strategy B or signed OpenGL evidence gate. The legacy builder remains available
+for dual-run results.
 
 ## Qualification
 

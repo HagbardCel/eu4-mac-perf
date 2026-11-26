@@ -114,27 +114,33 @@ def _known_replay_output(path: Path) -> bool:
     return False
 
 
-def prepare_replay_output(out_dir: Path, inputs: list[Path]) -> Path:
-    """Validate and prepare one replay output directory without data loss."""
+def validate_output_destination(out_dir: Path, inputs: list[Path], *,
+                                owns_output, error, label: str, prior: str
+                                ) -> tuple[Path, bool]:
+    """Check a destination and report whether it contains a prior output."""
     out_dir = out_dir.expanduser().resolve()
     if _protected_output(out_dir):
-        raise ReplayError("output_protected",
-                          f"refusing to replace protected output {out_dir}")
+        raise error("output_protected", f"refusing to replace protected output {out_dir}")
     for source in inputs:
         if _path_overlap(out_dir, source.expanduser().resolve()):
-            raise ReplayError(
-                "output_overlap",
-                f"replay output {out_dir} overlaps input {source}")
-    if out_dir.exists():
-        if not out_dir.is_dir():
-            raise ReplayError("output_conflict", f"{out_dir} is not a directory")
-        entries = list(out_dir.iterdir())
-        if entries and not _known_replay_output(out_dir):
-            raise ReplayError(
-                "output_not_owned",
-                f"{out_dir} is nonempty and is not a prior replay output")
-        if entries:
-            shutil.rmtree(out_dir)
+            raise error("output_overlap", f"{label} {out_dir} overlaps input {source}")
+    if not out_dir.exists():
+        return out_dir, False
+    if not out_dir.is_dir():
+        raise error("output_conflict", f"{out_dir} is not a directory")
+    nonempty = any(out_dir.iterdir())
+    if nonempty and not owns_output(out_dir):
+        raise error("output_not_owned", f"{out_dir} is nonempty and is not a prior {prior}")
+    return out_dir, nonempty
+
+
+def prepare_replay_output(out_dir: Path, inputs: list[Path]) -> Path:
+    """Validate and prepare one replay output directory without data loss."""
+    out_dir, replace = validate_output_destination(
+        out_dir, inputs, owns_output=_known_replay_output,
+        error=ReplayError, label="replay output", prior="replay output")
+    if replace:
+        shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / OUTPUT_MARKER).write_text(
         json.dumps({

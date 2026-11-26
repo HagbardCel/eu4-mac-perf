@@ -208,6 +208,17 @@ class CaseBuilderTests(unittest.TestCase):
         self.assertEqual(gfx_replay_case.compare_legacy_case(restored, write=False), expected)
         self.assertFalse((restored / "repro" / "comparison.json").exists())
 
+        repro = restored / "repro" / "repro.json"
+        recorded = document["frames"]["reference"]
+        original_path = recorded["path"]
+        recorded["path"] = "../frames/reference-frame-4.bgra"
+        repro.write_text(json.dumps(document))
+        traversal = gfx_replay_case.compare_legacy_case(restored, write=False)
+        self.assertEqual(traversal["status"], gfx_case.INCOMPLETE)
+        self.assertIn("invalid packaged reference frame path", traversal["reason"])
+        recorded["path"] = original_path
+        repro.write_text(json.dumps(document))
+
         frame = restored / "frames" / "reference-frame-4.bgra"
         external = restored.parent / "external.bgra"
         frame.rename(external)
@@ -215,6 +226,24 @@ class CaseBuilderTests(unittest.TestCase):
         refused = gfx_replay_case.compare_legacy_case(restored, write=False)
         self.assertEqual(refused["status"], gfx_case.INCOMPLETE)
         self.assertIn("escapes the case directory", refused["reason"])
+
+    def test_missing_or_malformed_digest_keeps_legacy_evidence_inspectable(self):
+        case = Path(gfx_case.build_case(self.run)["case_dir"])
+        path = case / "repro" / "repro.json"
+        repro = json.loads(path.read_text())
+        frame = repro["frames"]["reference"]
+        for digest in (None, "not-a-digest"):
+            with self.subTest(digest=digest):
+                if digest is None:
+                    frame.pop("sha256")
+                else:
+                    frame["sha256"] = digest
+                path.write_text(json.dumps(repro))
+                replay = gfx_replay_case.compare_legacy_case(case, write=False)
+                self.assertEqual(replay["status"], gfx_case.INCOMPLETE)
+                self.assertIn("digest", replay["reason"])
+                self.assertEqual(gfx_replay_case.inspect_legacy_case(case)["schema"],
+                                 gfx_case.SCHEMA)
 
     def test_tampered_packaged_frame_is_not_replayed_as_valid(self):
         packaged = gfx_case.build_case(self.run)

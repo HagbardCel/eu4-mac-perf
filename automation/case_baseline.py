@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 from automation import gfx_replay_case, replay_host_dependencies
+from automation.gfx_artifacts import sha256_file
 
 SCHEMA = "gfx-case-baseline/v1"
 IDENTITY_SCHEMA = "gfx-case-identity/v1"
@@ -35,9 +36,13 @@ RENDERER_ROOTS = replay_host_dependencies.REPLAY_SOURCES
 # Non-header implementation that participates in the comparison or replay.
 IMPLEMENTATION_SOURCES = (
     "automation/m6_frame.py",
+    "automation/m6_compare.py",
+    "automation/gfx_artifacts.py",
+    "automation/replay_host_dependencies.py",
     "automation/gfx_independent_replay.py",
     "automation/gfx_frame_compare.py",
     "automation/gfx_frame_graph.py",
+    "automation/gfx_observation.py",
     "automation/gfx_shader_translate.py",
     "automation/gfx_replay_case.py",
 )
@@ -50,13 +55,7 @@ class BaselineError(RuntimeError):
 
 
 def _sha256(path: Path) -> str | None:
-    if not path.is_file():
-        return None
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return sha256_file(path) if path.is_file() else None
 
 
 def _json(path: Path) -> dict:
@@ -84,7 +83,7 @@ def _implementation_sources() -> dict[str, str]:
     return {name: _sha256(ROOT / name) or "" for name in IMPLEMENTATION_SOURCES}
 
 
-def _inventory_digest(manifest: dict) -> tuple[str, int]:
+def _inventory_digest(manifest: dict) -> str:
     rows = []
     for item in manifest.get("files") or []:
         if isinstance(item, dict):
@@ -92,7 +91,7 @@ def _inventory_digest(manifest: dict) -> tuple[str, int]:
                          item.get("sha256")])
     rows.sort(key=lambda row: str(row[0]))
     return hashlib.sha256(json.dumps(
-        rows, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(), len(rows)
+        rows, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _shader_inputs(manifest: dict) -> dict[str, str]:
@@ -274,7 +273,14 @@ def identity(case_dir: Path | str, *,
     policy_path = (Path(policy).expanduser().resolve() if policy is not None
                    else ROOT / "analysis" / "m6" / "comparison-policy.json")
     binary = ROOT / REPLAY_BINARY
-    inventory_digest, _count = _inventory_digest(manifest)
+    inventory_digest = _inventory_digest(manifest)
+    artifacts = {
+        "diagnostic_report_sha256": _sha256(report_path),
+        "graph_sha256": _sha256(graph_path),
+        "replay_result_sha256": _sha256(replay / "replay.json"),
+        "metal_frame_sha256": _sha256(replay / "metal-frame.bgra"),
+        "policy_sha256": _sha256(policy_path),
+    }
     values = {
         "schema": IDENTITY_SCHEMA,
         "case_id": manifest.get("case_id"),
@@ -301,28 +307,17 @@ def identity(case_dir: Path | str, *,
         },
         "case_manifest_sha256": _sha256(case_dir / "case.json"),
         "seal_sha256": _sha256(case_dir / "capture" / "frame-seal.json"),
-        "diagnostic_report_sha256": _sha256(report_path),
-        "graph_sha256": _sha256(graph_path),
-        "replay_result_sha256": _sha256(replay / "replay.json"),
-        "metal_frame_sha256": _sha256(replay / "metal-frame.bgra"),
+        **artifacts,
         "shader_inputs": _shader_inputs(manifest),
         "payload_inventory_sha256": inventory_digest,
         "payload_count": payload_count,
-        "policy_sha256": _sha256(policy_path),
         "renderer_sources": _renderer_closure(),
         "implementation_sources": _implementation_sources(),
         "renderer_binary": {
             "path": REPLAY_BINARY,
             "sha256": _sha256(binary),
         },
-        "comparison": {
-            "backend": backend,
-            "policy_sha256": _sha256(policy_path),
-            "diagnostic_report_sha256": _sha256(report_path),
-            "graph_sha256": _sha256(graph_path),
-            "replay_result_sha256": _sha256(replay / "replay.json"),
-            "metal_frame_sha256": _sha256(replay / "metal-frame.bgra"),
-        },
+        "comparison": {"backend": backend, **artifacts},
         "environment": {
             "python": list(sys.version_info[:3]),
             "platform": platform.system().lower(),

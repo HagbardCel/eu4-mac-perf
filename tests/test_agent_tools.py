@@ -1072,6 +1072,32 @@ class DiagnosticSurfaceTests(ToolTests):
                          python_runtime.absolute(sys.executable))
         self.assertTrue(value["runtime"]["numpy"]["available"])
 
+    def test_legacy_local_equality_verifies_pixels_without_qualifying_renderer(self):
+        case = Path(agent_tools.gfx_case.build_case(self.run_fixture())["case_dir"])
+        path = case / "repro" / "repro.json"
+        repro = json.loads(path.read_text())
+        reference, candidate = (repro["frames"][role] for role in ("reference", "candidate"))
+        (case / candidate["path"]).write_bytes((case / reference["path"]).read_bytes())
+        candidate.update({key: reference[key] for key in
+                          ("sha256", "width", "height", "origin", "pixel_format")})
+        path.write_text(json.dumps(repro))
+        code, value = self.call(["eu4_replay", "case", "--case", str(case)])
+        self.assertEqual(code, 0, value)
+        self.assertEqual(value["outcome"]["verdict"], "equal")
+        self.assertEqual(value["outcome"]["evidence"], "valid")
+        self.assertFalse(value["outcome"]["qualified"])
+
+        candidate.pop("sha256")
+        path.write_text(json.dumps(repro))
+        code, value = self.call(["eu4_replay", "case", "--case", str(case)])
+        self.assertNotEqual(code, 0)
+        self.assertEqual(value["outcome"]["evidence"], "unverified")
+        self.assertFalse(value["outcome"]["qualified"])
+        code, value = self.call(["eu4_case_inspect", "--case", str(case)])
+        self.assertEqual(code, 0)
+        self.assertEqual(value["outcome"]["evidence"], "unverified")
+        self.assertFalse(value["outcome"]["qualified"])
+
     def test_replay_does_not_mutate_the_case_directory(self):
         run = self.run_fixture()
         case = Path(agent_tools.gfx_case.build_case(run)["case_dir"])
@@ -1538,6 +1564,7 @@ class StrategyBCaseToolTests(ToolTests):
                                    else "incomplete")
         return {
             "schema": "gfx-strategy-b-case-verification/v1",
+            "case_schema": gfx_replay_case.SEQUENCE_SCHEMA,
             "case_id": "v2-agent-case", "ok": ok,
             "problems": list(problems or []), "files": 5,
             "graph_status": "ok",
@@ -1572,7 +1599,7 @@ class StrategyBCaseToolTests(ToolTests):
         case = self.make_v2_case()
         with mock.patch.object(agent_tools.gfx_replay_case, "verify",
                                return_value=self.verification()) as verify, \
-             mock.patch.object(agent_tools.gfx_replay_case, "replay_case") as replay:
+             mock.patch.object(agent_tools.gfx_replay_case, "_replay_sequence_case") as replay:
             code, value = self.call(["eu4_replay", "case",
                                      "--case", str(case)])
         self.assertEqual(code, 0, value)
@@ -1595,13 +1622,14 @@ class StrategyBCaseToolTests(ToolTests):
             "first_divergence": {"kind": "none"},
         }
         with mock.patch.object(agent_tools.gfx_replay_case, "verify",
-                               return_value=self.verification()), \
-             mock.patch.object(agent_tools.gfx_replay_case, "replay_case",
+                               return_value=self.verification()) as verify, \
+             mock.patch.object(agent_tools.gfx_replay_case, "_replay_sequence_case",
                                return_value=report):
             code, value = self.call([
                 "eu4_replay", "case", "--case", str(case),
                 "--replay-out", str(self.root / "v2-replay"),
             ])
+        verify.assert_called_once_with(case.resolve())
         self.assertEqual(code, 0, value)
         self.assertEqual(value["outcome"]["verdict"], "equal")
         self.assertTrue(value["outcome"]["qualified"])
@@ -1622,7 +1650,7 @@ class StrategyBCaseToolTests(ToolTests):
         }
         with mock.patch.object(agent_tools.gfx_replay_case, "verify",
                                return_value=self.verification()), \
-             mock.patch.object(agent_tools.gfx_replay_case, "replay_case",
+             mock.patch.object(agent_tools.gfx_replay_case, "_replay_sequence_case",
                                return_value=report):
             code, value = self.call([
                 "eu4_replay", "case", "--case", str(case),
@@ -1641,7 +1669,7 @@ class StrategyBCaseToolTests(ToolTests):
             problems=["reproduction is explicitly incomplete"])
         with mock.patch.object(agent_tools.gfx_replay_case, "verify",
                                return_value=incomplete), \
-             mock.patch.object(agent_tools.gfx_replay_case, "replay_case") as replay:
+             mock.patch.object(agent_tools.gfx_replay_case, "_replay_sequence_case") as replay:
             code, value = self.call(["eu4_replay", "case",
                                      "--case", str(case),
                                      "--replay-out", str(self.root / "v2-incomplete")])
@@ -1655,7 +1683,7 @@ class StrategyBCaseToolTests(ToolTests):
             ok=False, reproducible=True, problems=["digest drift"])
         with mock.patch.object(agent_tools.gfx_replay_case, "verify",
                                return_value=invalid), \
-             mock.patch.object(agent_tools.gfx_replay_case, "replay_case") as replay:
+             mock.patch.object(agent_tools.gfx_replay_case, "_replay_sequence_case") as replay:
             code, value = self.call(["eu4_replay", "case",
                                      "--case", str(case),
                                      "--replay-out", str(self.root / "v2-invalid")])
@@ -2054,7 +2082,7 @@ class StrategyBCaseToolTests(ToolTests):
                         agent_tools.gfx_replay_case, "verify",
                         return_value=self.verification()), \
                      mock.patch.object(
-                        agent_tools.gfx_replay_case, "replay_case",
+                        agent_tools.gfx_replay_case, "_replay_sequence_case",
                         return_value=report) as replay:
                     code, value = self.call([
                         "eu4_replay", "case", "--case", str(case),
@@ -2063,8 +2091,8 @@ class StrategyBCaseToolTests(ToolTests):
                 self.assertEqual(code, 0, value)
                 self.assertEqual(value["schema"], agent_tools.SCHEMA)
                 self.assertEqual(value["tool"], "eu4_replay")
-                self.assertEqual(replay.call_args.args[1], out)
-                self.assertFalse(out.exists())
+                self.assertEqual(replay.call_args.args[1], out.resolve())
+                self.assertTrue((out / "experiment-rationale.json").is_file())
 
     def test_envelope_destination_is_explicit_and_separate(self):
         case = self.make_v2_case()
@@ -2082,7 +2110,7 @@ class StrategyBCaseToolTests(ToolTests):
                 agent_tools.gfx_replay_case, "verify",
                 return_value=self.verification()), \
              mock.patch.object(
-                agent_tools.gfx_replay_case, "replay_case",
+                agent_tools.gfx_replay_case, "_replay_sequence_case",
                 return_value=report) as replay, \
              contextlib.redirect_stdout(io.StringIO()):
             code = agent_tools.main([
@@ -2092,7 +2120,7 @@ class StrategyBCaseToolTests(ToolTests):
                 "--rationale", RATIONALE,
             ])
         self.assertEqual(code, 0)
-        self.assertEqual(replay.call_args.args[1], replay_out)
+        self.assertEqual(replay.call_args.args[1], replay_out.resolve())
         value = json.loads(envelope.read_text())
         self.assertEqual(value["schema"], agent_tools.SCHEMA)
         self.assertEqual(value["tool"], "eu4_replay")
@@ -2186,7 +2214,7 @@ class StrategyBCaseToolTests(ToolTests):
             problems=["digest drift frames/000001/frame-events.jsonl"])
         with mock.patch.object(agent_tools.gfx_replay_case, "verify",
                                return_value=verification), \
-             mock.patch.object(agent_tools.gfx_replay_case, "replay_case") as replay:
+             mock.patch.object(agent_tools.gfx_replay_case, "_replay_sequence_case") as replay:
             code, value = self.call([
                 "eu4_replay", "case", "--case", str(case),
                 "--replay-out", str(self.root / "corrupt-replay"),
@@ -2322,7 +2350,7 @@ class StrategyBCaseToolTests(ToolTests):
         case = self.make_v2_case()
         with mock.patch.object(agent_tools.gfx_replay_case, "verify",
                                return_value=self.verification()), \
-             mock.patch.object(agent_tools.gfx_replay_case, "replay_case",
+             mock.patch.object(agent_tools.gfx_replay_case, "_replay_sequence_case",
                                side_effect=gfx_replay_case.CaseError(
                                    "sequence_replay", "campaign ended failed")):
             code, value = self.call([
