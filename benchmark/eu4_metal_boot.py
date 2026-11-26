@@ -23,31 +23,32 @@ from automation.launch_ledger import LedgerError as _LedgerError  # noqa: E402
 from automation.launch_ledger import validate_timeout as _validate_timeout  # noqa: E402
 
 
-SOURCE = Path(__file__).resolve().with_suffix(".m")
-PATCH = SOURCE.with_name("eu4_metal_boot_patch.c")
-ENTRY = SOURCE.with_name("eu4_gfx_entry_patch.c")
-EVENTS = SOURCE.with_name("eu4_metal_events.c")
-GL_DIAG = SOURCE.with_name("eu4_metal_gl_diag.c")
-GFX = SOURCE.with_name("eu4_gfx_init.mm")
-BUFFERS = SOURCE.with_name("eu4_gfx_buffers.mm")
-DRAW_C = SOURCE.with_name("eu4_gfx_draw_capture.c")
-DRAW_S = SOURCE.with_name("eu4_gfx_draw_entry.S")
-DRAW_ROUTE = SOURCE.with_name("eu4_gfx_draw_route.mm")
-CHECKPOINT = SOURCE.with_name("eu4_gfx_checkpoint.mm")
-TEXTURE = SOURCE.with_name("eu4_gfx_texture.mm")
-SHADER = SOURCE.with_name("eu4_gfx_shader.mm")
-SIMPLE_DRAW = SOURCE.with_name("eu4_gfx_simple_draw.mm")
-SPRITE_DRAW = SOURCE.with_name("eu4_gfx_sprite_draw.mm")
-DRAW_ENCODE = SOURCE.with_name("eu4_gfx_draw_encode.mm")
-LOGICAL_CAPTURE = SOURCE.with_name("eu4_gfx_logical_capture.mm")
-GENERIC_DRAW = SOURCE.with_name("eu4_gfx_generic_draw.mm")
-FRAME_OBSERVE = SOURCE.with_name("eu4_gfx_frame_observe.c")
-LIBRARY = SOURCE.parent / ".build/libeu4_metal_boot.dylib"
-HOST_SOURCE = SOURCE.parents[1] / "tests/metal_boot_host.c"
-HOST = SOURCE.parent / ".build/metal_boot_host"
-PINNED_SHA256 = json.loads(
-    (SOURCE.parents[1] / "reverse_engineering" / "target.json").read_text()
-)["sha256"]
+BENCH = ROOT / "benchmark"
+METAL = ROOT / "renderer/metal"
+INTEGRATION = ROOT / "renderer/integration"
+SOURCE = INTEGRATION / "eu4_metal_boot.m"
+PATCH = INTEGRATION / "eu4_metal_boot_patch.c"
+ENTRY = INTEGRATION / "eu4_gfx_entry_patch.c"
+EVENTS = BENCH / "eu4_metal_events.c"
+GL_DIAG = BENCH / "eu4_metal_gl_diag.c"
+GFX = INTEGRATION / "eu4_gfx_init.mm"
+BUFFERS = METAL / "eu4_gfx_buffers.mm"
+DRAW_C = BENCH / "eu4_gfx_draw_capture.c"
+DRAW_S = INTEGRATION / "eu4_gfx_draw_entry.S"
+DRAW_ROUTE = INTEGRATION / "eu4_gfx_draw_route.mm"
+CHECKPOINT = INTEGRATION / "eu4_gfx_checkpoint.mm"
+TEXTURE = METAL / "eu4_gfx_texture.mm"
+SHADER = METAL / "eu4_gfx_shader.mm"
+SIMPLE_DRAW = METAL / "eu4_gfx_simple_draw.mm"
+SPRITE_DRAW = METAL / "eu4_gfx_sprite_draw.mm"
+DRAW_ENCODE = METAL / "eu4_gfx_draw_encode.mm"
+LOGICAL_CAPTURE = BENCH / "eu4_gfx_logical_capture.mm"
+GENERIC_DRAW = METAL / "eu4_gfx_generic_draw.mm"
+FRAME_OBSERVE = BENCH / "eu4_gfx_frame_observe.c"
+LIBRARY = BENCH / ".build/libeu4_metal_boot.dylib"
+HOST_SOURCE = ROOT / "tests/metal_boot_host.c"
+HOST = BENCH / ".build/metal_boot_host"
+PINNED_SHA256 = json.loads((ROOT / "reverse_engineering/target.json").read_text())["sha256"]
 EXIT_WAIT_SECONDS = 5
 
 
@@ -187,7 +188,7 @@ def parse_gfx_entries(text: str) -> tuple[tuple[str, int, int, str, bytes], ...]
     return tuple(found)
 
 
-GFX_ENTRIES = parse_gfx_entries(SOURCE.with_name("eu4_gfx_entries.def").read_text())
+GFX_ENTRIES = parse_gfx_entries((INTEGRATION / "eu4_gfx_entries.def").read_text())
 # Half-open [entry, end) in install order. Ends come from the registry.
 REPLACED_BODIES = tuple((entry, end) for _name, entry, end, _fn, _prefix in GFX_ENTRIES)
 

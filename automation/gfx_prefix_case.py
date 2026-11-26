@@ -10,26 +10,18 @@ complete seal it was cut from.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 from pathlib import Path
 
 from automation import gfx_frame_graph, gfx_prefix_check, m6_frame
+from automation.gfx_artifacts import sha256_file as _sha
 
 SCHEMA = "gfx-observation-case/v1"
 
 
 class PrefixCaseError(RuntimeError):
     pass
-
-
-def _sha(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def build_prefix_frame(frame_dir: Path | str, end: int,

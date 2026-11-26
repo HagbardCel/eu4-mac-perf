@@ -168,8 +168,9 @@ viewport that fails `viewport_covers_attachment` on the next clear.
 
 ## Cocoa lifecycle
 
-The production `EU4MetalChildView` lives in `benchmark/eu4_metal_geometry_view.{h,m}` and is
-linked by both boot and the test host:
+The production `EU4MetalChildView` is linked by both boot and the test host.
+[Implementation](../../../renderer/integration/eu4_metal_geometry_view.m) ·
+[Header](../../../renderer/integration/eu4_metal_geometry_view.h)
 
 - `autoresizingMask = NSViewWidthSizable | NSViewHeightSizable` tracks parent content bounds.
 - `setFrameSize:`, `layout`, and `viewDidChangeBackingProperties` recompute

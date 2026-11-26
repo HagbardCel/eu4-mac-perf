@@ -1,4 +1,4 @@
-#include "eu4_gfx_shader.h"
+#include "../renderer/metal/eu4_gfx_shader.h"
 
 #include <CommonCrypto/CommonDigest.h>
 #include <Metal/Metal.h>

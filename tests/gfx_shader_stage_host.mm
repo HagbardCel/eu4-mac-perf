@@ -1,6 +1,6 @@
 /* Stage-aware exact-hash admission. Builds no engine scene; it checks that a
    qualified vertex hash cannot admit a pixel source and vice versa. */
-#include "eu4_gfx_shader.h"
+#include "../renderer/metal/eu4_gfx_shader.h"
 
 #include <Metal/Metal.h>
 #include <stdio.h>

@@ -1006,8 +1006,8 @@ class MetalProbeTests(unittest.TestCase):
             raise unittest.SkipTest("menu-occ300 fixture is unavailable")
         cls.temporary = tempfile.TemporaryDirectory()
         cls.cli = Path(cls.temporary.name) / "gfx_frame_replay"
-        sources = [BENCH / "eu4_gfx_frame_replay.mm",
-                   BENCH / "eu4_gfx_frame_replay_cli.mm"]
+        sources = [ROOT / "renderer/metal" / "eu4_gfx_frame_replay.mm",
+                   ROOT / "renderer/metal" / "eu4_gfx_frame_replay_cli.mm"]
         native_build.require_prerequisites(
             sources=sources, frameworks=("Foundation", "Metal"),
             require_arm64=True)
@@ -1138,8 +1138,8 @@ class SealComparisonTests(unittest.TestCase):
             raise unittest.SkipTest("the sealed event-1 frame is unavailable")
         cls.temporary = tempfile.TemporaryDirectory()
         cls.cli = Path(cls.temporary.name) / "gfx_frame_replay"
-        sources = [BENCH / "eu4_gfx_frame_replay.mm",
-                   BENCH / "eu4_gfx_frame_replay_cli.mm"]
+        sources = [ROOT / "renderer/metal" / "eu4_gfx_frame_replay.mm",
+                   ROOT / "renderer/metal" / "eu4_gfx_frame_replay_cli.mm"]
         native_build.require_prerequisites(
             sources=sources, frameworks=("Foundation", "Metal"),
             require_arm64=True)

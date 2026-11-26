@@ -10,27 +10,22 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from oracle.certify.build_record import RE1_SOURCE_FILES
 from tests.oracle_certify_acceptance.re1_harness import (
     BUILD_FLAGS,
-    RECON_DIR,
     build_re1_harness,
 )
 
-RE1_SOURCE_FILES = (
-    "arith_literals.cpp",
-    "gfx_set_constant_buffer.cpp",
-    "gfx_set_constant_buffer.hpp",
-    "harness.cpp",
-)
 BUILD_IDENTITY = "re1-gfx-set-constant-buffer-acceptance"
 
 
 def re1_canonical_source_sha256() -> str:
     digest = sha256()
-    for name in sorted(RE1_SOURCE_FILES):
+    for path in sorted(RE1_SOURCE_FILES, key=lambda path: path.name):
+        name = path.name
         digest.update(name.encode("utf-8"))
         digest.update(b"\x00")
-        digest.update((RECON_DIR / name).read_bytes())
+        digest.update(path.read_bytes())
         digest.update(b"\n")
     return digest.hexdigest()
 

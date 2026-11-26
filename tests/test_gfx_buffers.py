@@ -5,10 +5,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST_SOURCE = ROOT / "tests" / "gfx_buffers_host.mm"
-INIT = ROOT / "benchmark" / "eu4_gfx_init.mm"
+INIT = ROOT / "renderer/integration" / "eu4_gfx_init.mm"
 FRAME_OBSERVE = ROOT / "benchmark" / "eu4_gfx_frame_observe.c"
-BUFFERS = ROOT / "benchmark" / "eu4_gfx_buffers.mm"
-TEXTURE = ROOT / "benchmark" / "eu4_gfx_texture.mm"
+BUFFERS = ROOT / "renderer/metal" / "eu4_gfx_buffers.mm"
+TEXTURE = ROOT / "renderer/metal" / "eu4_gfx_texture.mm"
 EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
 HOST = ROOT / "benchmark" / ".build" / "gfx_buffers_host"
 

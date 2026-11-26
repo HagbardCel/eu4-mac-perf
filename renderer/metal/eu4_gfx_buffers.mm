@@ -1,7 +1,7 @@
 #import "eu4_gfx_buffers.h"
-#import "eu4_gfx_init.h"
-#import "eu4_gfx_perf.h"
-#import "eu4_metal_events.h"
+#import "../integration/eu4_gfx_init.h"
+#import "../../benchmark/eu4_gfx_perf.h"
+#import "../../benchmark/eu4_metal_events.h"
 
 #import <Metal/Metal.h>
 #import <new>

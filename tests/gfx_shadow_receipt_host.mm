@@ -6,7 +6,7 @@
  */
 #import <Foundation/Foundation.h>
 
-#include "../benchmark/eu4_gfx_shadow_bridge.mm"
+#include "../renderer/integration/eu4_gfx_shadow_bridge.mm"
 
 #include <stdio.h>
 #include <string.h>

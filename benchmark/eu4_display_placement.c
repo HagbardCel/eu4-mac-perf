@@ -6,7 +6,7 @@
  * it never resizes the window.  Only active when EU4_DISPLAY_MODE=background.
  */
 
-#include "eu4_metal_boot_patch.h"
+#include "../renderer/integration/eu4_metal_boot_patch.h"
 
 #include <CoreGraphics/CoreGraphics.h>
 #include <mach-o/dyld.h>

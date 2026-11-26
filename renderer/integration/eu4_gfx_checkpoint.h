@@ -4,8 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "eu4_gfx_draw_capture.h"
-#include "eu4_gfx_simple_draw.h"
+#include "../../benchmark/eu4_gfx_draw_capture.h"
+#include "../metal/eu4_gfx_simple_draw.h"
 
 #ifdef __cplusplus
 extern "C" {

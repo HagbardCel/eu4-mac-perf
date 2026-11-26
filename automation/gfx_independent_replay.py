@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 from automation import gfx_frame_graph, m6_compare, m6_frame
+from automation.gfx_artifacts import sha256_file as _sha
 
 SCHEMA = "gfx-independent-replay/v1"
 DIAGNOSIS_SCHEMA = "gfx-frame-diagnosis/v1"
@@ -143,14 +144,6 @@ def prepare_replay_output(out_dir: Path, inputs: list[Path]) -> Path:
         }, indent=2) + "\n",
         encoding="utf-8")
     return out_dir
-
-
-def _sha(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -3851,11 +3844,7 @@ PRODUCER_RECEIPT_SCHEMA = "gfx-replay-producer-receipt/v1"
 def _sha256_file(path: Path) -> str | None:
     if not path.is_file():
         return None
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return _sha(path)
 
 
 

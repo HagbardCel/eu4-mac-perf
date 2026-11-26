@@ -17,10 +17,23 @@ EU4 (original OpenGL, authoritative)
 ```
 
 Entry points: [frame trace](../../benchmark/eu4_gfx_frame_trace.c),
-[shadow bridge](../../benchmark/eu4_gfx_shadow_bridge.mm),
-[replay core](../../benchmark/eu4_gfx_frame_replay.mm),
+[shadow bridge](../../renderer/integration/eu4_gfx_shadow_bridge.mm),
+[replay core](../../renderer/metal/eu4_gfx_frame_replay.mm),
 [independent replay](../../automation/gfx_independent_replay.py),
 [continuous supervisor](../../automation/m7_continuous.py).
+The [native build closure](../../automation/replay_host_dependencies.py) includes
+both replay translation units. [Build tests](../../tests/test_replay_host_dependencies.py)
+and [ABI and replay tests](../../tests/test_m7_metal_replay.py) exercise this path.
+The trusted checker selects the two replay translation units from the authorized
+candidate baseline. The retained M7 candidates use their original `benchmark/`
+layout. The current renderer uses `renderer/metal/` for both units.
+[Trusted checker tests](../../tests/test_m7_event20_prefix.py).
+
+[Live draw routing](../../renderer/integration/eu4_gfx_draw_route.mm) and
+[initialization](../../renderer/integration/eu4_gfx_init.mm) also manage live
+Metal state and call capture/profiling code in `benchmark/`. The live Metal
+resource and draw files use that context. The standalone replay closure uses
+engine clear flags and the shared UV2 diagnostic format.
 
 ## Contracts
 
@@ -96,6 +109,9 @@ equivalence, and exact output against the original. The historical
 remains unqualified. Drawable equivalence is unproven and the earlier comparison
 differed at 347 pixels. M7 event 1 targets offscreen framebuffer 6
 (`tex:433`) and has no qualified same-target OpenGL execution control.
+[Native fixture and receipt tests](../../tests/test_gfx_gl_draw_control.py) and
+[qualification tests](../../tests/test_gfx_gl_control_qualification.py) cover
+the supported route and authority checks.
 
 ## Current verification boundary
 

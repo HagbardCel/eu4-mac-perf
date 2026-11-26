@@ -6,6 +6,7 @@ import hashlib
 import os
 import json
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -17,75 +18,121 @@ from automation import case_baseline, m6_frame, replay_host_dependencies
 
 
 class DependencyClosureTests(unittest.TestCase):
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name).resolve()
-        self.bench = self.root / "benchmark"
-        self.bench.mkdir()
-        self.semantics = self.bench / "eu4_gfx_replay_semantics.h"
-        self.nested = self.bench / "nested.h"
-        self.metal = self.bench / "eu4_gfx_metal_replay.h"
-        self.replay = self.bench / "eu4_gfx_frame_replay.mm"
-        self.cli = self.bench / "eu4_gfx_frame_replay_cli.mm"
-        self.semantics.write_text('#include "nested.h"\n')
-        self.nested.write_text("nested\n")
-        self.metal.write_text("metal\n")
-        self.replay.write_text(
-            '#include "eu4_gfx_replay_semantics.h"\n'
-            '#include "eu4_gfx_metal_replay.h"\n')
-        self.cli.write_text(
-            '#include "eu4_gfx_metal_replay.h"\n'
-            "#include <stdio.h>\n")
+    CURRENT = replay_host_dependencies.REPLAY_SOURCES
+    LEGACY = tuple(f"benchmark/{Path(path).name}" for path in CURRENT)
 
-    def tearDown(self):
-        self.temporary.cleanup()
+    def _git(self, root, *args):
+        return subprocess.check_output(
+            ["git", "-C", str(root), "-c", "user.name=Fixture",
+             "-c", "user.email=fixture@example.invalid", *args],
+            stderr=subprocess.PIPE, text=True).strip()
 
-    def _sources(self):
-        return (self.replay, self.cli)
+    def _baseline(self, paths):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self._git(root, "init", "-q")
+        for relative in paths:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("// committed source\n")
+        self._git(root, "add", ".")
+        self._git(root, "commit", "--allow-empty", "-qm", "fixture baseline")
+        return root, self._git(root, "rev-parse", "HEAD")
 
-    def test_closure_includes_headers_and_ignores_system_includes(self):
-        paths = replay_host_dependencies.dependency_paths(
-            self.root, self._sources())
-        self.assertEqual(set(paths), {
-            "benchmark/eu4_gfx_frame_replay.mm",
-            "benchmark/eu4_gfx_frame_replay_cli.mm",
-            "benchmark/eu4_gfx_metal_replay.h",
-            "benchmark/eu4_gfx_replay_semantics.h",
-            "benchmark/nested.h",
-        })
+    def _replay_headers(self, root, sources):
+        semantics = root / "renderer/engine/nested.h"
+        semantics.parent.mkdir(parents=True, exist_ok=True)
+        semantics.write_text("#define FIXTURE 1\n")
+        cli = root / sources[1]
+        header = cli.with_name("fixture.h")
+        header.write_text(f'#include "{os.path.relpath(semantics, header.parent)}"\n')
+        cli.write_text('#include "fixture.h"\n#include <stdio.h>\nint main() { return FIXTURE; }\n')
+        return header, semantics
 
-    def test_header_change_changes_the_fingerprint(self):
-        first = replay_host_dependencies.relative_dependencies(
-            self.root, self._sources())
-        self.semantics.write_text('#include "nested.h"\n// changed\n')
-        second = replay_host_dependencies.relative_dependencies(
-            self.root, self._sources())
-        self.assertNotEqual(first["benchmark/eu4_gfx_replay_semantics.h"],
-                            second["benchmark/eu4_gfx_replay_semantics.h"])
-        self.assertNotEqual(first, second)
+    def test_source_relative_closure_and_header_fingerprint(self):
+        for sources in (self.CURRENT, self.LEGACY):
+            with self.subTest(sources=sources):
+                root, _pin = self._baseline(sources)
+                header, semantics = self._replay_headers(root, sources)
+                build = replay_host_dependencies.build_identity(root, sources, strict=True)
+                semantics.write_text("#define FIXTURE 2\n")
+                updated = replay_host_dependencies.build_identity(root, sources, strict=True)
+                self.assertNotEqual(build["fingerprint"], updated["fingerprint"])
+                with mock.patch.object(replay_host_dependencies, "_native_dependency_scan",
+                                       return_value=False):
+                    portable = replay_host_dependencies.relative_dependencies(root, sources, strict=True)
+                self.assertEqual(updated["dependencies"], portable)
+                self.assertEqual(set(portable), {
+                    *sources, header.relative_to(root).as_posix(), "renderer/engine/nested.h",
+                })
+                (root / "benchmark").mkdir(exist_ok=True)
+                (root / "benchmark/nested.h").write_text("// obsolete fallback\n")
+                semantics.unlink()
+                for native in {False, replay_host_dependencies._native_dependency_scan()}:
+                    with mock.patch.object(replay_host_dependencies, "_native_dependency_scan",
+                                           return_value=native):
+                        with self.assertRaisesRegex(OSError, "unattested source include"):
+                            replay_host_dependencies.dependency_paths(root, sources, strict=True)
 
-    def test_build_identity_accounts_for_flags_and_compiler(self):
-        with mock.patch.object(
-                replay_host_dependencies, "compiler_identity",
-                return_value={"path": "/usr/bin/clang", "version": "one"}):
-            first = replay_host_dependencies.build_identity(
-                self.root, self._sources())
-            second = replay_host_dependencies.build_identity(
-                self.root, self._sources(), flags=("-O0",))
-        self.assertNotEqual(first["fingerprint"], second["fingerprint"])
-        with mock.patch.object(
-                replay_host_dependencies, "compiler_identity",
-                return_value={"path": "/usr/bin/clang", "version": "two"}):
-            third = replay_host_dependencies.build_identity(
-                self.root, self._sources())
-        self.assertNotEqual(first["fingerprint"], third["fingerprint"])
+    def test_identity_binds_layout_flags_and_compiler(self):
+        dependencies = dict.fromkeys(self.CURRENT + self.LEGACY, "same closure")
+        with mock.patch.object(replay_host_dependencies, "relative_dependencies",
+                               return_value=dependencies), \
+                mock.patch.object(replay_host_dependencies, "compiler_identity") as compiler:
+            compiler.return_value = {"path": "/usr/bin/clang", "version": "one"}
+            current = replay_host_dependencies.build_identity()
+            legacy = replay_host_dependencies.build_identity(sources=self.LEGACY)
+            unoptimized = replay_host_dependencies.build_identity(flags=("-O0",))
+            compiler.return_value = {"path": "/usr/bin/clang", "version": "two"}
+            upgraded = replay_host_dependencies.build_identity()
+        for changed in (legacy, unoptimized, upgraded):
+            self.assertNotEqual(current["fingerprint"], changed["fingerprint"])
 
     def test_baseline_closure_matches_build_closure(self):
-        self.assertEqual(case_baseline.RENDERER_ROOTS,
-                         replay_host_dependencies.REPLAY_SOURCES)
-        # The real checkout closure is the authoritative one for both.
+        self.assertEqual(case_baseline.RENDERER_ROOTS, self.CURRENT)
         self.assertEqual(case_baseline._renderer_closure(),
                          replay_host_dependencies.relative_dependencies())
+
+    def test_refuses_incomplete_or_ambiguous_pinned_layouts(self):
+        for paths in ((), self.CURRENT[:1], self.LEGACY[:1],
+                      self.CURRENT + self.LEGACY[:1], self.CURRENT + self.LEGACY):
+            with self.subTest(paths=paths):
+                root, pin = self._baseline(paths)
+                with self.assertRaisesRegex(OSError, "missing, incomplete or ambiguous"):
+                    replay_host_dependencies.candidate_sources(root, pin)
+
+    def test_candidate_files_cannot_supply_missing_source_or_redirect_sources(self):
+        for sources, extra in ((self.CURRENT, self.LEGACY), (self.LEGACY, self.CURRENT)):
+            with self.subTest(sources=sources):
+                root, pin = self._baseline(sources)
+                source = root / sources[0]
+                source.rename(root / "unselected.mm")
+                for relative in extra:
+                    decoy = root / relative
+                    decoy.parent.mkdir(parents=True, exist_ok=True)
+                    decoy.write_text("// alternate layout\n")
+                selected = replay_host_dependencies.candidate_sources(root, pin)
+                self.assertEqual(selected, sources)
+                with self.assertRaisesRegex(OSError, "replay source is absent"):
+                    replay_host_dependencies.snapshot_sources(root, root / "snapshot", selected)
+                source.symlink_to(root / "unselected.mm")
+                with self.assertRaisesRegex(OSError, "unattested replay source path"):
+                    replay_host_dependencies.snapshot_sources(root, root / "snapshot", selected)
+
+    @unittest.skipUnless(sys.platform == "darwin", "native replay host requires macOS")
+    def test_both_pinned_layouts_build_from_their_source_snapshots(self):
+        for sources in (self.CURRENT, self.LEGACY):
+            with self.subTest(sources=sources):
+                root, pin = self._baseline(sources)
+                out = Path(self.enterContext(tempfile.TemporaryDirectory()))
+                self._replay_headers(root, sources)
+                selected = replay_host_dependencies.candidate_sources(root, pin)
+                snapshot = out / "snapshot"
+                copied = replay_host_dependencies.snapshot_sources(root, snapshot, selected)
+                built = replay_host_dependencies.build_snapshot_host(
+                    snapshot, out / "gfx_frame_replay", sources=selected)
+                self.assertEqual(built["source_digests"], copied["digests"])
+                self.assertEqual(built["source_files"], copied["files"])
+                self.assertEqual(subprocess.run([built["host_path"]], check=False).returncode, 1)
 
 
 class SnapshotIdentityTests(unittest.TestCase):

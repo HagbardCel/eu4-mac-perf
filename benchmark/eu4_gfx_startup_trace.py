@@ -71,10 +71,10 @@ def _build_arc_object(source: Path, output: Path) -> Path:
 def build_library() -> Path:
     BUILD.mkdir(parents=True, exist_ok=True)
     replay_object = _build_arc_object(
-        BENCH / "eu4_gfx_frame_replay.mm", BUILD / "eu4_gfx_frame_replay.o"
+        ROOT / "renderer/metal" / "eu4_gfx_frame_replay.mm", BUILD / "eu4_gfx_frame_replay.o"
     )
     bridge_object = _build_arc_object(
-        BENCH / "eu4_gfx_shadow_bridge.mm", BUILD / "eu4_gfx_shadow_bridge.o"
+        ROOT / "renderer/integration" / "eu4_gfx_shadow_bridge.mm", BUILD / "eu4_gfx_shadow_bridge.o"
     )
     command = [
         "clang",

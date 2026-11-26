@@ -22,6 +22,7 @@ from reverse_engineering import reconstruction_diff as diff
 ROOT = Path(__file__).resolve().parents[1]
 RECON_DIR = (ROOT / "analysis" / "reconstruction" / "_GfxSetConstantBuffer"
              / "reconstruction")
+ENGINE_DIR = ROOT / "renderer/engine"
 GOLDEN = ROOT / "oracle" / "function" / "synthetic" / "golden.txt"
 COMPILER_FALLBACKS = ("c++", "clang++", "g++")
 SANITIZER_FLAGS = ("-fsanitize=address,undefined", "-fno-sanitize-recover=all")
@@ -52,9 +53,8 @@ def _compile_harness(source_dir: Path, name: str) -> Path:
     _compile([
         COMPILER, "-std=c++20", "-O0", "-g", "-Wall", "-Wextra", "-Werror",
         *SANITIZER_FLAGS,
-        str(source_dir / "gfx_set_constant_buffer.cpp"),
-        str(source_dir / "harness.cpp"),
-        str(source_dir / "arith_literals.cpp"),
+        "-I", str(source_dir), str(source_dir / "gfx_set_constant_buffer.cpp"),
+        str(RECON_DIR / "harness.cpp"), str(RECON_DIR / "arith_literals.cpp"),
         "-o", str(binary),
     ])
     return binary
@@ -63,7 +63,7 @@ def _compile_harness(source_dir: Path, name: str) -> Path:
 def _mutated_harness(name: str, old: str, new: str) -> Path:
     assert WORKDIR is not None
     target = WORKDIR / name
-    shutil.copytree(RECON_DIR, target)
+    shutil.copytree(ENGINE_DIR, target)
     source = target / "gfx_set_constant_buffer.cpp"
     text = source.read_text(encoding="utf-8")
     if old not in text:
@@ -79,7 +79,7 @@ def setUpModule() -> None:
         BUILD_NOTE = "no C++ compiler on PATH"
         return
     WORKDIR = Path(tempfile.mkdtemp(prefix="eu4-prc-"))
-    HARNESS = _compile_harness(RECON_DIR, "harness")
+    HARNESS = _compile_harness(ENGINE_DIR, "harness")
     BUILD_NOTE = "sanitized host build of the tracked RE1 reconstruction"
     print(f"PR C gate: {BUILD_NOTE}", flush=True)
 

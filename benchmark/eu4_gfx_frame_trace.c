@@ -10,7 +10,7 @@
 
 #include "eu4_gfx_frame_trace.h"
 #include "eu4_gfx_uv2_sparse.h"
-#include "eu4_gfx_draw_semantics.h"
+#include "../renderer/metal/eu4_gfx_draw_semantics.h"
 
 #include "eu4_gfx_observe_framebuffer.h"
 /* The state host and manifest host link this file without the observation

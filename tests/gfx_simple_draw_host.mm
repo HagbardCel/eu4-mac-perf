@@ -3,11 +3,11 @@
    original loading-screen DDS. Renders through the replacement modules and
    checks the readback against CPU sampling of the same image and transform. */
 
-#import "eu4_gfx_buffers.h"
-#import "eu4_gfx_init.h"
-#import "eu4_gfx_shader.h"
-#import "eu4_gfx_simple_draw.h"
-#import "eu4_gfx_texture.h"
+#import "../renderer/metal/eu4_gfx_buffers.h"
+#import "../renderer/integration/eu4_gfx_init.h"
+#import "../renderer/metal/eu4_gfx_shader.h"
+#import "../renderer/metal/eu4_gfx_simple_draw.h"
+#import "../renderer/metal/eu4_gfx_texture.h"
 #import "eu4_metal_events.h"
 
 #import <CommonCrypto/CommonDigest.h>

@@ -1,6 +1,6 @@
 #include "eu4_gfx_startup_trace.h"
 #include "eu4_gfx_frame_trace.h"
-#include "eu4_gfx_shadow_bridge.h"
+#include "../renderer/integration/eu4_gfx_shadow_bridge.h"
 #include "eu4_gfx_observe.h"
 
 #include <CommonCrypto/CommonDigest.h>

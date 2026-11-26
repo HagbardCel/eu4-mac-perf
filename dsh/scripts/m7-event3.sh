@@ -12,7 +12,7 @@ export EU4_OFFLINE_ONLY=1 EU4_TEST_PROFILE=offline PYTHONDONTWRITEBYTECODE=1 GIT
 export EU4_DSH_INFRA_ROOT="$repo" EU4_DSH_SKILL_ROOT="$repo/.opencode/skills"
 
 if [[ $1 == preflight || $1 == start ]]; then
-    trusted_paths=(automation benchmark campaigns dsh .opencode/skills)
+    trusted_paths=(automation benchmark renderer campaigns dsh .opencode/skills)
     changed=$(git diff --name-only origin/main -- "${trusted_paths[@]}") || fail 'cannot compare trusted files with origin/main'
     dirty=$(git status --porcelain --untracked-files=all -- "${trusted_paths[@]}") || fail 'cannot inspect trusted files'
     [[ -z $changed && -z $dirty ]] || fail "trusted files must match reviewed origin/main: ${changed:-$dirty}"
@@ -100,6 +100,10 @@ def main(operation):
         require(result.get('authority') == 'authentic' and result.get('trusted_evidence') is True,
                 'reference must have authentic authority and verified trusted evidence')
         dsh_bridge._candidate(replace(sidecar, run_root=launches))
+        try:
+            gfx_prefix_check.verify_candidate(workspace, template)
+        except (gfx_prefix_check.PrefixCheckError, OSError, subprocess.SubprocessError, ValueError) as exc:
+            require(False, f'candidate replay preflight: {exc}')
         profile = subprocess.run([repo / 'dsh/scripts/preflight.sh'], capture_output=True, text=True)
         require(profile.returncode == 0, f'DSH profile preflight: {(profile.stderr + profile.stdout).strip()}')
         print(f'PASS: DSH profile, retained candidate and authentic reference for events 0..{target}', flush=True)

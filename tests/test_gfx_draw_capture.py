@@ -7,15 +7,15 @@ ROOT = Path(__file__).resolve().parents[1]
 HOST_SOURCE = ROOT / "tests" / "gfx_draw_capture_host.c"
 CAPTURE = ROOT / "benchmark" / "eu4_gfx_draw_capture.c"
 EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
-INIT = ROOT / "benchmark" / "eu4_gfx_init.mm"
+INIT = ROOT / "renderer/integration" / "eu4_gfx_init.mm"
 FRAME_OBSERVE = ROOT / "benchmark" / "eu4_gfx_frame_observe.c"
-BUFFERS = ROOT / "benchmark" / "eu4_gfx_buffers.mm"
-TEXTURE = ROOT / "benchmark" / "eu4_gfx_texture.mm"
+BUFFERS = ROOT / "renderer/metal" / "eu4_gfx_buffers.mm"
+TEXTURE = ROOT / "renderer/metal" / "eu4_gfx_texture.mm"
 HOST = ROOT / "benchmark" / ".build" / "gfx_draw_capture_host"
 SHIM_HOST = ROOT / "benchmark" / ".build" / "gfx_draw_shim_host"
 SHIM_ASM = ROOT / "tests" / "gfx_draw_shim_host.S"
 SHIM_STUB = ROOT / "tests" / "gfx_draw_shim_stub.c"
-ENTRY = ROOT / "benchmark" / "eu4_gfx_draw_entry.S"
+ENTRY = ROOT / "renderer/integration" / "eu4_gfx_draw_entry.S"
 
 
 @unittest.skipUnless(sys.platform == "darwin", "draw capture runs on macOS")

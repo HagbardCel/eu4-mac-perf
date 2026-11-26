@@ -300,8 +300,8 @@ class BaselineIdentityTests(unittest.TestCase):
         original = case_baseline.identity(self.case)
         changed = dict(original)
         sources = dict(original["renderer_sources"])
-        self.assertIn("benchmark/eu4_gfx_replay_semantics.h", sources)
-        sources["benchmark/eu4_gfx_replay_semantics.h"] = "f" * 64
+        self.assertIn("renderer/engine/eu4_gfx_replay_semantics.h", sources)
+        sources["renderer/engine/eu4_gfx_replay_semantics.h"] = "f" * 64
         changed["renderer_sources"] = sources
         changed["fingerprint"] = hashlib.sha256(json.dumps(
             {key: value for key, value in changed.items()

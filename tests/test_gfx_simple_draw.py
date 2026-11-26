@@ -16,13 +16,13 @@ MATRIX = PACKET / "payloads" / "matrix.bin"
 DDS = Path("/Applications/EuropaUniversalisIV/gfx/loadingscreens/load_0.dds")
 
 SOURCES = [
-    ROOT / "benchmark" / "eu4_gfx_shader.mm",
-    ROOT / "benchmark" / "eu4_gfx_buffers.mm",
+    ROOT / "renderer/metal" / "eu4_gfx_shader.mm",
+    ROOT / "renderer/metal" / "eu4_gfx_buffers.mm",
     ROOT / "benchmark" / "eu4_gfx_perf.mm",
-    ROOT / "benchmark" / "eu4_gfx_texture.mm",
-    ROOT / "benchmark" / "eu4_gfx_init.mm",
+    ROOT / "renderer/metal" / "eu4_gfx_texture.mm",
+    ROOT / "renderer/integration" / "eu4_gfx_init.mm",
     ROOT / "benchmark" / "eu4_gfx_frame_observe.c",
-    ROOT / "benchmark" / "eu4_gfx_simple_draw.mm",
+    ROOT / "renderer/metal" / "eu4_gfx_simple_draw.mm",
     ROOT / "benchmark" / "eu4_metal_events.c",
 ]
 

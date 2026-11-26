@@ -40,7 +40,8 @@ from reverse_engineering import reconstruction_pilot as pilot
 from reverse_engineering.macho_rva import MachOMapper
 
 RECON_DIR = diff.FUNCTION_DIR / "reconstruction"
-HEADER = RECON_DIR / "gfx_set_constant_buffer.hpp"
+ENGINE_DIR = Path(__file__).resolve().parents[1] / "renderer/engine"
+HEADER = ENGINE_DIR / "gfx_set_constant_buffer.hpp"
 BINARY_PRESENT = paths.executable_path().is_file()
 PROJECT_PRESENT = pilot.default_project_dir().is_dir()
 
@@ -112,17 +113,17 @@ def _compile(command: list[str]) -> tuple[bool, str]:
     return result.returncode == 0, (result.stderr or "").strip()
 
 
-def _compile_harness(workdir: Path, source_dir: Path, name: str) -> Path:
+def _compile_harness(workdir: Path, engine: Path, name: str) -> Path:
     """Build the reconstruction's scenario harness from `source_dir`."""
     assert COMPILER is not None
     binary = workdir / name
     ok, error = _compile([
         COMPILER, "-std=c++20", "-O0", "-g", "-Wall", "-Wextra", "-Werror", *SANITIZER_FLAGS,
-        str(source_dir / "gfx_set_constant_buffer.cpp"), str(source_dir / "harness.cpp"),
-        str(source_dir / "arith_literals.cpp"), "-o", str(binary),
+        "-I", str(engine), str(engine / "gfx_set_constant_buffer.cpp"),
+        str(RECON_DIR / "harness.cpp"), str(RECON_DIR / "arith_literals.cpp"), "-o", str(binary),
     ])
     if not ok:
-        raise AssertionError(f"{name} did not build from {source_dir}: {error}")
+        raise AssertionError(f"{name} did not build from {engine}: {error}")
     return binary
 
 
@@ -134,9 +135,10 @@ def _mutated_source_dir(name: str, mutation: tuple[str, str]) -> Path:
     """
     assert WORKDIR is not None
     target = WORKDIR / name
-    shutil.copytree(RECON_DIR, target)
+    target.mkdir()
+    shutil.copy2(ENGINE_DIR / "gfx_set_constant_buffer.cpp", target)
     header = target / HEADER.name
-    text = header.read_text()
+    text = HEADER.read_text()
     old, new = mutation
     if old not in text:
         raise AssertionError(f"{name}: the mutation anchor is no longer in the tracked header")
@@ -158,7 +160,7 @@ def setUpModule() -> None:
         BUILD_NOTE = "no C++ compiler on PATH"
     else:
         WORKDIR = Path(tempfile.mkdtemp(prefix="eu4-re2-"))
-        HARNESS = _compile_harness(WORKDIR, RECON_DIR, "harness")
+        HARNESS = _compile_harness(WORKDIR, ENGINE_DIR, "harness")
         BUILD_NOTE = "sanitized host build of the tracked reconstruction"
     print(f"RE2 gate: {BUILD_NOTE}", flush=True)
 

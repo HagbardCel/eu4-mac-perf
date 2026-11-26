@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "eu4_gfx_simple_draw.h"
+#include "../renderer/metal/eu4_gfx_simple_draw.h"
 
 #ifdef __cplusplus
 extern "C" {

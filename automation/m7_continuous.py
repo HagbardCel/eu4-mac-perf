@@ -15,7 +15,6 @@ capture; the queue/bounds here are the exact limits the live bridge must obey.
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import os
 import queue
@@ -27,6 +26,7 @@ import time
 from pathlib import Path
 
 from automation import gfx_frame_graph, gfx_independent_replay, gfx_replay_case, m6_frame
+from automation.gfx_artifacts import sha256_file as _sha
 
 SCHEMA = "m7-continuous-campaign/v1"
 OUTPUT_MARKER = ".m7-continuous-output.json"
@@ -47,14 +47,6 @@ class ContinuousError(RuntimeError):
         super().__init__(kind if not detail else f"{kind}: {detail}")
         self.kind = kind
         self.detail = detail
-
-
-def _sha(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _read_json(path: Path) -> dict:

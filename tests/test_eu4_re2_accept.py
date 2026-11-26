@@ -18,6 +18,7 @@ ACCEPT = REPO / "campaigns" / "eu4-re2-pilot" / "accept.py"
 PREPARE = REPO / "campaigns" / "eu4-re2-pilot" / "prepare.py"
 RECON = REPO / "analysis/reconstruction/_GfxSetConstantBuffer/reconstruction"
 HEADER = "analysis/reconstruction/_GfxSetConstantBuffer/reconstruction/gfx_set_constant_buffer.hpp"
+ENGINE = REPO / "renderer/engine"
 PINNED = "2923c1407371656fd51d962b085eaebc52650993"
 COMPILER = shutil.which("c++") or shutil.which("clang++") or shutil.which("g++")
 UNTRUSTED_CLI = """
@@ -55,12 +56,18 @@ def git(path: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
+def copy_pilot_fixture(target: Path) -> None:
+    shutil.copytree(RECON, target)
+    for source in ENGINE.glob("gfx_set_constant_buffer.*"):
+        shutil.copy2(source, target)
+
+
 def candidate_repo() -> tuple[Path, str]:
     root = Path(tempfile.mkdtemp(prefix="eu4-re2-candidate-"))
     git(root, "init", "-q")
     target = root / RECON.relative_to(REPO)
     target.parent.mkdir(parents=True)
-    shutil.copytree(RECON, target)
+    copy_pilot_fixture(target)
     git(root, "add", ".")
     git(root, "commit", "-q", "-m", "candidate")
     return root, git(root, "rev-parse", "HEAD")
@@ -154,7 +161,7 @@ class AcceptTests(unittest.TestCase):
 
     @unittest.skipUnless(COMPILER, "no C++ compiler")
     def test_known_good_passes_and_signed_division_fails(self) -> None:
-        trusted = (REPO / HEADER).read_text(encoding="utf-8")
+        trusted = (ENGINE / Path(HEADER).name).read_text(encoding="utf-8")
         repo, sha = candidate_repo()
         try:
             passed = accept.check(repo, commit=sha, repo=repo)
@@ -166,7 +173,7 @@ class AcceptTests(unittest.TestCase):
             header.write_text(text.replace(anchor, "    return static_cast<std::uint32_t>(static_cast<std::int32_t>(first_dword + 3u) / 4);", 1), encoding="utf-8")
             failed = accept.check(repo, commit=sha, repo=repo)
             self.assertEqual(failed["verdict"], "fail", failed["diagnostics"])
-            self.assertEqual((REPO / HEADER).read_text(encoding="utf-8"), trusted)
+            self.assertEqual((ENGINE / Path(HEADER).name).read_text(encoding="utf-8"), trusted)
             source = repo / HEADER.replace(".hpp", ".cpp")
             source.write_text("not c++\n", encoding="utf-8")
             broken = accept.check(repo, commit=sha, repo=repo)
@@ -260,11 +267,11 @@ class AcceptTests(unittest.TestCase):
             shutil.rmtree(workspace)
 
     def test_prepare_rejects_the_wrong_tree_and_mutates_the_pinned_worktree(self) -> None:
-        trusted = (REPO / HEADER).read_text(encoding="utf-8")
+        trusted = (ENGINE / Path(HEADER).name).read_text(encoding="utf-8")
         primary = subprocess.run([sys.executable, str(PREPARE), str(REPO)], capture_output=True, text=True)
         self.assertNotEqual(primary.returncode, 0)
         self.assertIn("primary", primary.stderr)
-        self.assertEqual((REPO / HEADER).read_text(encoding="utf-8"), trusted)
+        self.assertEqual((ENGINE / Path(HEADER).name).read_text(encoding="utf-8"), trusted)
         parent = Path(tempfile.mkdtemp(prefix="eu4-re2-foreign-"))
         foreign_root = parent / "repo"
         foreign = parent / "wt"
@@ -273,7 +280,7 @@ class AcceptTests(unittest.TestCase):
             git(foreign_root, "init", "-q")
             target = foreign_root / RECON.relative_to(REPO)
             target.parent.mkdir(parents=True)
-            shutil.copytree(RECON, target)
+            copy_pilot_fixture(target)
             git(foreign_root, "add", ".")
             git(foreign_root, "commit", "-q", "-m", "foreign")
             git(foreign_root, "worktree", "add", "--detach", str(foreign), "HEAD")
@@ -289,14 +296,14 @@ class AcceptTests(unittest.TestCase):
             shutil.rmtree(parent, ignore_errors=True)
         self._prepare_worktree("HEAD", accept=False)
         self._prepare_worktree(PINNED, accept=True)
-        self.assertEqual((REPO / HEADER).read_text(encoding="utf-8"), trusted)
+        self.assertEqual((ENGINE / Path(HEADER).name).read_text(encoding="utf-8"), trusted)
 
     def _prepare_worktree(self, commit: str, *, accept: bool) -> None:
         parent = Path(tempfile.mkdtemp(prefix="eu4-re2-linked-"))
         worktree = parent / "worktree"
         try:
             git(REPO, "worktree", "add", "--detach", str(worktree), commit)
-            header = worktree / HEADER
+            header = worktree / (HEADER if accept else ENGINE.relative_to(REPO) / Path(HEADER).name)
             before = header.read_text(encoding="utf-8")
             first = subprocess.run(
                 [sys.executable, str(PREPARE), str(worktree)], capture_output=True, text=True)

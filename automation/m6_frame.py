@@ -36,6 +36,7 @@ from pathlib import Path
 
 from automation import (  # noqa: E402
     campaign_guard, gfx_observation, replay_host_dependencies)
+from automation.gfx_artifacts import sha256_file as _sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
@@ -66,14 +67,6 @@ def _is_sha256(value) -> bool:
             and all(character in "0123456789abcdef" for character in value))
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-# Immutable capture payloads are verified once per process.  The key includes
 # size and nanosecond mtime, so a replaced artifact is re-hashed; repeated
 # graph builds over the same ten-frame campaign avoid re-reading gigabytes.
 _BLOB_DIGESTS: dict[tuple[str, int, int, int, int], str] = {}
@@ -230,7 +223,7 @@ def iter_blob_members(value):
 def _producer_writes_color(producer: dict) -> bool:
     """Whether a graph producer can make its resource current for sampling.
 
-    Mirrors ``g_frame_written`` in ``benchmark/eu4_gfx_frame_replay.mm``:
+    Mirrors ``g_frame_written`` in ``renderer/metal/eu4_gfx_frame_replay.mm``:
     draws and copy/resolve destinations write colour; a clear counts only when
     its flags include a colour write.
     """
@@ -2008,8 +2001,8 @@ def capture(args: argparse.Namespace) -> int:
 # Shader translation, replay and comparison
 # ---------------------------------------------------------------------------
 
-REPLAY_HOST_SOURCE = BENCH / "eu4_gfx_frame_replay.mm"
-REPLAY_HOST_CLI_SOURCE = BENCH / "eu4_gfx_frame_replay_cli.mm"
+REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE = (
+    ROOT / source for source in replay_host_dependencies.REPLAY_SOURCES)
 REPLAY_HOST = BENCH / ".build" / "gfx_frame_replay"
 
 
@@ -2094,7 +2087,7 @@ def replay_host_producer(host: Path | str | None = None) -> dict:
     host = Path(host) if host is not None else REPLAY_HOST
     stamp = Path(str(host) + ".deps.json")
     identity = replay_host_dependencies.build_identity(
-        root=ROOT, sources=(REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE))
+        root=ROOT, sources=(REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE), strict=True)
     if not _replay_stamp_matches(stamp, identity, host):
         raise FrameError(
             "replay host build receipt does not match the current binary and "
@@ -2177,7 +2170,7 @@ def build_replay_host(force: bool = False) -> Path:
 def _build_replay_host_locked(force: bool = False) -> Path:
     sources = (REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE)
     identity = replay_host_dependencies.build_identity(
-        root=ROOT, sources=sources)
+        root=ROOT, sources=sources, strict=True)
     stamp = _replay_host_stamp()
     if not force and _replay_stamp_matches(stamp, identity, REPLAY_HOST):
         return REPLAY_HOST
@@ -2193,6 +2186,7 @@ def _build_replay_host_locked(force: bool = False) -> Path:
     try:
         built = subprocess.run(
             replay_host_dependencies.build_command(temporary, sources),
+            env=identity["environment"],
             capture_output=True,
             text=True,
             check=False,

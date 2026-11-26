@@ -125,9 +125,9 @@ is not reconstructed.
 
 ## 6. Draw dispatch and submission
 
-`_GfxDraw` still enters through `benchmark/eu4_gfx_draw_entry.S` and
+`_GfxDraw` still enters through `renderer/integration/eu4_gfx_draw_entry.S` and
 `eu4_gfx_draw_capture.c`. The capture records the invocation, then a small
-semantic route in `benchmark/eu4_gfx_draw_route.mm` decides:
+semantic route in `renderer/integration/eu4_gfx_draw_route.mm` decides:
 
 - `_GfxDraw` plus the admitted `simple-lua-Simple/asset-maincode-v0` shader and
   valid vertex/constant/texture/target state is encoded by the shared Simple

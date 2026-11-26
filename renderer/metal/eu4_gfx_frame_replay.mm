@@ -13,9 +13,9 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import "eu4_gfx_draw_semantics.h"
-#include "eu4_gfx_replay_semantics.h"
+#include "../engine/eu4_gfx_replay_semantics.h"
 #include "eu4_gfx_metal_replay.h"
-#include "eu4_gfx_uv2_sparse.h"
+#include "../../benchmark/eu4_gfx_uv2_sparse.h"
 
 #include <CommonCrypto/CommonDigest.h>
 #include <time.h>

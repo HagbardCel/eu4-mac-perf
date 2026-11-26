@@ -1,6 +1,6 @@
-#import "../benchmark/eu4_gfx_init.h"
+#import "../renderer/integration/eu4_gfx_init.h"
 #import "../benchmark/eu4_metal_events.h"
-#import "../benchmark/eu4_metal_geometry_view.h"
+#import "../renderer/integration/eu4_metal_geometry_view.h"
 
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>

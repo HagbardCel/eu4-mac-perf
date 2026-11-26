@@ -30,7 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
 HOST = ROOT / "tests" / "gfx_metal_replay_abi_host.mm"
-CORE = BENCH / "eu4_gfx_frame_replay.mm"
+CORE = ROOT / "renderer/metal" / "eu4_gfx_frame_replay.mm"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 

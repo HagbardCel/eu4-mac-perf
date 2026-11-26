@@ -19,6 +19,7 @@ from pathlib import Path
 
 from automation.state import require_worktree
 
+REGISTRY_PATH = "renderer/integration/eu4_gfx_entries.def"
 CHECKPOINT_NAME = "research-checkpoint.json"
 FOLLOWUP = b"\n## Follow-up\n"
 PASS_DIAGNOSTIC = (
@@ -460,7 +461,7 @@ def check(workspace: Path, campaign: dict, config: dict) -> dict:
         return emit("unavailable", blob)
     try:
         paths = changed_paths(workspace)
-        baseline = pinned_show(workspace, pinned, "benchmark/eu4_gfx_entries.def")
+        baseline = pinned_show(workspace, pinned, REGISTRY_PATH)
         target = json.loads(pinned_show(workspace, pinned, "reverse_engineering/target.json"))
     except (OSError, json.JSONDecodeError, UnicodeError) as exc:
         return emit("unavailable", f"pinned source unavailable: {exc}")
@@ -558,7 +559,7 @@ def check(workspace: Path, campaign: dict, config: dict) -> dict:
     if research_only:
         digest = checkpoint_sha256(saved_path)
         return emit("inconclusive", f"research checkpoint preserved sha256={digest}; implementation may proceed")
-    registry = workspace / "benchmark" / "eu4_gfx_entries.def"
+    registry = workspace / REGISTRY_PATH
     if not registry.is_file():
         return emit("fail", "candidate registry is missing")
     try:

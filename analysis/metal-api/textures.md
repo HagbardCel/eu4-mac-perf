@@ -10,7 +10,7 @@
 - `Metal.framework/Headers/MTLPixelFormat.h`
 - `Metal.framework/Headers/MTLDevice.h`
 - [MTLTextureDescriptor](https://developer.apple.com/documentation/metal/mtltexturedescriptor)
-- [`eu4_gfx_texture.h`](../../benchmark/eu4_gfx_texture.h)
+- [`eu4_gfx_texture.h`](../../renderer/metal/eu4_gfx_texture.h)
 - [Ordinal 5](../metal-init/compressed-texture-5.md)
 
 ## Provenance
@@ -23,7 +23,7 @@ Reviewed 2026-11-05 against macOS SDK 27.0. The three headers above were read. T
 
 [SDK] `supportsBCTextureCompression` reports whether the device supports BC formats. [SDK] `MTLPixelFormatBC3_RGBA` is a pixel format in this SDK. [SDK] `replaceRegion:mipmapLevel:withBytes:bytesPerRow:` copies the caller's bytes into one mip. The header does not state a block size or a BC3 row stride.
 
-[Project-derived] Ordinal 5 is linear DXT5 and is uploaded as `MTLPixelFormatBC3_RGBA`. The other compressed ordinals are rejected. Uncompressed selection in [`eu4_gfx_texture.mm`](../../benchmark/eu4_gfx_texture.mm) is `MTLPixelFormatRGBA8Unorm` for format 9, `MTLPixelFormatBGRA8Unorm_sRGB` for formats `0xc` and `0xe`, and `MTLPixelFormatBGRA8Unorm` otherwise.
+[Project-derived] Ordinal 5 is linear DXT5 and is uploaded as `MTLPixelFormatBC3_RGBA`. The other compressed ordinals are rejected. Uncompressed selection in [`eu4_gfx_texture.mm`](../../renderer/metal/eu4_gfx_texture.mm) is `MTLPixelFormatRGBA8Unorm` for format 9, `MTLPixelFormatBGRA8Unorm_sRGB` for formats `0xc` and `0xe`, and `MTLPixelFormatBGRA8Unorm` otherwise.
 
 [Project-derived] For ordinal 5, `bytesPerRow` is `ceil(width / 4) * 16`, including a side shorter than 4. That formula is the reconstruction in [ordinal 5](../metal-init/compressed-texture-5.md), not an Apple requirement copied from `MTLTexture.h`.
 

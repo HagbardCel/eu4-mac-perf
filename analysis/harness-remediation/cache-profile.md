@@ -116,29 +116,29 @@ programs, which is why present 904 and present 916 get the same key (section 5).
 The replay host keeps both caches only for the lifetime of one process:
 
 - Function cache: `g_functions` is an `NSMutableDictionary` created empty per
-  session ([`benchmark/eu4_gfx_frame_replay.mm:5536`](../../benchmark/eu4_gfx_frame_replay.mm#L5536));
+  session ([`benchmark/eu4_gfx_frame_replay.mm:5536`](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L5536));
   `function_for` reads the MSL bytes, hashes them, and keys the dictionary by
   `msl sha256 + entry + stage kind + compile-options`
-  ([:2105](../../benchmark/eu4_gfx_frame_replay.mm#L2105),
-  [:2162–2170](../../benchmark/eu4_gfx_frame_replay.mm#L2162)).
+  ([:2105](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L2105),
+  [:2162–2170](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L2162)).
   On a miss it creates a library with `newLibraryWithSource`
-  ([:2182](../../benchmark/eu4_gfx_frame_replay.mm#L2182)), resolves the entry with
-  `newFunctionWithName` ([:2193](../../benchmark/eu4_gfx_frame_replay.mm#L2193)), and
-  stores it ([:2202](../../benchmark/eu4_gfx_frame_replay.mm#L2202)).
+  ([:2182](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L2182)), resolves the entry with
+  `newFunctionWithName` ([:2193](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L2193)), and
+  stores it ([:2202](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L2202)).
 - Pipeline cache: `g_pipelines`, also created empty per session
-  ([:5535](../../benchmark/eu4_gfx_frame_replay.mm#L5535)), keyed by a state key
-  ([:2210](../../benchmark/eu4_gfx_frame_replay.mm#L2210)), populated with
+  ([:5535](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L5535)), keyed by a state key
+  ([:2210](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L2210)), populated with
   `newRenderPipelineStateWithDescriptor`
-  ([:2690–2701](../../benchmark/eu4_gfx_frame_replay.mm#L2690)).
+  ([:2690–2701](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L2690)).
 - There is **no persistent native cache** in this host: no `MTLBinaryArchive`,
   no `.metallib`, no `newLibraryWithFile`/`newLibraryWithData`, no archive
   serialization anywhere in
-  [`benchmark/eu4_gfx_frame_replay.mm`](../../benchmark/eu4_gfx_frame_replay.mm).
+  [`benchmark/eu4_gfx_frame_replay.mm`](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm).
   Every replay process recompiles the MSL and recreates its pipelines.
 - The in-process lookup itself is not free: `function_for` is called for both
-  stages of every draw ([:2253](../../benchmark/eu4_gfx_frame_replay.mm#L2253)), and
+  stages of every draw ([:2253](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L2253)), and
   each call re-reads and re-hashes the MSL file
-  ([:2105–2121](../../benchmark/eu4_gfx_frame_replay.mm#L2105)). For present 904 that
+  ([:2105–2121](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L2105)). For present 904 that
   is **634 lookups / 5,276,365 bytes of MSL re-hashed per replay**, even on a
   dictionary hit.
 
@@ -148,14 +148,14 @@ glslang/spirv-cross work but never the Metal compile/pipeline work.
 ### 2.3 GPU time is not recorded
 
 The replay host commits one command buffer per event, waits for completion
-([`:4878`](../../benchmark/eu4_gfx_frame_replay.mm#L4878),
-[`wait_for_transfer` `:3592`](../../benchmark/eu4_gfx_frame_replay.mm#L3592)), and
+([`:4878`](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L4878),
+[`wait_for_transfer` `:3592`](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L3592)), and
 reports `command_status == 4` (completed), but it never reads
 `GPUStartTime`/`GPUEndTime`. The success-path `replay.json` has **no timing
 key at all** (the scan returned `[]`); only the C ABI fills
 `out_result->duration_ns`
-([`:5425`](../../benchmark/eu4_gfx_frame_replay.mm#L5425)) and the failure path writes
-`duration_ns` into JSON ([:4541](../../benchmark/eu4_gfx_frame_replay.mm#L4541)).
+([`:5425`](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L5425)) and the failure path writes
+`duration_ns` into JSON ([:4541](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L4541)).
 The only GPU timing in the tree is the live perf harness
 ([`benchmark/eu4_gfx_perf.mm:72–86`](../../benchmark/eu4_gfx_perf.mm#L72)), which is
 not linked into the frame replay host. Hence GPU time is reported as
@@ -318,7 +318,7 @@ comparable to these plain replays.)
 | Instrumentation needed | `addCompletedHandler:` summing `GPUStartTime`/`GPUEndTime` per committed command buffer, published in `replay.json`; or Metal System Trace / `MTLCounterSampleBuffer` | existing pattern at [`benchmark/eu4_gfx_perf.mm:72`](../../benchmark/eu4_gfx_perf.mm#L72) |
 
 The one-command-buffer-per-event design
-([`benchmark/eu4_gfx_frame_replay.mm:4878`](../../benchmark/eu4_gfx_frame_replay.mm#L4878))
+([`benchmark/eu4_gfx_frame_replay.mm:4878`](https://github.com/HagbardCel/eu4-mac-perf/blob/fb717ead9fc1ca921022c8ec4cde32bbf813262c/benchmark/eu4_gfx_frame_replay.mm#L4878))
 means GPU time is serialized into the 0.60 s wall time, but its share is not
 observable with the current host.
 

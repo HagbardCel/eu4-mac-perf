@@ -3,8 +3,8 @@
 #import <Foundation/Foundation.h>
 
 #include "eu4_gfx_shadow_bridge.h"
-#include "eu4_gfx_frame_trace.h"
-#include "eu4_gfx_metal_replay.h"
+#include "../../benchmark/eu4_gfx_frame_trace.h"
+#include "../metal/eu4_gfx_metal_replay.h"
 
 #include <CommonCrypto/CommonDigest.h>
 #include <limits.h>

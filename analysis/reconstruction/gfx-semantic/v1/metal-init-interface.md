@@ -36,7 +36,7 @@ On success the success byte is 1, and the master and every required backend-owne
 
 Init does not call `SDL_GL_*`, `_glewInit`, `glGet*`, `InitOpenGLConversionTables`, or `GetOpenGLContext*`.
 
-A1 gets the `NSWindow` with `SDL_GetWindowWMInfo`, inserts a child `NSView` in `native.contentView`, and sets that child's `layer` to the `CAMetalLayer` ([eu4_metal_boot.m](../../../../benchmark/eu4_metal_boot.m)). `contentView.layer` is not that layer. Bootstrap holds the child-view layer in its private `g_layer`.
+A1 gets the `NSWindow` with `SDL_GetWindowWMInfo`, inserts a child `NSView` in `native.contentView`, and sets that child's `layer` to the `CAMetalLayer` ([eu4_metal_boot.m](../../../../renderer/integration/eu4_metal_boot.m)). `contentView.layer` is not that layer. Bootstrap holds the child-view layer in its private `g_layer`.
 
 - A1 owns layer creation and attachment. Init does not create a second layer or a second hosting view.
 - `backend.adopt` receives that child-view layer pointer from the existing boot integration. Init does not read `contentView.layer` and does not search subviews. If the handoff pointer is nil, init fails.

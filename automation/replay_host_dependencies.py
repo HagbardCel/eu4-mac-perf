@@ -19,11 +19,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+from automation.gfx_artifacts import sha256_file as _sha256
+
 ROOT = Path(__file__).resolve().parents[1]
 REPLAY_SOURCES = (
-    "benchmark/eu4_gfx_frame_replay.mm",
-    "benchmark/eu4_gfx_frame_replay_cli.mm",
+    "renderer/metal/eu4_gfx_frame_replay.mm",
+    "renderer/metal/eu4_gfx_frame_replay_cli.mm",
 )
+_LEGACY_REPLAY_SOURCES = tuple(f"benchmark/{Path(source).name}"
+                               for source in REPLAY_SOURCES)
 BUILD_FLAGS = (
     "-arch",
     "arm64",
@@ -37,13 +41,6 @@ BUILD_FLAGS = (
     "-framework",
     "Metal",
 )
-# Environment variables that can change the produced binary.
-BUILD_ENV_KEYS = (
-    "SDKROOT",
-    "MACOSX_DEPLOYMENT_TARGET",
-    "ARCHFLAGS",
-    "DEVELOPER_DIR",
-)
 _LOCAL_INCLUDE = re.compile(
     r'^\s*#\s*(?:include|import)\s+"([^"]+)"', re.MULTILINE)
 _COMPILER_CACHE: dict[tuple[str, int], dict] = {}
@@ -55,12 +52,25 @@ _BUILD_ENVIRONMENT_KEYS = (
 )
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def candidate_sources(trusted_root: Path | str, baseline_commit: str) -> tuple[str, ...]:
+    """Select one complete replay layout from the authorized baseline tree."""
+    layouts = (REPLAY_SOURCES, _LEGACY_REPLAY_SOURCES)
+    paths = (*REPLAY_SOURCES, *_LEGACY_REPLAY_SOURCES)
+    completed = subprocess.run(
+        ["git", "--no-replace-objects", "-C", str(trusted_root), "ls-tree", "-z",
+         baseline_commit, "--", *paths],
+        capture_output=True, text=True, check=False, timeout=60)
+    if completed.returncode != 0:
+        raise OSError(f"cannot read pinned replay sources: {completed.stderr.strip()}")
+    entries = {}
+    for row in filter(None, completed.stdout.split("\0")):
+        entry, path = row.split("\t", 1)
+        entries[path] = entry
+    for sources in layouts:
+        if entries.keys() == set(sources) and all(
+                entry.startswith(("100644 blob ", "100755 blob ")) for entry in entries.values()):
+            return sources
+    raise OSError(f"missing, incomplete or ambiguous replay source layout at {baseline_commit}")
 
 
 def _relative(path: Path, root: Path) -> str | None:
@@ -108,25 +118,17 @@ def _quoted_dependency_paths(source: Path, root: Path, *,
     seen: set[Path] = set()
     while pending:
         path = pending.pop()
-        try:
-            resolved = path.resolve()
-        except OSError:
-            continue
+        resolved = path.resolve()
         if resolved in seen or not resolved.is_file():
             continue
         seen.add(resolved)
         closure.append(resolved)
-        try:
-            text = resolved.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
+        text = resolved.read_text(encoding="utf-8", errors="replace")
         for match in _LOCAL_INCLUDE.finditer(text):
-            candidate = (resolved.parent / match.group(1)).resolve()
-            if not candidate.is_file():
-                candidate = (root / "benchmark" / match.group(1)).resolve()
-            if (candidate.is_file()
-                    and (_relative(candidate, root) is not None
-                         or _system_dependency(candidate))):
+            include = Path(match.group(1))
+            candidate = (resolved.parent / include).resolve()
+            if (not include.is_absolute() and candidate.is_file()
+                    and _relative(candidate, root) is not None):
                 pending.append(candidate)
             elif strict:
                 raise OSError(
@@ -146,8 +148,8 @@ def _compiler_dependencies(path: Path, compiler: str | None) -> list[Path]:
     cached = _COMPILER_DEP_CACHE.get(key)
     if cached is not None:
         dependencies, stamps = cached
-        if all(Path(item).stat().st_mtime_ns == stamp
-               for item, stamp in stamps if Path(item).is_file()):
+        if all(Path(item).is_file() and Path(item).stat().st_mtime_ns == stamp
+               for item, stamp in stamps):
             return dependencies
     completed = subprocess.run(
         [compiler_path, "-arch", "arm64", "-fobjc-arc", "-MM", "-MT", "dep",
@@ -199,27 +201,11 @@ def dependency_paths(root: Path | str = ROOT,
         source = Path(item) if Path(item).is_absolute() else root / item
         if not source.is_file():
             raise OSError(f"replay source is absent: {source}")
-        if strict:
-            # Explicit guard so an absolute/escaping quoted include fails with a
-            # dependency error before the compiler reads the host file.  The
-            # compiler output below remains the closure authority.
-            try:
-                text = source.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                text = ""
-            for match in _LOCAL_INCLUDE.finditer(text):
-                candidate = (source.parent / match.group(1)).resolve()
-                if not candidate.is_file():
-                    candidate = (root / "benchmark" / match.group(1)).resolve()
-                if (candidate.is_file()
-                        and _relative(candidate, root) is None
-                        and not _system_dependency(candidate)):
-                    raise OSError(
-                        f"unattested source include {match.group(1)!r} in "
-                        f"{_relative(source, root) or source}")
-        deps = (_compiler_dependencies(source, compiler)
-                if _native_dependency_scan()
-                else _quoted_dependency_paths(source, root, strict=strict))
+        native = _native_dependency_scan()
+        if strict and (source.absolute() != source.resolve() or _relative(source, root) is None):
+            raise OSError(f"unattested replay source path: {source}")
+        quoted = _quoted_dependency_paths(source, root, strict=strict) if strict or not native else []
+        deps = _compiler_dependencies(source, compiler) if native else quoted
         for dependency in [source, *deps]:
             try:
                 resolved = dependency.resolve()
@@ -290,7 +276,8 @@ def build_identity(root: Path | str = ROOT, sources=REPLAY_SOURCES,
     """Hash all inputs that can change the replay-host binary."""
     flags = BUILD_FLAGS if flags is None else flags
     root = Path(root).resolve()
-    dependencies = relative_dependencies(root, sources, strict=strict,
+    units = tuple(Path(source) for source in sources)
+    dependencies = relative_dependencies(root, units, strict=strict,
                                          compiler=compiler)
     environment = build_environment()
     value = {
@@ -298,6 +285,8 @@ def build_identity(root: Path | str = ROOT, sources=REPLAY_SOURCES,
         "platform": sys.platform,
         "dependency_authority": ("compiler" if _native_dependency_scan()
                                  else "quoted-include"),
+        "sources": [str(unit.relative_to(root) if unit.is_relative_to(root) else unit)
+                    for unit in units],
         "dependencies": dependencies,
         "compiler": compiler_identity(compiler),
         "flags": list(flags),
@@ -337,19 +326,17 @@ def snapshot_sources(root: Path | str, destination: Path | str,
 
 
 def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
-                        *, compiler: str | None = None,
+                        *, sources=REPLAY_SOURCES, compiler: str | None = None,
                         timeout: float = 180.0,
                         environment: dict | None = None) -> dict:
     """Build the replay host from an isolated candidate source snapshot."""
     snapshot_root = Path(snapshot_root).resolve()
     output = Path(output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    sources = [snapshot_root / relative for relative in REPLAY_SOURCES]
-    if any(not source.is_file() for source in sources):
-        raise OSError("snapshot is missing a replay translation unit")
-    compiler_info = compiler_identity(compiler)
-    command = build_command(output, sources, compiler=compiler)
-    build_env = environment or build_environment()
+    identity = build_identity(snapshot_root, sources, compiler=compiler, strict=True)
+    command = build_command(output, [snapshot_root / relative for relative in sources],
+                            compiler=compiler)
+    build_env = environment or identity["environment"]
     completed = subprocess.run(
         command, capture_output=True, text=True, check=False,
         timeout=timeout, env=build_env)
@@ -357,13 +344,13 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
         raise OSError(
             (completed.stderr or completed.stdout or
              "replay host build failed").strip()[-4000:])
-    identity = build_identity(snapshot_root, sources=REPLAY_SOURCES,
-                              compiler=compiler, strict=True)
+    if identity != build_identity(snapshot_root, sources, compiler=compiler, strict=True):
+        raise OSError("snapshot dependencies changed during replay host build")
     return {
         "schema": "gfx-replay-host-candidate-build/v1",
         "command": command,
-        "compiler": compiler_info,
-        "flags": list(BUILD_FLAGS),
+        "compiler": identity["compiler"],
+        "flags": identity["flags"],
         "environment": build_env,
         "source_root": str(snapshot_root),
         "source_files": sorted(identity["dependencies"]),

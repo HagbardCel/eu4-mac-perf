@@ -27,7 +27,7 @@ Reviewed 2026-11-05 against macOS SDK 27.0. The active developer directory is Co
 
 [SDK] `MTLScissorRect` is `x`, `y`, `width`, and `height`, each an `NSUInteger`. [SDK] `setScissorRect:` discards fragments outside the rectangle. [Apple docs] The rectangle needs to lie completely within the current render attachment. [Apple docs] The default rectangle matches that attachment, and its origin is the upper left.
 
-[Project-derived] Convert only against that attachment's height, not against the viewport height captured above. The helper is [`eu4_gfx_scissor_for_attachment`](../../benchmark/eu4_gfx_init.h):
+[Project-derived] Convert only against that attachment's height, not against the viewport height captured above. The helper is [`eu4_gfx_scissor_for_attachment`](../../renderer/integration/eu4_gfx_init.h):
 
 ```c
 int64_t metal_y = (int64_t)attachment_height - ((int64_t)gl_y + (int64_t)height);

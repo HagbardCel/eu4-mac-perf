@@ -2,17 +2,17 @@
    checkpoint readback. This host never launches EU4; it drives the same
    replacement entry points the game calls. */
 
-#import "eu4_gfx_buffers.h"
+#import "../renderer/metal/eu4_gfx_buffers.h"
 #import "eu4_gfx_draw_capture.h"
-#import "eu4_gfx_checkpoint.h"
-#import "eu4_gfx_draw_route.h"
-#import "eu4_gfx_init.h"
-#import "eu4_gfx_generic_draw.h"
-#import "eu4_gfx_shader.h"
-#import "eu4_gfx_simple_draw.h"
-#import "eu4_gfx_sprite_draw.h"
-#import "eu4_gfx_texture.h"
-#import "eu4_gfx_draw_semantics.h"
+#import "../renderer/integration/eu4_gfx_checkpoint.h"
+#import "../renderer/integration/eu4_gfx_draw_route.h"
+#import "../renderer/integration/eu4_gfx_init.h"
+#import "../renderer/metal/eu4_gfx_generic_draw.h"
+#import "../renderer/metal/eu4_gfx_shader.h"
+#import "../renderer/metal/eu4_gfx_simple_draw.h"
+#import "../renderer/metal/eu4_gfx_sprite_draw.h"
+#import "../renderer/metal/eu4_gfx_texture.h"
+#import "../renderer/metal/eu4_gfx_draw_semantics.h"
 #import "eu4_gfx_perf.h"
 #import "eu4_metal_events.h"
 

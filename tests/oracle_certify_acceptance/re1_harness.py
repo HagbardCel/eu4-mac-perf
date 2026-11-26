@@ -45,7 +45,8 @@ def build_re1_harness() -> Path | None:
     _compile([
         compiler,
         *BUILD_FLAGS,
-        str(RECON_DIR / "gfx_set_constant_buffer.cpp"),
+        "-I", str(ROOT / "renderer/engine"),
+        str(ROOT / "renderer/engine/gfx_set_constant_buffer.cpp"),
         str(RECON_DIR / "harness.cpp"),
         str(RECON_DIR / "arith_literals.cpp"),
         "-o",

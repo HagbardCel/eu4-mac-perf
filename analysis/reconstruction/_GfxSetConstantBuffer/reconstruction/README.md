@@ -13,8 +13,8 @@ original's executed instructions is RE2, not this step.
 
 | File | Role |
 | --- | --- |
-| `gfx_set_constant_buffer.hpp` | Object layout with `static_assert`s on the contract's offsets, the two arithmetic paths, and the entry declarations |
-| `gfx_set_constant_buffer.cpp` | The store sequence (`words`, `buffer`, `dirty`, in that order) and the six-position ABI adapter |
+| [`gfx_set_constant_buffer.hpp`](../../../../renderer/engine/gfx_set_constant_buffer.hpp) | Object layout with `static_assert`s on the contract's offsets, the two arithmetic paths, and the entry declarations |
+| [`gfx_set_constant_buffer.cpp`](../../../../renderer/engine/gfx_set_constant_buffer.cpp) | The store sequence (`words`, `buffer`, `dirty`, in that order) and the six-position ABI adapter |
 | `harness.cpp` | Dumb stdin/stdout driver: `words` (arithmetic sweep), `scenario` (apply the function to a supplied context), `exhaustive` (opt-in whole-domain sweep) |
 | `arith_literals.cpp` | The two paths written a second time, instruction by instruction, in their own translation unit — see *The exhaustive sweep* |
 | `abi_check.cpp`, `abi_call6.S` | x86-64 ABI probe: calls the adapter with the original's argument registers |
