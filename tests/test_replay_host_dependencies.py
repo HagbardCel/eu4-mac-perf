@@ -6,6 +6,7 @@ import hashlib
 import os
 import json
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -81,6 +82,85 @@ class DependencyClosureTests(unittest.TestCase):
         # The real checkout closure is the authoritative one for both.
         self.assertEqual(case_baseline._renderer_closure(),
                          replay_host_dependencies.relative_dependencies())
+
+
+class CandidateSourceLayoutTests(unittest.TestCase):
+    CURRENT = replay_host_dependencies.REPLAY_SOURCES
+    LEGACY = tuple(f"benchmark/{Path(path).name}" for path in CURRENT)
+
+    def _git(self, root, *args):
+        return subprocess.check_output(
+            ["git", "-C", str(root), "-c", "user.name=Fixture",
+             "-c", "user.email=fixture@example.invalid", *args],
+            stderr=subprocess.PIPE, text=True).strip()
+
+    def _baseline(self, paths):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self._git(root, "init", "-q")
+        for relative in paths:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("// committed source\n")
+        self._git(root, "add", ".")
+        self._git(root, "commit", "--allow-empty", "-qm", "fixture baseline")
+        return root, self._git(root, "rev-parse", "HEAD")
+
+    def test_refuses_incomplete_or_ambiguous_pinned_layouts(self):
+        for paths in ((), self.CURRENT[:1], self.LEGACY[:1],
+                      self.CURRENT + self.LEGACY[:1], self.CURRENT + self.LEGACY):
+            with self.subTest(paths=paths):
+                root, pin = self._baseline(paths)
+                with self.assertRaisesRegex(OSError, "missing, incomplete or ambiguous"):
+                    replay_host_dependencies.candidate_sources(root, pin)
+
+    def test_candidate_files_cannot_supply_missing_source_or_redirect_sources(self):
+        for sources, extra in ((self.CURRENT, self.LEGACY), (self.LEGACY, self.CURRENT)):
+            with self.subTest(sources=sources):
+                root, pin = self._baseline(sources)
+                source = root / sources[0]
+                source.rename(root / "unselected.mm")
+                for relative in extra:
+                    decoy = root / relative
+                    decoy.parent.mkdir(parents=True, exist_ok=True)
+                    decoy.write_text("// alternate layout\n")
+                selected = replay_host_dependencies.candidate_sources(root, pin)
+                self.assertEqual(selected, sources)
+                with self.assertRaisesRegex(OSError, "replay source is absent"):
+                    replay_host_dependencies.snapshot_sources(root, root / "snapshot", selected)
+                source.symlink_to(root / "unselected.mm")
+                with self.assertRaisesRegex(OSError, "unattested replay source path"):
+                    replay_host_dependencies.snapshot_sources(root, root / "snapshot", selected)
+
+    def test_equal_dependency_inventories_have_distinct_layout_fingerprints(self):
+        dependencies = dict.fromkeys(self.CURRENT + self.LEGACY, "same closure")
+        with mock.patch.object(replay_host_dependencies, "relative_dependencies",
+                               return_value=dependencies):
+            current = replay_host_dependencies.build_identity(sources=self.CURRENT)
+            legacy = replay_host_dependencies.build_identity(sources=self.LEGACY)
+        self.assertNotEqual(current["fingerprint"], legacy["fingerprint"])
+
+    @unittest.skipUnless(sys.platform == "darwin", "native replay host requires macOS")
+    def test_both_pinned_layouts_build_from_their_source_snapshots(self):
+        for sources in (self.CURRENT, self.LEGACY):
+            with self.subTest(sources=sources):
+                root, pin = self._baseline(sources)
+                out = Path(self.enterContext(tempfile.TemporaryDirectory()))
+                header = (root / sources[0]).with_name("fixture.h")
+                header.write_text("#define FIXTURE 1\n")
+                (root / sources[1]).write_text('#include "fixture.h"\nint main() { return FIXTURE; }\n')
+                selected = replay_host_dependencies.candidate_sources(root, pin)
+                snapshot = out / "snapshot"
+                copied = replay_host_dependencies.snapshot_sources(root, snapshot, selected)
+                first = replay_host_dependencies.build_snapshot_host(
+                    snapshot, out / "gfx_frame_replay", sources=selected)
+                self.assertEqual(first["source_digests"], copied["digests"])
+                self.assertEqual(set(first["source_files"]),
+                                 {*sources, header.relative_to(root).as_posix()})
+                self.assertEqual(subprocess.run([first["host_path"]], check=False).returncode, 1)
+
+                header.write_text("#define FIXTURE 2\n")
+                updated = replay_host_dependencies.build_identity(root, selected, strict=True)
+                self.assertNotEqual(first["build_fingerprint"], updated["fingerprint"])
 
 
 class SnapshotIdentityTests(unittest.TestCase):

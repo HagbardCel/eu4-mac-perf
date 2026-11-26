@@ -24,6 +24,8 @@ REPLAY_SOURCES = (
     "renderer/metal/eu4_gfx_frame_replay.mm",
     "renderer/metal/eu4_gfx_frame_replay_cli.mm",
 )
+_LEGACY_REPLAY_SOURCES = tuple(f"benchmark/{Path(source).name}"
+                               for source in REPLAY_SOURCES)
 BUILD_FLAGS = (
     "-arch",
     "arm64",
@@ -53,6 +55,27 @@ _BUILD_ENVIRONMENT_KEYS = (
     "PATH", "HOME", "TMPDIR", "SDKROOT", "MACOSX_DEPLOYMENT_TARGET",
     "ARCHFLAGS", "DEVELOPER_DIR", "LANG", "LC_ALL",
 )
+
+
+def candidate_sources(trusted_root: Path | str, baseline_commit: str) -> tuple[str, ...]:
+    """Select one complete replay layout from the authorized baseline tree."""
+    layouts = (REPLAY_SOURCES, _LEGACY_REPLAY_SOURCES)
+    paths = (*REPLAY_SOURCES, *_LEGACY_REPLAY_SOURCES)
+    completed = subprocess.run(
+        ["git", "--no-replace-objects", "-C", str(trusted_root), "ls-tree", "-z",
+         baseline_commit, "--", *paths],
+        capture_output=True, text=True, check=False, timeout=60)
+    if completed.returncode != 0:
+        raise OSError(f"cannot read pinned replay sources: {completed.stderr.strip()}")
+    entries = {}
+    for row in filter(None, completed.stdout.split("\0")):
+        entry, path = row.split("\t", 1)
+        entries[path] = entry
+    for sources in layouts:
+        if entries.keys() == set(sources) and all(
+                entry.startswith(("100644 blob ", "100755 blob ")) for entry in entries.values()):
+            return sources
+    raise OSError(f"missing, incomplete or ambiguous replay source layout at {baseline_commit}")
 
 
 def _sha256(path: Path) -> str:
@@ -192,8 +215,8 @@ def dependency_paths(root: Path | str = ROOT,
         if not source.is_file():
             raise OSError(f"replay source is absent: {source}")
         native = _native_dependency_scan()
-        if strict and _relative(source, root) is None:
-            raise OSError(f"unattested replay source outside the checkout: {source}")
+        if strict and (source.absolute() != source.resolve() or _relative(source, root) is None):
+            raise OSError(f"unattested replay source path: {source}")
         quoted = _quoted_dependency_paths(source, root, strict=strict) if strict or not native else []
         deps = _compiler_dependencies(source, compiler) if native else quoted
         for dependency in [source, *deps]:
@@ -266,7 +289,8 @@ def build_identity(root: Path | str = ROOT, sources=REPLAY_SOURCES,
     """Hash all inputs that can change the replay-host binary."""
     flags = BUILD_FLAGS if flags is None else flags
     root = Path(root).resolve()
-    dependencies = relative_dependencies(root, sources, strict=strict,
+    units = tuple(Path(source) for source in sources)
+    dependencies = relative_dependencies(root, units, strict=strict,
                                          compiler=compiler)
     environment = build_environment()
     value = {
@@ -274,6 +298,8 @@ def build_identity(root: Path | str = ROOT, sources=REPLAY_SOURCES,
         "platform": sys.platform,
         "dependency_authority": ("compiler" if _native_dependency_scan()
                                  else "quoted-include"),
+        "sources": [str(unit.relative_to(root) if unit.is_relative_to(root) else unit)
+                    for unit in units],
         "dependencies": dependencies,
         "compiler": compiler_identity(compiler),
         "flags": list(flags),
@@ -313,18 +339,17 @@ def snapshot_sources(root: Path | str, destination: Path | str,
 
 
 def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
-                        *, compiler: str | None = None,
+                        *, sources=REPLAY_SOURCES, compiler: str | None = None,
                         timeout: float = 180.0,
                         environment: dict | None = None) -> dict:
     """Build the replay host from an isolated candidate source snapshot."""
     snapshot_root = Path(snapshot_root).resolve()
     output = Path(output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    sources = [snapshot_root / relative for relative in REPLAY_SOURCES]
-    identity = build_identity(snapshot_root, sources=REPLAY_SOURCES,
-                              compiler=compiler, strict=True)
+    identity = build_identity(snapshot_root, sources, compiler=compiler, strict=True)
     compiler_info = compiler_identity(compiler)
-    command = build_command(output, sources, compiler=compiler)
+    command = build_command(output, [snapshot_root / relative for relative in sources],
+                            compiler=compiler)
     build_env = environment or build_environment()
     completed = subprocess.run(
         command, capture_output=True, text=True, check=False,
@@ -333,7 +358,7 @@ def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
         raise OSError(
             (completed.stderr or completed.stdout or
              "replay host build failed").strip()[-4000:])
-    if identity != build_identity(snapshot_root, compiler=compiler, strict=True):
+    if identity != build_identity(snapshot_root, sources, compiler=compiler, strict=True):
         raise OSError("snapshot dependencies changed during replay host build")
     return {
         "schema": "gfx-replay-host-candidate-build/v1",

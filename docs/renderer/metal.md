@@ -24,6 +24,10 @@ Entry points: [frame trace](../../benchmark/eu4_gfx_frame_trace.c),
 The [native build closure](../../automation/replay_host_dependencies.py) includes
 both replay translation units. [Build tests](../../tests/test_replay_host_dependencies.py)
 and [ABI and replay tests](../../tests/test_m7_metal_replay.py) exercise this path.
+The trusted checker selects the two replay translation units from the authorized
+candidate baseline. The retained M7 candidates use their original `benchmark/`
+layout. The current renderer uses `renderer/metal/` for both units.
+[Trusted checker tests](../../tests/test_m7_event20_prefix.py).
 
 [Live draw routing](../../renderer/integration/eu4_gfx_draw_route.mm) and
 [initialization](../../renderer/integration/eu4_gfx_init.mm) also manage live

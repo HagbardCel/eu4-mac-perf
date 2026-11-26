@@ -41,7 +41,7 @@ def configuration(**updates) -> dict:
     config = {
         "symbol": SYMBOL,
         "note": NOTE,
-        "allowed_paths": [NOTE, "progress.md", "benchmark/eu4_gfx_entries.def"],
+        "allowed_paths": [NOTE, "progress.md", "renderer/integration/eu4_gfx_entries.def"],
         "test_modules": ["tests.toy"],
     }
     config.update(updates)
@@ -64,7 +64,7 @@ class CheckTests(unittest.TestCase):
     def setUp(self) -> None:
         self.paths = [NOTE]
         self.show = {
-            "benchmark/eu4_gfx_entries.def": BASELINE,
+            "renderer/integration/eu4_gfx_entries.def": BASELINE,
             "reverse_engineering/target.json": json.dumps({"sha256": SHA}),
         }
         self.patches = [
@@ -113,11 +113,21 @@ class CheckTests(unittest.TestCase):
             unauthorized = accept.check(workspace, campaign(), configuration())
             self.assertEqual(unauthorized["verdict"], "fail")
             self.assertIn("source scope violated", unauthorized["diagnostics"])
-            self.paths = [NOTE, "benchmark/eu4_gfx_entries.def"]
+            self.paths = [NOTE, "renderer/integration/eu4_gfx_entries.def"]
             premature = accept.check(self.workspace(Path(raw), "BLOCKER: encoder required\n"), campaign(), configuration())
             self.assertEqual(premature["verdict"], "fail")
             self.assertIn("before the research checkpoint", premature["diagnostics"])
             self.assertNotIn("BLOCKER:", premature["diagnostics"])
+            self.assertFalse(accept.checkpoint_path(workspace).exists())
+
+    def test_missing_pinned_registry_refuses_research_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = self.workspace(Path(raw), f"{SYMBOL} at 0x1000\n")
+            with patch.object(accept, "pinned_show", side_effect=OSError("registry absent")) as show:
+                report = accept.check(workspace, campaign(), configuration())
+            self.assertEqual(report["verdict"], "unavailable", report)
+            self.assertIn("pinned source unavailable", report["diagnostics"])
+            show.assert_called_once_with(workspace.resolve(), PIN, "renderer/integration/eu4_gfx_entries.def")
             self.assertFalse(accept.checkpoint_path(workspace).exists())
 
     def test_checkpoint_lifecycle(self) -> None:
@@ -180,10 +190,10 @@ class CheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             workspace = self.workspace(Path(raw), text)
             self.assertEqual(accept.check(workspace, campaign(), configuration())["verdict"], "inconclusive")
-            registry = workspace / "benchmark" / "eu4_gfx_entries.def"
-            registry.parent.mkdir()
+            registry = workspace / "renderer/integration/eu4_gfx_entries.def"
+            registry.parent.mkdir(parents=True)
             registry.write_text(ADDED, encoding="utf-8")
-            self.paths = [NOTE, "benchmark/eu4_gfx_entries.def"]
+            self.paths = [NOTE, "renderer/integration/eu4_gfx_entries.def"]
             with patch.object(accept, "build_candidate", return_value="candidate library failed to build: undefined"):
                 failed = accept.check(workspace, campaign(), configuration())
             self.assertEqual(failed["verdict"], "fail")
@@ -331,6 +341,63 @@ class RunnerBlockerTests(unittest.TestCase):
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_relocated_registry_across_both_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo, workspace = root / "infra", root / "candidate"
+            repo.mkdir()
+            git(repo, "init", "-q")
+            files = {
+                "automation/reconstruction_accept.py": accept._MODULE.read_text(),
+                "renderer/integration/eu4_gfx_entries.def": BASELINE,
+                "reverse_engineering/target.json": json.dumps({"sha256": SHA}),
+            }
+            for relative, content in files.items():
+                path = repo / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+            git(repo, "add", ".")
+            git(repo, "commit", "-qm", "post-R2a baseline")
+            pin = git(repo, "rev-parse", "HEAD")
+            git(repo, "worktree", "add", "--detach", str(workspace), pin)
+            contract = {"id": "eu4-example", "workspace": {"commit": pin}}
+            note = workspace / NOTE
+            note.parent.mkdir()
+            note.write_text(f"{SYMBOL} at 0x1000\n")
+            registry = workspace / "renderer/integration/eu4_gfx_entries.def"
+
+            parser = accept.import_parser(workspace)
+            with patch.object(accept, "trusted_root", return_value=repo), \
+                    patch.object(accept, "import_parser", return_value=parser), \
+                    patch.object(accept, "_executable_sha", return_value=(SHA, None)), \
+                    patch.object(accept, "load_span", return_value=(0x1000, 0x1007, NORMAL, None)), \
+                    patch.object(accept, "toolchain_problem", return_value=None), \
+                    patch.object(accept, "build_candidate", return_value=None) as build, \
+                    patch.object(accept, "run_modules", return_value=None):
+                config = configuration()
+                checkpoint = accept.check(workspace, contract, config)
+                self.assertEqual(checkpoint["verdict"], "inconclusive", checkpoint)
+                self.assertTrue(accept.checkpoint_path(workspace).is_file())
+
+                registry.unlink()
+                missing = accept.check(workspace, contract, config)
+                self.assertEqual(missing["diagnostics"], "candidate registry is missing")
+                registry.write_text(ADDED)
+                stray = workspace / "renderer/integration/unauthorized.mm"
+                stray.write_text("// outside the allowlist\n")
+                unauthorized = accept.check(workspace, contract, config)
+                self.assertIn("source scope violated", unauthorized["diagnostics"])
+                stray.unlink()
+
+                registry.write_text(BASELINE + gfx(SYMBOL, 0x1100, 0x1107, "eu4_gfx_example"))
+                invalid = accept.check(workspace, contract, config)
+                self.assertIn("entry rva does not match research", invalid["diagnostics"])
+                build.assert_not_called()
+                registry.write_text(ADDED)
+                qualified = accept.check(workspace, contract, config)
+                self.assertEqual(qualified["verdict"], "pass", qualified)
+                build.assert_called_once_with(workspace.resolve())
+
     def test_real_worktree_captures_research(self) -> None:
         status = subprocess.run(
             [sys.executable, "-m", "reverse_engineering.research", "status"],

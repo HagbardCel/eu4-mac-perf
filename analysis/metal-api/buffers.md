@@ -34,7 +34,7 @@ Reviewed 2026-11-05 against macOS SDK 27.0. `MTLBuffer.h` and `MTLResource.h` we
 
 [Project-derived] Vertex and index buffers are created with `MTLResourceStorageModeShared`. An update writes the existing buffer's `contents` and does not allocate a replacement. A failed update leaves that buffer unchanged. [`eu4_gfx_vertex_slot_buffer`](../../renderer/metal/eu4_gfx_buffers.h) returns the registry's current buffer and does not retain a copy. Release nils buffers this backend created and does not free engine headers.
 
-[Project-derived] A logical length of 0 uses a 1-byte shared allocation. That is a local shortcut in `benchmark/eu4_gfx_buffers.mm`, not an Apple rule.
+[Project-derived] A logical length of 0 uses a 1-byte shared allocation. That is a local shortcut in [eu4_gfx_buffers.mm](../../renderer/metal/eu4_gfx_buffers.mm), not an Apple rule.
 
 [Unresolved] The headers do not say which command-buffer boundary makes a shared-mode CPU write visible to a GPU read that was already encoded. This backend does not call `didModifyRange:`.
 

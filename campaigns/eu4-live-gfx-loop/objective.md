@@ -19,7 +19,7 @@ experiment is whether you can use it offline.
    ```
 
 2. Read `comparison.json` and `report.md`. Identify the exact `call_id`,
-   `field`, original value, and Metal value. Inspect `benchmark/eu4_gfx_init.mm`
+   `field`, original value, and Metal value. Inspect `renderer/integration/eu4_gfx_init.mm`
    and the original capture record. The deliberate discrepancy is in the
    current `_GfxSetViewPort` replacement, not in the capture.
 

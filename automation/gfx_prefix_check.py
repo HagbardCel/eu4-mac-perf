@@ -440,7 +440,7 @@ def verify_execution_outputs(execution: dict, metal_dir: Path) -> list[str]:
 
 def verify_candidate(workspace: Path | str,
                      sidecar_path: Path | str) -> dict:
-    """Verify the candidate worktree, revision and allowed-path policy."""
+    """Verify the worktree, pinned layout, dependency closure and path policy."""
     workspace = Path(workspace).expanduser().resolve()
     sidecar = dsh_campaign.load_sidecar(Path(sidecar_path))
     if sidecar.workspace.resolve() != workspace:
@@ -472,19 +472,22 @@ def verify_candidate(workspace: Path | str,
         if dsh_campaign.path_allowed(path, sidecar.forbidden_paths):
             raise PrefixCheckError(
                 f"candidate change is in a forbidden path: {path}")
+    sources = replay_host_dependencies.candidate_sources(
+        ROOT, sidecar.candidate_baseline_commit or "")
     return {
         "workspace": str(workspace),
         "sidecar": str(Path(sidecar_path).resolve()),
         "baseline_commit": sidecar.candidate_baseline_commit,
+        "source_paths": list(sources),
+        "source_digests": _candidate_source_digests(workspace, sources),
         "revision": revision,
         "changed_paths": sorted(changed),
         "policy_digest": sidecar.policy_digest,
     }
 
 
-def _candidate_source_digests(workspace: Path) -> dict[str, str]:
-    return replay_host_dependencies.relative_dependencies(
-        workspace, replay_host_dependencies.REPLAY_SOURCES, strict=True)
+def _candidate_source_digests(workspace: Path, sources) -> dict[str, str]:
+    return replay_host_dependencies.relative_dependencies(workspace, sources, strict=True)
 
 
 def _execution_environment(execution_dir: Path) -> dict:
@@ -515,9 +518,9 @@ def _execution_environment(execution_dir: Path) -> dict:
 
 
 def _cached_candidate_build(snapshot_root: Path, destination: Path,
-                            cache_root: Path) -> tuple[Path, dict]:
+                            cache_root: Path, sources) -> tuple[Path, dict]:
     """Build or reuse a candidate host keyed by its complete source identity."""
-    identity = replay_host_dependencies.build_identity(snapshot_root, strict=True)
+    identity = replay_host_dependencies.build_identity(snapshot_root, sources, strict=True)
     cache_entry = cache_root / identity["fingerprint"]
     metadata_path = cache_entry / "build.json"
     cached_host = cache_entry / "gfx-frame-replay"
@@ -527,8 +530,12 @@ def _cached_candidate_build(snapshot_root: Path, destination: Path,
         except PrefixCheckError:
             metadata = None
         if (metadata is not None
+                and metadata.get("build_fingerprint") == identity["fingerprint"]
+                and metadata.get("source_digests") == identity["dependencies"]
                 and metadata.get("host_sha256") == _sha256(cached_host)):
             shutil.copy2(cached_host, destination)
+            if _sha256(destination) != metadata["host_sha256"]:
+                raise OSError("cached candidate host changed while copying")
             record = dict(metadata)
             record.update({
                 "schema": "gfx-replay-host-candidate-build/v1",
@@ -539,7 +546,9 @@ def _cached_candidate_build(snapshot_root: Path, destination: Path,
             return destination, record
     temporary = destination.with_name(destination.name + ".tmp")
     record = replay_host_dependencies.build_snapshot_host(
-        snapshot_root, temporary)
+        snapshot_root, temporary, sources=sources)
+    if record["build_fingerprint"] != identity["fingerprint"]:
+        raise OSError("snapshot identity changed before candidate build")
     os.replace(temporary, destination)
     record["cache_hit"] = False
     record["host_path"] = str(destination)
@@ -607,25 +616,26 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
                 "trusted candidate execution requires an explicit sidecar")
         candidate = verify_candidate(Path(candidate_workspace),
                                      Path(candidate_sidecar))
-        before = _candidate_source_digests(Path(candidate["workspace"]))
+        workspace = Path(candidate["workspace"])
+        sources = candidate["source_paths"]
+        before = candidate["source_digests"]
         snapshot_root = execution_dir / "candidate-snapshot"
         snapshot = replay_host_dependencies.snapshot_sources(
-            candidate["workspace"], snapshot_root)
+            workspace, snapshot_root, sources)
         host = execution_dir / "candidate-gfx-frame-replay"
         try:
             host, candidate_build = _cached_candidate_build(
-                snapshot_root, host, run_root / "cache" / "hosts")
+                snapshot_root, host, run_root / "cache" / "hosts", sources)
         except (OSError, subprocess.SubprocessError) as exc:
             raise PrefixCheckError(
                 f"candidate replay host build failed: {exc}") from exc
-        after = _candidate_source_digests(Path(candidate["workspace"]))
-        if before != after:
+        after = _candidate_source_digests(workspace, sources)
+        if before != snapshot["digests"] or before != after:
             raise PrefixCheckError(
                 "candidate renderer source changed between snapshot and build")
         if candidate_build.get("source_digests") != after:
             raise PrefixCheckError(
                 "candidate source digest does not match the built snapshot")
-        candidate["source_digests"] = after
         candidate["source_digest"] = hashlib.sha256(json.dumps(
             after, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         candidate["snapshot_files"] = snapshot["files"]
@@ -664,8 +674,7 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         if _sha256(host) != candidate["build"]["host_sha256"]:
             raise PrefixCheckError(
                 "candidate replay host changed after execution")
-        if _candidate_source_digests(Path(candidate["workspace"])) != \
-                candidate["source_digests"]:
+        if _candidate_source_digests(workspace, sources) != candidate["source_digests"]:
             raise PrefixCheckError(
                 "candidate renderer source changed after the trusted build")
     replay_path = replay_dir / "replay.json"

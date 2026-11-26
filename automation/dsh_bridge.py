@@ -922,7 +922,7 @@ def _fixture_preflight(sidecar: Sidecar) -> None:
         if sidecar.mode == "worktree":
             gfx_prefix_check.verify_candidate(sidecar.workspace,
                                               sidecar.sidecar_path)
-    except (gfx_prefix_check.PrefixCheckError, OSError, ValueError) as exc:
+    except (gfx_prefix_check.PrefixCheckError, OSError, subprocess.SubprocessError, ValueError) as exc:
         raise Refusal("fixture_ineligible", str(exc)) from exc
     if report.get("problems"):
         raise Refusal("fixture_ineligible",

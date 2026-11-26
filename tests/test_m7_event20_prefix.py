@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
 
 from automation import (  # noqa: E402
     campaign_guard, gfx_frame_graph, gfx_independent_replay, gfx_prefix_case,
-    gfx_prefix_check, m6_frame, native_build)
+    gfx_prefix_check, m6_frame, native_build, replay_host_dependencies)
 BENCH = ROOT / "benchmark"
 CHECKER = ROOT / "campaigns" / "eu4-m7-event20" / "accept.py"
 
@@ -1092,23 +1092,27 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.temporary.cleanup()
 
-    def _candidate(self) -> tuple[Path, Path]:
+    def _candidate(self, *, legacy: bool = False) -> tuple[Path, Path]:
+        baseline = "HEAD"
+        if legacy:
+            template = json.loads((ROOT / "dsh/campaigns/m7-event3.json").read_text())
+            baseline = template["candidate_baseline_commit"]
         base = Path(tempfile.mkdtemp(dir=self.temporary.name))
         workspace = base / "workspace"
         completed = subprocess.run(
             ["git", "-C", str(ROOT), "worktree", "add", "--detach",
-             str(workspace), "HEAD"], capture_output=True, text=True,
+             str(workspace), baseline], capture_output=True, text=True,
             check=False)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.addCleanup(lambda: subprocess.run(
             ["git", "-C", str(ROOT), "worktree", "remove", "--force",
              str(workspace)], capture_output=True, text=True, check=False))
-        campaign = ROOT / ".local" / "test-campaigns" / workspace.name
+        campaign = ROOT / ".local" / "test-campaigns" / base.name
         campaign.mkdir(parents=True, exist_ok=True)
         (campaign / "objective.md").write_text("test candidate boundary\n")
         (campaign / "accept.py").write_text("raise SystemExit(0)\n")
         head = subprocess.run(
-            ["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True,
+            ["git", "-C", str(workspace), "rev-parse", "HEAD"], capture_output=True,
             text=True, check=True).stdout.strip()
         contract = {
             "id": "gfx-candidate-boundary-test",
@@ -1133,7 +1137,8 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
                 "workspace": str(workspace),
                 "workspace_base": "infra",
                 "policy": {
-                    "allowed_paths": ["renderer/metal/**"],
+                    "allowed_paths": ["renderer/**", "benchmark/**"] if legacy
+                                     else ["renderer/metal/**"],
                     "forbidden_paths": ["automation/**", "campaigns/**",
                                         "dsh/**"],
                 },
@@ -1149,6 +1154,32 @@ class CandidateTrustBoundaryTests(unittest.TestCase):
         sidecar_path = base / "sidecar.json"
         sidecar_path.write_text(json.dumps(sidecar, indent=2) + "\n")
         return workspace, sidecar_path
+
+    def test_legacy_candidate_builds_and_replays_with_current_checker(self):
+        workspace, sidecar = self._candidate(legacy=True)
+        sources = tuple(f"benchmark/{Path(path).name}" for path in
+                        replay_host_dependencies.REPLAY_SOURCES)
+        # Both decoy files are allowed by this test's policy. The old Git tree
+        # still determines which translation units the checker can execute.
+        for relative in replay_host_dependencies.REPLAY_SOURCES:
+            decoy = workspace / relative
+            decoy.parent.mkdir(parents=True, exist_ok=True)
+            decoy.write_text("#error candidate-controlled layout\n")
+        result = gfx_prefix_check.evaluate(
+            self.frame, require_end=0, trusted_execution=True,
+            candidate_workspace=workspace, candidate_sidecar=sidecar,
+            trusted_root=self.trusted_root)
+        self.assertEqual(result["verdict"], "EXACT_PREFIX", result.get("problems"))
+        candidate = result["execution"]["candidate"]
+        self.assertEqual(candidate["source_paths"], list(sources))
+        self.assertEqual(candidate["source_digests"], candidate["build"]["source_digests"])
+        self.assertTrue(set(sources) <= set(candidate["snapshot_files"]))
+        self.assertFalse(set(replay_host_dependencies.REPLAY_SOURCES)
+                         & set(candidate["snapshot_files"]))
+
+        (workspace / sources[0]).unlink()
+        with self.assertRaisesRegex(OSError, "replay source is absent"):
+            gfx_prefix_check.verify_candidate(workspace, sidecar)
 
     def _patch_replay(self, workspace: Path, body: str) -> None:
         path = workspace / "renderer/metal" / "eu4_gfx_frame_replay.mm"
@@ -1553,9 +1584,9 @@ class ExecutionReceiptTests(unittest.TestCase):
         source.write_text("// baseline\n")
         for header in ("eu4_gfx_frame_replay_cli.mm",):
             (source.parent / header).write_text("// cli\n")
-        before = gfx_prefix_check._candidate_source_digests(root)
+        before = gfx_prefix_check._candidate_source_digests(root, replay_host_dependencies.REPLAY_SOURCES)
         source.write_text("// changed\n")
-        after = gfx_prefix_check._candidate_source_digests(root)
+        after = gfx_prefix_check._candidate_source_digests(root, replay_host_dependencies.REPLAY_SOURCES)
         self.assertNotEqual(before, after)
 
 class OffscreenCoverageTests(unittest.TestCase):

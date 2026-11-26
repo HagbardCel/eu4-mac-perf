@@ -27,6 +27,9 @@ class Event3LauncherTests(unittest.TestCase):
         self.script = self.repo / 'dsh/scripts/m7-event3.sh'
         self.write('.gitignore', '.local/\n')
         self.write('automation/frozen.py', '# protected\n')
+        self.write('benchmark/eu4_gfx_frame_replay.mm', '#include "replay.h"\n')
+        self.write('benchmark/eu4_gfx_frame_replay_cli.mm', '// CLI\n')
+        self.write('benchmark/replay.h', '// replay header\n')
         self.write('benchmark/renderer.mm', '// candidate baseline\n')
         self.write('campaigns/eu4-m7-event20/objective.md', 'Exact prefix\n')
         self.write('campaigns/eu4-m7-event20/accept.py', '# never executed\n')
@@ -67,6 +70,7 @@ from automation import campaign_guard, dsh_bridge, dsh_campaign, gfx_prefix_chec
 marker = Path(os.environ['TEST_ROOT']) / 'active-campaign.json'
 campaign_guard._marker_path = lambda: marker
 dsh_bridge.infra_root = dsh_campaign.infra_root = lambda: Path(os.environ['TEST_REPO'])
+gfx_prefix_check.ROOT = Path(os.environ['TEST_REPO'])
 
 def fixture(frame, *, require_end, trusted_root):
     assert require_end == 3 and frame == trusted_root / 'frame'
@@ -185,6 +189,12 @@ print('authoritative goal from run.sh')
         self.assert_refused(self.invoke('start', TEST_AUTHORITY='derived'), 'authentic authority')
         (self.workspace / 'automation/frozen.py').write_text('# forbidden edit\n')
         self.assert_refused(self.invoke('start'), 'automation/frozen.py')
+        self.assertFalse(self.launches.exists())
+        self.assertFalse(self.calls.exists())
+
+    def test_preflight_refuses_missing_replay_dependencies(self):
+        (self.workspace / 'benchmark/replay.h').unlink()
+        self.assert_refused(self.invoke('preflight'), 'candidate replay preflight: unattested source include')
         self.assertFalse(self.launches.exists())
         self.assertFalse(self.calls.exists())
 
