@@ -244,6 +244,11 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
         "- [GPU health](gpu/health.json) and [raw failures](gpu/raw-failures.json) "
         "record execution observations.",
         "- [Manifest](manifest.json) records process provenance and the artifact budget.",
+    ]
+    mirrored = (comparison or {}).get("mirrored_regions")
+    if mirrored:
+        lines.append("- Horizontal mirroring was observed in " + ", ".join(mirrored) + ".")
+    lines += [
         "", "## Excluded explanations", "",
         "- The comparator accounts for row origin and pixel format. A scaled "
         "candidate cannot qualify as bit-identical under an exact policy.",
