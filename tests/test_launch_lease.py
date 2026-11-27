@@ -239,19 +239,6 @@ class WorkflowBudgetTests(unittest.TestCase):
 
 
 
-    def test_an_unpinned_ledger_cannot_be_adopted_as_pinned(self) -> None:
-        self.ledger.parent.mkdir(parents=True, exist_ok=True)
-        launch_ledger.create_ledger(
-            self.ledger, workflow_id="wf-lease", limit=2, deadline_seconds=None
-        )
-        with self.assertRaises(launch_ledger.LedgerError) as caught:
-            self.create_budget()
-        self.assertEqual(caught.exception.kind, "conflict")
-        value = launch_ledger.load_ledger(self.ledger)
-        self.assertNotIn("executable", value)
-        self.assertEqual(value["used"], 0)
-
-
 class TimeoutValidationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

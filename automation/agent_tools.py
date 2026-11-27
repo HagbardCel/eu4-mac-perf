@@ -66,7 +66,7 @@ from automation import (gfx_align, gfx_case, gfx_diagnostics, gfx_dual_run,
                         gfx_independent_replay, gfx_replay_case,
                         gfx_scenario)  # noqa: E402
 from automation import (evidence_index, gfx_frame_compare, gfx_session, launch_lease,
-                        launch_ledger, python_runtime)  # noqa: E402
+                        python_runtime)  # noqa: E402
 
 SCHEMA = "eu4-agent-tool/v2"
 RUNTIME_SCHEMA = "eu4-tool-runtime/v1"
