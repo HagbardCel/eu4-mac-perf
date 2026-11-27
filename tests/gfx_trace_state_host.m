@@ -147,6 +147,29 @@ static int selected_fixture(const char *directory) {
     selected_state(after);
     if (memcmp(before, after, sizeof(before)) || glGetError() != GL_NO_ERROR) return 1;
     puts(record);
+    /* A resolve immediately precedes the selected draw in the retained trace.
+       Observe the entry hook and the imported copy in the real legacy context. */
+    eu4_gfx_capture_frame resolve_frame = {0};
+    eu4_gfx_frame_trace_resolve_entry(&resolve_frame, NULL);
+    GLenum resolve_error = glGetError();
+    GLuint copy_texture = make_texture(GL_TEXTURE_2D);
+    uint8_t copy_pixels[] = {61, 97, 163, 255};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, copy_pixels);
+    char destination[32], copy_log[4096];
+    snprintf(destination, sizeof(destination), "%u", copy_texture);
+    snprintf(copy_log, sizeof(copy_log), "%s/copy-observer.jsonl", directory);
+    setenv("EU4_GFX_COPY_TRACE_DEST", destination, 1);
+    setenv("EU4_GFX_COPY_TRACE_PATH", copy_log, 1);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 1, 1);
+    GLenum copy_error = glGetError();
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, copy_pixels);
+    glDeleteTextures(1, &copy_texture);
+    if (resolve_error != GL_NO_ERROR || copy_error != GL_NO_ERROR ||
+        glGetError() != GL_NO_ERROR || memcmp(copy_pixels, (uint8_t[4]){0}, 4)) {
+        fprintf(stderr, "resolve entry GL error 0x%x, copy observer GL error 0x%x\n",
+                resolve_error, copy_error);
+        return 1;
+    }
     GLuint vertex = fixture_shader(GL_VERTEX_SHADER,
         "#version 120\nattribute vec4 in_POSITION; uniform vec4 UNIFORM1[9]; varying vec2 uv; "
         "void main(){ gl_Position=in_POSITION+UNIFORM1[8]; uv=in_POSITION.xy*.5+.5; }\n");

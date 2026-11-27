@@ -7297,11 +7297,10 @@ void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
     /* Resolves happen before the first draw of the captured frame, so this
        observation is not gated on arming; the directory only exists once the
        capture has been configured. */
-    GLint read_fbo = 0, draw_fbo = 0, fbo = 0;
+    GLint read_fbo = 0, draw_fbo = 0;
     GLint type = 0, name = 0, level = 0;
-    glGetIntegerv(0x8CAA, &read_fbo); /* GL_READ_FRAMEBUFFER_BINDING */
-    glGetIntegerv(0x8CA6, &draw_fbo); /* GL_DRAW_FRAMEBUFFER_BINDING */
-    glGetIntegerv(0x8D40, &fbo);      /* GL_FRAMEBUFFER_BINDING */
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
     if (read_fbo != 0) {
         GLint previous = 0;
         glGetIntegerv(0x8CAA, &previous);
@@ -7327,7 +7326,7 @@ void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
             "{\"event\":\"resolve\",\"header\":\"0x%llx\","
             "\"read_fbo\":%d,\"draw_fbo\":%d,\"fbo\":%d,"
             "\"color_type\":%d,\"color_name\":%d,\"color_level\":%d}\n",
-            (unsigned long long)(uintptr_t)frame->rsi, read_fbo, draw_fbo, fbo,
+            (unsigned long long)(uintptr_t)frame->rsi, read_fbo, draw_fbo, draw_fbo,
             type, name, level);
     fclose(stream);
     if (body != NULL) {

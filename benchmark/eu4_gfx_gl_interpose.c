@@ -237,12 +237,11 @@ static void eu4_gfx_interposed_copy_tex_sub_image(GLenum target, GLint level,
         g_real(target, level, xoffset, yoffset, x, y, width, height);
         return;
     }
-    GLint read_fbo = 0, draw_fbo = 0, fbo = 0;
+    GLint read_fbo = 0, draw_fbo = 0;
     GLint read_buffer = 0, draw_buffer = 0, double_buffered = 0;
     GLint bound_texture = 0;
-    glGetIntegerv(0x8CAA, &read_fbo); /* GL_READ_FRAMEBUFFER_BINDING */
-    glGetIntegerv(0x8CA6, &draw_fbo); /* GL_DRAW_FRAMEBUFFER_BINDING */
-    glGetIntegerv(0x8D40, &fbo);      /* GL_FRAMEBUFFER_BINDING */
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
     glGetIntegerv(0x0C02, &read_buffer); /* GL_READ_BUFFER */
     glGetIntegerv(0x0C01, &draw_buffer); /* GL_DRAW_BUFFER */
     glGetIntegerv(0x0C32, &double_buffered); /* GL_DOUBLEBUFFER */
@@ -361,7 +360,7 @@ static void eu4_gfx_interposed_copy_tex_sub_image(GLenum target, GLint level,
         "\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d,"
         "\"xoffset\":%d,\"yoffset\":%d}\n",
         (unsigned long long)sequence, (int)getpid(),
-        (unsigned long long)monotonic_ns(), read_fbo, draw_fbo, fbo,
+        (unsigned long long)monotonic_ns(), read_fbo, draw_fbo, draw_fbo,
         read_buffer, draw_buffer, double_buffered, color_type, color_name,
         color_level, source_attachment, source_width, source_height,
         source_format,

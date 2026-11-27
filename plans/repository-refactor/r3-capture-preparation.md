@@ -139,3 +139,26 @@ identify a runtime binding problem. A wrapper hit with different arguments
 identifies an expectation or argument-change problem. End after that one
 draw. The diagnostic session does not authorize publishing a replacement
 seal.
+
+
+## Authoritative capture with submission diagnostics
+
+Recorder revision `47c4e3b5` produced a structurally valid failure row at
+event 273 in `.local/r3-authentic-capture-observed`. Session
+`ea4f6f6b-a03a-4806-a3c3-04d2826b941b` observed one `glDrawArrays(5, 0, 4)`
+submission with matching contexts and target fields at entry, submission
+and exit. The first failed check was `entry_target`, with `GL_INVALID_ENUM`.
+The incomplete seal has SHA-256
+`a37d4b76af3d1c5d799a7530890fcb197513f5314ac504690cc691f0f9bdb2bb`.
+The owned game stopped, settings were restored and the launch lease was
+released. Both incomplete runs remain available as diagnostic evidence.
+
+The trace records a `glCopyTexSubImage2D` resolve immediately before the
+selected draw. The resolve-entry recorder and the copy interposer each
+queried `GL_FRAMEBUFFER` (`0x8d40`), a binding target, as a state-query
+parameter. The injected x86-64 legacy-context fixture reproduced
+`GL_INVALID_ENUM` independently in both paths. Both now use the observed
+`GL_DRAW_FRAMEBUFFER_BINDING` for the diagnostic binding alias. The native
+fixture also checks that the forwarded copy writes the expected texel.
+The selected-entry GL-error gate is unchanged. Live submission was
+observed, so a binding debugger session was unnecessary.

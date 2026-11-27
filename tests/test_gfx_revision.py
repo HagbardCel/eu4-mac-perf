@@ -346,9 +346,13 @@ int main(int argc, char **argv) {
         if not any("lazy-bind" in row and "OpenGL/_glDrawArrays" in row
                    for row in fixups.splitlines()):
             raise AssertionError("native dispatch fixture lacks the original lazy OpenGL import")
-        return tuple(json.loads(line) for line in subprocess.check_output(
+        output = subprocess.check_output(
             [host, frame, "selected"], text=True, timeout=30,
-            env={**os.environ, "DYLD_INSERT_LIBRARIES": str(interposer)}).splitlines())
+            env={**os.environ, "DYLD_INSERT_LIBRARIES": str(interposer)})
+        observed_copy, = [json.loads(line) for line in (frame / "copy-observer.jsonl").read_text().splitlines()]
+        if observed_copy["kind"] != "copy" or observed_copy["source_resolved"] != 1:
+            raise AssertionError("native fixture did not observe the forwarded framebuffer copy")
+        return tuple(json.loads(line) for line in output.splitlines())
 
     @staticmethod
     def _seal_native_fixture(frame: Path, draw: dict, post: dict, gl: dict):
