@@ -78,3 +78,62 @@ restored game settings and released the host lease. No active campaign
 state or game process remained. The incomplete capture was not published or
 frozen. Authentic positive and omission qualification require a complete
 original observation before candidate execution.
+
+### Offline submission investigation
+
+The retained original files were inspected read-only. Draw 273's row contains
+the selected caller, pinned shaders and draw arguments `(5, 0, 4)`. The row
+contains an extra comma where the unsuccessful submission writer emitted no
+member. The pre-image and post-observation blobs each have 1,928,448 bytes and
+match their recorded hashes. After BGRA-to-RGBA conversion, all 482,112 pixels
+differ. This establishes a nontrivial change in the retained image bytes. The
+incomplete stream cannot attribute that change to a verified GL submission.
+The process streams are empty and there is no interposer error record. The
+installed startup dylib still matches the hash in the capture request.
+
+Offline disassembly of the pinned x86-64 executable showed the following:
+
+| Site | Result |
+| --- | --- |
+| RVA `0x15ea79d` | Save the signed entry `edx` as `first`. |
+| RVA `0x15ea7a0`–`0x15ea7aa` | Use entry `esi` when positive. Otherwise take count from `master+0x64`. |
+| RVA `0x15ea928`–`0x15ea930` | Load GL mode from `master+0x08` into `edi`, restore first into `esi` and count into `edx`. |
+| RVA `0x15ea944` | Tail-jump to the OpenGL `glDrawArrays` symbol stub at RVA `0x18c2600`. |
+| RVA `0x18c2600` | Jump through lazy slot VA `0x101c4e840`. The on-disk value points to the stub helper at VA `0x1018c3562`, which pushes the bind offset and enters the common `dyld_stub_binder` helper. |
+| Loaded interposer | The retained startup dylib's interpose section names the same OpenGL `_glDrawArrays` import. Its wrapper forwards through the dylib's own GL import. |
+
+The recorder's entry formula matches the engine's argument preparation.
+Mode is loaded by the engine at submission time, so the entry value remains
+an expectation checked against the observed value. The import is a Darwin
+lazy binding for this callsite. The separately injected native x86-64
+fixture exercises the same binding and tail jump. Its observer count and
+sample query establish one full draw in that fixture. This rules out a
+general inability of the Darwin interposer to intercept that dispatch form
+and rules out duplicate forwarding in the fixture. The retained original
+does not record the resolved runtime slot, observer count or first failing
+check. These offline results therefore cannot identify which check failed
+in the live process.
+
+The recorder now writes a valid failure member with the first failed check,
+observed submission count, expected and observed arguments, context matches,
+and available entry/submission/exit target state. An unchecked GL error is
+recorded as null. The existing `glGetError` check consumes an error when
+performed. The selected-target diagnostics avoid additional error consumption after
+a disqualifying observation. The fixture checks GL bindings, program, active
+texture, buffer and pack state and viewport across the successful observation
+and readbacks. Seeded negative controls distinguish argument mismatch,
+missing submission, GL error and changed read framebuffer.
+
+### Targeted experiment if runtime confirmation is needed
+
+Use one diagnostic session that stops at the selected original tail jump
+and its return to the recorder. Inspect the runtime lazy slot and registers
+`edi`, `esi` and `edx`, then check whether the injected wrapper executes
+and read the recorder's first-failure fields at exit. Resolve addresses
+using the loaded image slide. One wrapper hit with matching arguments
+shifts the diagnosis to the recorded context, target or GL error. A
+resolved slot that bypasses the wrapper and a zero observation count
+identify a runtime binding problem. A wrapper hit with different arguments
+identifies an expectation or argument-change problem. End after that one
+draw. The diagnostic session does not authorize publishing a replacement
+seal.

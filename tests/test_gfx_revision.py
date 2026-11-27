@@ -327,15 +327,28 @@ int main(int argc, char **argv) {
 
         compiler, sdk = native_build.qualification_toolchain("clang")
         host = stage / "capture-host"
+        interposer = stage / "capture-interposer.dylib"
+        subprocess.run([
+            compiler, "-arch", "x86_64", "-isysroot", sdk, "-O1", "-dynamiclib",
+            "-undefined", "dynamic_lookup", "-Wno-deprecated-declarations",
+            "-o", interposer, repo / "benchmark/eu4_gfx_gl_interpose.c",
+            "-framework", "OpenGL",
+        ], check=True, timeout=90)
         subprocess.run([
             compiler, "-arch", "x86_64", "-isysroot", sdk, "-O1", "-fobjc-arc",
-            "-DGL_SILENCE_DEPRECATION", "-Wno-deprecated-declarations",
+            "-Wl,-export_dynamic,-no_fixup_chains", "-DGL_SILENCE_DEPRECATION", "-Wno-deprecated-declarations",
             "-I", repo / "benchmark", "-o", host, repo / "tests/gfx_trace_state_host.m",
             repo / "benchmark/eu4_gfx_frame_trace.c", repo / "benchmark/eu4_gfx_frame_observe.c",
             "-framework", "OpenGL", "-framework", "AppKit",
         ], check=True, timeout=90)
+        fixups = subprocess.check_output(
+            ["/usr/bin/xcrun", "dyld_info", "-fixups", host], text=True, timeout=30)
+        if not any("lazy-bind" in row and "OpenGL/_glDrawArrays" in row
+                   for row in fixups.splitlines()):
+            raise AssertionError("native dispatch fixture lacks the original lazy OpenGL import")
         return tuple(json.loads(line) for line in subprocess.check_output(
-            [host, frame, "selected"], text=True, timeout=30).splitlines())
+            [host, frame, "selected"], text=True, timeout=30,
+            env={**os.environ, "DYLD_INSERT_LIBRARIES": str(interposer)}).splitlines())
 
     @staticmethod
     def _seal_native_fixture(frame: Path, draw: dict, post: dict, gl: dict):
@@ -382,6 +395,26 @@ int main(int argc, char **argv) {
             stage = Path(scratch)
             frame = stage / "frame"
             pre, native_draw, post, gl = self._native_capture(repo, stage, frame)
+            self.assertEqual(native_draw.pop("fixture_samples"), 864 * 558)
+            failure = native_draw.pop("failed_event")["submission_failure"]
+            self.assertEqual(failure["reason"], "submission_arguments")
+            self.assertEqual(failure["expected_arguments"], [5, 0, 4])
+            self.assertEqual(failure["actual_arguments"], [5, 0, 0])
+            self.assertEqual(failure["count"], 1)
+            self.assertIsNone(failure["submission_target"]["gl_error"])
+            missing = native_draw.pop("missing_event")["submission_failure"]
+            self.assertEqual((missing["reason"], missing["count"]), ("missing_submission", 0))
+            error = native_draw.pop("error_event")["submission_failure"]
+            self.assertEqual(error["reason"], "entry_target")
+            self.assertEqual(error["entry_target"]["gl_error"], 0x500)
+            changed = native_draw.pop("target_event")["submission_failure"]
+            self.assertEqual(changed["reason"], "exit_target")
+            self.assertEqual(changed["count"], 1)
+            self.assertEqual(changed["entry_target"]["read_framebuffer"],
+                             changed["submission_target"]["read_framebuffer"])
+            self.assertGreater(changed["entry_target"]["read_framebuffer"], 0)
+            self.assertEqual(changed["exit_target"]["read_framebuffer"], 0)
+            self.assertIsNone(changed["exit_target"]["gl_error"])
             draw = {"kind": "draw", "index": 0, **pre, **native_draw}
             shader = draw["program"]["shaders"]
             source = self._seal_native_fixture(frame, draw, post, gl)

@@ -108,6 +108,24 @@ static GLuint fixture_shader(GLenum type, const char *source) {
     return compiled ? shader : 0;
 }
 
+/* Match the original x86-64 tail jump through a lazy-bound OpenGL import. */
+__attribute__((noinline))
+static void dispatch_arrays(GLenum mode, GLint first, GLsizei count) {
+    __attribute__((musttail)) return glDrawArrays(mode, first, count);
+}
+
+static void selected_state(GLint *values) {
+    const GLenum fields[] = {
+        GL_DRAW_FRAMEBUFFER_BINDING, GL_READ_FRAMEBUFFER_BINDING,
+        GL_DRAW_BUFFER, GL_READ_BUFFER, GL_CURRENT_PROGRAM, GL_ACTIVE_TEXTURE,
+        GL_TEXTURE_BINDING_2D, GL_ARRAY_BUFFER_BINDING, GL_PACK_ALIGNMENT,
+        GL_PIXEL_PACK_BUFFER_BINDING,
+    };
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i)
+        glGetIntegerv(fields[i], &values[i]);
+    glGetIntegerv(GL_VIEWPORT, values + 10);
+}
+
 static int selected_fixture(const char *directory) {
     GLuint fbo = 0, texture = make_texture(GL_TEXTURE_2D);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 864, 558, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
@@ -121,9 +139,13 @@ static int selected_fixture(const char *directory) {
     glClearColor(0, 0, 0, 0);
     glClear(GL_COLOR_BUFFER_BIT);
     char record[8192];
+    GLint before[14], after[14];
+    selected_state(before);
     if (eu4_gfx_frame_trace_test_observe(
             directory, 0, "selected_pre_draw", "draw", -1, record, sizeof(record)) != 0)
         return 1;
+    selected_state(after);
+    if (memcmp(before, after, sizeof(before)) || glGetError() != GL_NO_ERROR) return 1;
     puts(record);
     GLuint vertex = fixture_shader(GL_VERTEX_SHADER,
         "#version 120\nattribute vec4 in_POSITION; uniform vec4 UNIFORM1[9]; varying vec2 uv; "
@@ -155,12 +177,48 @@ static int selected_fixture(const char *directory) {
     }
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1728, 1117, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     free(pixels);
-    fputs("{", stdout);
-    if (!eu4_gfx_frame_trace_test_capture_arrays(stdout, GL_TRIANGLE_STRIP, 0, 4)) return 1;
-    puts("}");
+    selected_state(before);
+    GLuint query = 0, samples = 0;
+    glGenQueries(1, &query);
+    glBeginQuery(GL_SAMPLES_PASSED, query);
+    eu4_gfx_frame_trace_test_begin_arrays(GL_TRIANGLE_STRIP, 0, 4);
+    dispatch_arrays(GL_TRIANGLE_STRIP, 0, 4);
+    fputs("{\"kind\":\"draw\",\"index\":0", stdout);
+    int observed = eu4_gfx_frame_trace_test_write_arrays(stdout);
+    glEndQuery(GL_SAMPLES_PASSED);
+    glGetQueryObjectuiv(query, GL_QUERY_RESULT, &samples);
+    glDeleteQueries(1, &query);
+    selected_state(after);
+    if (!observed || samples != 864 * 558 || memcmp(before, after, sizeof(before)) ||
+        glGetError() != GL_NO_ERROR) {
+        puts("}");
+        return 1;
+    }
+    printf(",\"fixture_samples\":%u,\"failed_event\":{\"kind\":\"draw\",\"index\":1", samples);
+    eu4_gfx_frame_trace_test_begin_arrays(GL_TRIANGLE_STRIP, 0, 4);
+    glEnable((GLenum)0xffffffffu);
+    dispatch_arrays(GL_TRIANGLE_STRIP, 0, 0);
+    if (eu4_gfx_frame_trace_test_write_arrays(stdout) || glGetError() != GL_INVALID_ENUM) return 1;
+    fputs("},\"missing_event\":{\"kind\":\"draw\",\"index\":2", stdout);
+    eu4_gfx_frame_trace_test_begin_arrays(GL_TRIANGLE_STRIP, 0, 4);
+    if (eu4_gfx_frame_trace_test_write_arrays(stdout)) return 1;
+    fputs("},\"error_event\":{\"kind\":\"draw\",\"index\":3", stdout);
+    glEnable((GLenum)0xffffffffu);
+    eu4_gfx_frame_trace_test_begin_arrays(GL_TRIANGLE_STRIP, 0, 4);
+    if (eu4_gfx_frame_trace_test_write_arrays(stdout)) return 1;
+    fputs("},\"target_event\":{\"kind\":\"draw\",\"index\":4", stdout);
+    eu4_gfx_frame_trace_test_begin_arrays(GL_TRIANGLE_STRIP, 0, 0);
+    dispatch_arrays(GL_TRIANGLE_STRIP, 0, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    if (eu4_gfx_frame_trace_test_write_arrays(stdout)) return 1;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    puts("}}");
+    selected_state(before);
     if (eu4_gfx_frame_trace_test_observe(
             directory, 0, "post_event", "draw", -1, record, sizeof(record)) != 0)
         return 1;
+    selected_state(after);
+    if (memcmp(before, after, sizeof(before)) || glGetError() != GL_NO_ERROR) return 1;
     puts(record);
     printf("{\"vendor\":\"%s\",\"renderer\":\"%s\",\"version\":\"%s\","
            "\"cgl\":{\"profile\":\"legacy\"}}\n",

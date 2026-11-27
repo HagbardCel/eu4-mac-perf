@@ -1065,21 +1065,26 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
  * Readback may temporarily bind a different framebuffer, so observe first. */
 typedef struct {
     GLint framebuffer, read_framebuffer, draw_buffer, read_buffer;
-    GLint attachment, level, samples, depth, stencil;
+    GLint attachment, level, samples, depth, stencil, attachment_type, other_buffer;
+    GLenum framebuffer_status, error;
+    int error_checked;
 } selected_draw_target;
 
-static int selected_target(selected_draw_target *target) {
+static int selected_target(selected_draw_target *target, int check_error) {
     GLint type = 0, buffers = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target->framebuffer);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &target->read_framebuffer);
     glGetIntegerv(GL_DRAW_BUFFER, &target->draw_buffer);
     glGetIntegerv(GL_READ_BUFFER, &target->read_buffer);
     if (target->framebuffer <= 0 || target->read_framebuffer != target->framebuffer ||
-        target->draw_buffer != GL_COLOR_ATTACHMENT0 || target->read_buffer != GL_COLOR_ATTACHMENT0 ||
-        glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return 0;
+        target->draw_buffer != GL_COLOR_ATTACHMENT0 || target->read_buffer != GL_COLOR_ATTACHMENT0)
+        return 0;
+    target->framebuffer_status = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+    if (target->framebuffer_status != GL_FRAMEBUFFER_COMPLETE) return 0;
 #define ATTACHMENT(slot, field, value) glGetFramebufferAttachmentParameteriv( \
     GL_DRAW_FRAMEBUFFER, (slot), GL_FRAMEBUFFER_ATTACHMENT_##field, &(value))
     ATTACHMENT(GL_COLOR_ATTACHMENT0, OBJECT_TYPE, type);
+    target->attachment_type = type;
     if (type != GL_TEXTURE) return 0;
     ATTACHMENT(GL_COLOR_ATTACHMENT0, OBJECT_NAME, target->attachment);
     ATTACHMENT(GL_COLOR_ATTACHMENT0, TEXTURE_LEVEL, target->level);
@@ -1091,10 +1096,20 @@ static int selected_target(selected_draw_target *target) {
     for (GLint i = 1; i < buffers; i++) {
         GLint other = 0;
         glGetIntegerv(GL_DRAW_BUFFER0 + i, &other);
-        if (other != GL_NONE) return 0;
+        if (other != GL_NONE) {
+            target->other_buffer = other;
+            return 0;
+        }
     }
-    return target->attachment > 0 && target->level == 0 && !target->samples &&
-           !target->depth && !target->stencil && glGetError() == GL_NO_ERROR;
+    if (target->attachment <= 0 || target->level != 0 ||
+        target->samples || target->depth || target->stencil) return 0;
+    /* This established query consumes an error. Inspect it for a potentially
+       valid observation only, never to enrich an already-refused result. */
+    if (check_error) {
+        target->error_checked = 1;
+        target->error = glGetError();
+    }
+    return target->error == GL_NO_ERROR;
 }
 
 /* Entry-side draw arguments. The gateway's exit frame holds post-call
@@ -1118,17 +1133,47 @@ static _Thread_local struct {
     CGLContextObj context;
     uint64_t call_id;
     unsigned count;
-    int valid;
+    const char *failure;
+    int mode, first, vertices;
+    int observed_mode, observed_first, observed_vertices;
+    int submission_context_matches;
 } g_selected;
+
+static void selected_failure(const char *reason) {
+    if (g_selected.failure == NULL) g_selected.failure = reason;
+}
+
+static void begin_selected(uint64_t call_id, int supported, int mode, int first, int count) {
+    memset(&g_selected, 0, sizeof(g_selected));
+    g_selected.call_id = call_id;
+    g_selected.context = CGLGetCurrentContext();
+    g_selected.mode = mode;
+    g_selected.first = first;
+    g_selected.vertices = count;
+    if (!supported) selected_failure("unsupported_draw");
+    else if (g_selected.context == NULL) selected_failure("entry_context");
+    else if (!selected_target(&g_selected.entry, 1)) selected_failure("entry_target");
+}
 
 void eu4_gfx_frame_trace_submit_arrays(unsigned mode, int first, int count) {
     if (!g_selected.call_id) return;
-    if (++g_selected.count != 1 || g_selected.context != CGLGetCurrentContext() ||
-        mode != (unsigned)g_pending.mode ||
-        first != g_pending.first || count != g_pending.count ||
-        !selected_target(&g_selected.submission)) {
-        g_selected.valid = 0;
+    if (++g_selected.count != 1) {
+        selected_failure("multiple_submissions");
+        return;
     }
+    g_selected.observed_mode = (int)mode;
+    g_selected.observed_first = first;
+    g_selected.observed_vertices = count;
+    g_selected.submission_context_matches = g_selected.context == CGLGetCurrentContext();
+    if (!g_selected.submission_context_matches) {
+        selected_failure("submission_context");
+        return;
+    }
+    if (mode != (unsigned)g_selected.mode || first != g_selected.first ||
+        count != g_selected.vertices) selected_failure("submission_arguments");
+    if (!selected_target(&g_selected.submission, g_selected.failure == NULL)) selected_failure("submission_target");
+    else if (memcmp(&g_selected.entry, &g_selected.submission, sizeof(g_selected.entry)))
+        selected_failure("submission_target_changed");
 }
 
 static void sha256_hex(const void *data, size_t size, char out[65]) {
@@ -6727,47 +6772,81 @@ int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
     return 0;
 }
 
-static int capture_selected_submission(json_out *out, uint64_t call_id,
-                                       int mode, int first, int count) {
+static void write_selected_target(json_out *out, const char *key,
+                                  const selected_draw_target *target) {
+    jprintf(out, ",\"%s\":{\"framebuffer\":%d,\"read_framebuffer\":%d,"
+            "\"draw_buffer\":%d,\"read_buffer\":%d,\"attachment\":%d,"
+            "\"level\":%d,\"samples\":%d,\"depth_type\":%d,\"stencil_type\":%d,"
+            "\"attachment_type\":%d,\"other_draw_buffer\":%d,"
+            "\"framebuffer_status\":%u,\"gl_error\":",
+            key, target->framebuffer, target->read_framebuffer, target->draw_buffer,
+            target->read_buffer, target->attachment, target->level, target->samples,
+            target->depth, target->stencil, target->attachment_type, target->other_buffer,
+            target->framebuffer_status);
+    if (target->error_checked) jprintf(out, "%u}", target->error);
+    else jprintf(out, "null}");
+}
+
+static int capture_selected_submission(json_out *out, uint64_t call_id) {
     selected_draw_target exit_target = {0};
-    if (!call_id || g_selected.call_id != call_id || !g_selected.valid ||
-        g_selected.context != CGLGetCurrentContext() ||
-        g_selected.count != 1 || !selected_target(&exit_target) ||
-        memcmp(&g_selected.entry, &g_selected.submission, sizeof(exit_target)) ||
-        memcmp(&g_selected.entry, &exit_target, sizeof(exit_target))) return 0;
-    jprintf(out, "\"submission\":{\"api\":\"glDrawArrays\",\"mode\":%d,"
+    int exit_context_matches = g_selected.context != NULL &&
+                               g_selected.context == CGLGetCurrentContext();
+    if (!call_id || g_selected.call_id != call_id) selected_failure("call_identity");
+    if (g_selected.count == 0) selected_failure("missing_submission");
+    if (!exit_context_matches) selected_failure("exit_context");
+    else if (!selected_target(&exit_target, g_selected.failure == NULL)) selected_failure("exit_target");
+    else if (memcmp(&g_selected.entry, &exit_target, sizeof(exit_target)))
+        selected_failure("exit_target_changed");
+    if (g_selected.failure != NULL) {
+        jprintf(out, ",\"submission_failure\":{\"reason\":\"%s\",\"count\":%u,"
+                "\"expected_arguments\":[%d,%d,%d],\"submission_context_matches\":%s,"
+                "\"exit_context_matches\":%s", g_selected.failure, g_selected.count,
+                g_selected.mode, g_selected.first, g_selected.vertices,
+                g_selected.submission_context_matches ? "true" : "false",
+                exit_context_matches ? "true" : "false");
+        if (g_selected.count) {
+            jprintf(out, ",\"actual_arguments\":[%d,%d,%d]", g_selected.observed_mode,
+                    g_selected.observed_first, g_selected.observed_vertices);
+            if (g_selected.submission_context_matches)
+                write_selected_target(out, "submission_target", &g_selected.submission);
+        }
+        write_selected_target(out, "entry_target", &g_selected.entry);
+        if (exit_context_matches) write_selected_target(out, "exit_target", &exit_target);
+        jprintf(out, "}");
+        return 0;
+    }
+    jprintf(out, ",\"submission\":{\"api\":\"glDrawArrays\",\"mode\":%d,"
             "\"first\":%d,\"count\":%d,\"call_id\":%llu,\"framebuffer\":%d,"
             "\"read_framebuffer\":%d,\"attachment\":%d,\"level\":%d,"
             "\"draw_buffer\":%d,\"read_buffer\":%d,\"samples\":%d,"
             "\"depth_present\":false,\"stencil_present\":false,"
             "\"target_continuity\":\"entry_submission_exit\"}",
-            mode, first, count, (unsigned long long)call_id, exit_target.framebuffer,
+            g_selected.observed_mode, g_selected.observed_first, g_selected.observed_vertices,
+            (unsigned long long)call_id, exit_target.framebuffer,
             exit_target.read_framebuffer, exit_target.attachment, exit_target.level,
             exit_target.draw_buffer, exit_target.read_buffer, exit_target.samples);
     return !out->failed;
 }
 
-int eu4_gfx_frame_trace_test_capture_arrays(FILE *output, unsigned mode, int first, int count) {
-    memset(&g_selected, 0, sizeof(g_selected));
-    g_selected.call_id = 1;
-    g_selected.context = CGLGetCurrentContext();
-    g_selected.valid = selected_target(&g_selected.entry);
-    g_pending.mode = (int)mode;
-    g_pending.first = first;
-    g_pending.count = count;
-    eu4_gfx_frame_trace_submit_arrays(mode, first, count);
-    glDrawArrays(mode, first, count);
+void eu4_gfx_frame_trace_test_begin_arrays(unsigned mode, int first, int count) {
+    begin_selected(1, 1, (int)mode, first, count);
+}
+
+int eu4_gfx_frame_trace_test_write_arrays(FILE *output) {
     json_out out = {output, 0};
-    int ok = capture_selected_submission(&out, 1, mode, first, count);
+    int ok = capture_selected_submission(&out, 1);
+    if (ok) {
+        const eu4_gfx_observe_call call = {.call_id = 1, .caller_rva = 1};
+        uint64_t caller = g.prefix_caller;
+        g.prefix_caller = call.caller_rva;
+        jprintf(&out, ",");
+        capture_draw_state(&out, 0, g_selected.mode, g_selected.first,
+                           g_selected.vertices, 1, 0, 0, &call);
+        g.prefix_caller = caller;
+        ok = !out.failed;
+    }
     g_selected.call_id = 0;
-    if (!ok) return 0;
-    eu4_gfx_observe_call call = {.caller_rva = 1, .call_id = 1};
-    jprintf(&out, ",");
-    uint64_t saved_caller = g.prefix_caller;
-    g.prefix_caller = call.caller_rva;
-    capture_draw_state(&out, 0, mode, first, count, 1, 0, 0, &call);
-    g.prefix_caller = saved_caller;
-    return !out.failed;
+    return ok;
 }
 
 /* Host-test only: run one real observation (shared readback and writer) and
@@ -9551,10 +9630,8 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         int selected_pre = !g.test_only && g.prefix_caller != 0 &&
                            g.prefix_caller == call->caller_rva;
         if (selected_pre) {
-            memset(&g_selected, 0, sizeof(g_selected));
-            g_selected.call_id = call->call_id;
-            g_selected.context = CGLGetCurrentContext();
-            g_selected.valid = !indexed && !instanced && selected_target(&g_selected.entry);
+            begin_selected(call->call_id, !indexed && !instanced,
+                           g_pending.mode, g_pending.first, g_pending.count);
         }
         int observe_pre = selected_pre;
         for (int i = 0; i < g.pre_post_count && !observe_pre; i++) {
@@ -9712,8 +9789,7 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
             }
             int selected_pre = g.prefix_caller != 0 && g.prefix_caller == call->caller_rva;
             if (selected_pre) {
-                jprintf(&out, ",");
-                if (!capture_selected_submission(&out, call->call_id, mode, first, count)) {
+                if (!capture_selected_submission(&out, call->call_id)) {
                     fail_capture_locked("selected_submission_or_target_unverified");
                 }
                 g_selected.call_id = 0;
