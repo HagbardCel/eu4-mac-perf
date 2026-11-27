@@ -27,30 +27,7 @@ lease immediately before `Popen` and releases the parent descriptor after the
 game is terminated and reaped. A manually started game is refused before the
 lease is granted.
 
-## 2. Bounded operator authorization
-
-The operator grants a budget once; the agent consumes it through the same
-ledger the campaign runner already uses.
-
-```sh
-python3 -m automation.live_gfx authorize \
-  --run-root .local/gfx-experiments/simple-01 \
-  --output-root .local/gfx-experiments \
-  --limit 3 \
-  --deadline-seconds 180 \
-  --workflow-id simple-01
-```
-
-`authorize` pins the executable SHA-256 and the experiment output root, creates
-the ledger if absent and writes a pointer in the run root. It never replenishes
-an existing budget. `--deadline-seconds`, when supplied, must be finite and
-positive. By default the ledger lives under
-`.local/launch-authority/`; the preferred location outside the worktree is not
-writable under a workspace-write DSH sandbox. This is not protection against
-deliberately malicious same-user code, consistent with the project's trust
-model.
-
-## 3. The probe
+## 2. The probe
 
 ```sh
 python3 -m automation.live_gfx probe \
@@ -58,14 +35,12 @@ python3 -m automation.live_gfx probe \
   --checkpoint after-draw \
   --caller-rva 0xedfcd1 \
   --occurrence 1 \
-  --output .local/gfx-experiments/simple-01/after-draw-01 \
-  --campaign-run-root .local/gfx-experiments/simple-01
+  --output .local/gfx-experiments/simple-01/after-draw-01
 ```
 
-The command claims one ledger launch, builds `libeu4_metal_boot.dylib`, starts
-the pinned x86_64 game with the existing Metal-init boot path, and stops at the
-selected checkpoint. It requires `--campaign-run-root`; the unrestricted
-`--authorize-live` switch is not a substitute for an operator budget.
+The command builds the probe, starts the pinned x86-64 executable under
+the host-wide lease and stops at the selected checkpoint. A configured
+campaign also applies its mode and deadline.
 
 Supported checkpoints use one implementation:
 
@@ -89,18 +64,12 @@ The probe also aggregates `probe-result.json`; `inspect --run <dir>` prints the
 result or reconstructs it from the artifact files. `--reference` accepts an
 operator PNG for numerical comparison only and never sets `reference_matched`.
 
-## 4. Timeout contract
+## 3. Timeout contract
 
-Every live timeout and every configured positive deadline must satisfy
-`math.isfinite(value) and value > 0`; booleans and non-numeric values are
-rejected at the ledger boundary. `probe --timeout` and
-`authorize --deadline-seconds` validate before any claim, build or launch.
-`launch_ledger.claim()` validates direct Python callers and persisted ledgers,
-and `eu4_metal_boot.launch_session()` rejects an invalid `wait_seconds` before
-spawning. A pinned Metal probe requires a positive deadline; legacy workflows
-may still use `deadline_seconds=None`.
+The probe and Metal launcher reject nonfinite or nonpositive timeouts
+before spawning. Launcher cleanup terminates and reaps the owned process.
 
-## 5. Status levels
+## 4. Status levels
 
 These are separate facts, never collapsed into `pass`:
 

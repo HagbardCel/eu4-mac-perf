@@ -104,14 +104,6 @@ if [ -n "${CAMPAIGN_STATE:-}" ]; then
     exit 1
   }
   echo "$(basename "$0"): campaign state=$EU4_CAMPAIGN_STATE" >&2
-  # The operator token issues a live-launch authorization and must never be
-  # inherited by the agent session.
-  if [ -n "${EU4_CAMPAIGN_ADMIN_TOKEN:-}" ]; then
-    echo "$(basename "$0"): operator token present; issue each live launch with authorize-launch" >&2
-  else
-    echo "$(basename "$0"): no EU4_CAMPAIGN_ADMIN_TOKEN; live launches are impossible" >&2
-  fi
-  unset EU4_CAMPAIGN_ADMIN_TOKEN
 fi
 
 WORKSPACE=$(CDPATH= cd -- "$WORKSPACE" && pwd)

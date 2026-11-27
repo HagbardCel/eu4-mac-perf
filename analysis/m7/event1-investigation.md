@@ -216,24 +216,7 @@ Check that the new seal names event 1, program 310, framebuffer 6, and
 RGB8 texture 433 at level 0. Use the same seal, index stream and selection
 for Metal.
 
-```sh
-OUT="$PWD/.local/m7/event1-fragments-capture"
-STATE="$PWD/.local/m7/event1-fragments-state.json"
-PIXELS='187,565;97,559;154,547;51,487;53,433;60,432;151,417;108,387;66,376;87,369;84,344;169,289;30,206;90,130;126,95;143,69;81,56;111,29;110,27;100,24;99,23;100,23;101,23;99,24;101,24;99,25;100,25;101,25'
-mkdir -p "$PWD/.local/m7"
-TOKEN="$(cat "$HOME/.local/share/eu4-dsh/operator-token")"
-EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard ensure \
-  --state "$STATE" --mode controlled_capture --deadline-seconds 3600
-EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard authorize-launch \
-  --state "$STATE"
-unset TOKEN
-printf 'Paste the one-use authorization ID: '
-IFS= read -r AUTH_ID
-EU4_CAMPAIGN_STATE="$STATE" EU4_CAMPAIGN_AUTHORIZATION="$AUTH_ID" \
-  EU4_TEST_PROFILE=live python3.14 -m automation.m6_frame capture \
-  --output "$OUT" --prefix-end 1 --seal --log --uv2-probe --uv2-probe-pixels "$PIXELS"
-unset AUTH_ID
-```
+The maintained [UV2 capture procedure](../../docs/harness.md#event-1-uv2-diagnostic-probe) replaces the historical launch setup.
 
 Expect a fresh `$OUT/frame-seal-notification.json`, plus
 `frame-seal.json`, `frame-trace.json`, `prefix-observations.jsonl` and the event

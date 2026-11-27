@@ -2512,7 +2512,7 @@ class SubprocessDiagnosticTests(unittest.TestCase):
                     return_value=self.completed(body, code=code, stderr=stderr)) as run:
                 code_value, value = self.call([
                     "eu4_capture", "probe", "--checkpoint", "after-present",
-                    "--output", str(root), "--campaign-run-root", str(root),
+                    "--output", str(root),
                     "--timeout", "5",
                 ])
         return code_value, value, run

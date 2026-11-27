@@ -178,7 +178,7 @@ class ProcessLeaseTests(unittest.TestCase):
         again.release()
 
 
-class AuthorizationTests(unittest.TestCase):
+class WorkflowBudgetTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -188,7 +188,7 @@ class AuthorizationTests(unittest.TestCase):
         self.output_root = self.run_root / "output"
         self.ledger = self.root / "authority" / "workflow.json"
 
-    def authorize(self, **overrides):
+    def create_budget(self, **overrides):
         values = {
             "workflow_id": "wf-lease",
             "limit": 2,
@@ -197,9 +197,7 @@ class AuthorizationTests(unittest.TestCase):
             "output_root": self.output_root,
         }
         values.update(overrides)
-        return launch_ledger.authorize_workflow(
-            self.ledger, self.run_root, **values
-        )
+        return launch_ledger.create_ledger(self.ledger, **values)
 
     def claim(self, *, output: Path | None = None, sha: str | None = "pinned",
               timeout: float = 30.0):
@@ -214,71 +212,32 @@ class AuthorizationTests(unittest.TestCase):
         )
 
     def test_an_unattested_launch_is_refused_before_spawn(self) -> None:
-        self.authorize()
+        self.create_budget()
         with self.assertRaises(launch_ledger.LedgerError) as caught:
             self.claim(sha=None)
         self.assertEqual(caught.exception.kind, "executable")
 
     def test_a_different_executable_is_refused(self) -> None:
-        self.authorize()
+        self.create_budget()
         with self.assertRaises(launch_ledger.LedgerError) as caught:
             self.claim(sha="different")
         self.assertEqual(caught.exception.kind, "executable")
 
     def test_output_must_stay_under_the_authorized_root(self) -> None:
-        self.authorize()
+        self.create_budget()
         with self.assertRaises(launch_ledger.LedgerError) as caught:
             self.claim(output=self.root / "elsewhere")
         self.assertEqual(caught.exception.kind, "output_root")
 
     def test_failed_launch_remains_charged(self) -> None:
-        self.authorize()
+        self.create_budget()
         token = self.claim()
         launch_ledger.finish(self.ledger, token, pid=None, status="failed")
         value = launch_ledger.load_ledger(self.ledger)
         self.assertEqual(value["used"], 1)
         self.assertEqual(value["launches"][0]["status"], "failed")
 
-    def test_authorize_never_replenishes_an_existing_budget(self) -> None:
-        first = self.authorize()
-        self.assertTrue(first["created"])
-        token = self.claim()
-        launch_ledger.finish(self.ledger, token, pid=1, status="completed")
-        second = self.authorize()
-        self.assertFalse(second["created"])
-        self.assertEqual(second["used"], 1)
-        self.assertEqual(second["limit"], 2)
-        value = launch_ledger.load_ledger(self.ledger)
-        self.assertEqual(value["launches"][0]["status"], "completed")
 
-    def test_identical_reauthorization_preserves_receipts_and_remaining_budget(self) -> None:
-        self.authorize(limit=3)
-        token = self.claim()
-        launch_ledger.finish(self.ledger, token, pid=1, status="completed")
-        again = self.authorize(limit=3)
-        self.assertFalse(again["created"])
-        self.assertEqual(again["used"], 1)
-        value = launch_ledger.load_ledger(self.ledger)
-        self.assertEqual(len(value["launches"]), 1)
-        self.assertEqual(value["launches"][0]["status"], "completed")
-        self.assertEqual(value["limit"] - value["used"], 2)
-
-    def test_reauthorization_cannot_change_the_contract(self) -> None:
-        self.authorize(limit=3)
-        for overrides in (
-            {"limit": 4},
-            {"deadline_seconds": 61.0},
-            {"executable": {"path": str(self.root / "other"), "sha256": "pinned"}},
-            {"executable": {"path": str(self.root / "eu4"), "sha256": "other"}},
-            {"output_root": self.root / "other-output"},
-        ):
-            requested = {"limit": 3}
-            requested.update(overrides)
-            with self.assertRaises(launch_ledger.LedgerError) as caught:
-                self.authorize(**requested)
-            self.assertEqual(caught.exception.kind, "conflict")
-        value = launch_ledger.load_ledger(self.ledger)
-        self.assertEqual(value["used"], 0)
 
     def test_an_unpinned_ledger_cannot_be_adopted_as_pinned(self) -> None:
         self.ledger.parent.mkdir(parents=True, exist_ok=True)
@@ -286,7 +245,7 @@ class AuthorizationTests(unittest.TestCase):
             self.ledger, workflow_id="wf-lease", limit=2, deadline_seconds=None
         )
         with self.assertRaises(launch_ledger.LedgerError) as caught:
-            self.authorize()
+            self.create_budget()
         self.assertEqual(caught.exception.kind, "conflict")
         value = launch_ledger.load_ledger(self.ledger)
         self.assertNotIn("executable", value)

@@ -338,7 +338,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         test_profiles.ensure_live_launch("eu4_metal_boot.launch_session")
     except test_profiles.LiveProfileError as exc:
         raise base.BenchmarkError(str(exc)) from exc
-    campaign_guard.refuse_unmanaged_launch("eu4_metal_boot.launch_session")
+    campaign_guard.require_live_campaign()
     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
     try:
         game = subprocess.Popen(

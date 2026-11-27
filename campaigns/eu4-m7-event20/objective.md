@@ -12,9 +12,7 @@ milestone.  The independent checker owns the verdict.
 
 There is no replay, correction, validation or goal-round quota. Live EU4
 launches are controlled separately: this campaign is `autonomous_reconstruction`
-by default, and a capture needs a `controlled_capture` campaign plus an
-operator-issued one-use launch authorization. An operator-configured execution
-deadline bounds unattended cost; it is not a per-experiment budget.
+by default and runs offline. A campaign deadline bounds unattended cost. Development captures run separately with the host-wide lease.
 
 Before a meaningful GPU experiment, state the competing causal explanations, the
 specific change or observation that distinguishes them, the predicted outcome
@@ -131,12 +129,10 @@ record it and continue with the available authentic evidence.
    inability to execute them in-session as an environment limitation, not a
    renderer failure, and do not rerun a known-failing test merely because it
    cannot create `.git/worktrees` entries.
-3. Live capture is a separate, operator-controlled preparation stage: an
-   `autonomous_reconstruction` campaign must not launch EU4, and a
-   `controlled_capture` campaign may launch only with an operator-issued
-   one-use authorization. If the existing evidence is insufficient, stop with
+3. Live capture is a separate development step. This offline campaign refuses
+   live launches. If the existing evidence is insufficient, stop with
    `requires_additional_evidence` and name the exact capture request (caller
-   set, prefix scope, required observations) for the operator; request a new
+   set, prefix scope, required observations) for the capture run; request a new
    capture only when it can provide a necessary observation. In a gap report,
    distinguish observations already in the authenticated frame, available
    operator-controlled observations still to be made, and observations current

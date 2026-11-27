@@ -52,6 +52,6 @@ shader source digests, effective GL state and attachment bytes. The verifier
 requires exact equality and a correctly initialized omission with a different
 attachment. Readback preserves bindings and pixel-pack state. [Original draw dossier](../../analysis/reconstruction/gfx-semantic/v1/draw/_GfxDraw.md)
 
-Operator authorization is separate from this contract. Before requesting one
-launch, verify the matching offline fixture and the governed execution path.
-A capture-health failure or incomplete seal ends the capture attempt.
+For live development, use the reviewed scene selection and a fresh output
+directory on a host with a free EU4 lease. A capture-health failure or
+incomplete seal ends the attempt. Verify workload identity before publishing.

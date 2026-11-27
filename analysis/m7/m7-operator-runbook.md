@@ -182,42 +182,15 @@ does not extend it.
   verification. There is no attempt or round cap.
 - Candidate-authored screenshots or metadata never pass the checker.
 
-## B. Live event-20 capture (separately controlled)
+## B. Live event-20 capture
 
-Live capture is not part of the offline campaign and is never started by the
-autonomous agent. The campaign must be created in `controlled_capture` mode, and
-**every launch needs its own operator-issued authorization**:
+Use the maintained frame capture CLI with the reviewed caller set, a fresh
+output directory, a 512-event frame limit and a bounded timeout. The host
+lease and active campaign mode apply. Preserve an interrupted capture and
+inspect cleanup before starting another run. [Capture operations](../../docs/harness.md)
 
-```fish
-set -l REPO /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-set -l PY /opt/homebrew/opt/python@3.14/bin/python3.14
-set -l STATE $REPO/.local/m7/event20-live/state-operator-live.json
-
-# Operator token: created by the operator, never inherited by the agent.
-set -l TOKEN (cat ~/.local/share/eu4-dsh/operator-token)
-env EU4_CAMPAIGN_ADMIN_TOKEN=$TOKEN $PY -m automation.campaign_guard ensure \
-    --state $STATE --mode controlled_capture --deadline-seconds 3600
-
-# One authorization per launch; capture cannot mint its own.
-env EU4_CAMPAIGN_ADMIN_TOKEN=$TOKEN $PY -m automation.campaign_guard authorize-launch \
-    --state $STATE
-```
-
-Copy the printed authorization id and run the capture from the operator
-terminal (not from the agent session):
-
-```fish
-env EU4_CAMPAIGN_STATE=$STATE EU4_CAMPAIGN_AUTHORIZATION=<authorization-id> \
-    $PY -m automation.m6_frame capture --output <new-output-dir> \
-      --callers <reviewed-caller-set> --min-draws 8 --max-draws 512 \
-      --prefix-end 20 --seal --shadow --timeout 300 ...
-```
-
-After the campaign, `campaign_guard deactivate --state $STATE`. Use a fresh
-output directory; never overwrite an existing sealed capture. The event-20
-scientific criterion (`EVENT20_EXACT`, complete event 0..20, required R32F and
-format-specific exactness) is unchanged and is only established by the
-independent checker.
+The event-20 criterion (`EVENT20_EXACT`, complete event 0..20, required R32F
+and format-specific exactness) is established by the independent checker.
 
 ## C. Authentic event-3 migration milestone
 

@@ -278,7 +278,7 @@ Adapt the workstream label and validation contract for Metal migration and optim
 4. Reconstruct or correct code. Run focused tests and independently validate meaningful changes against protected scope.
 5. Record findings and unresolved gaps; preserve code and notes in Git. Move to the next useful task until the deadline or a genuine blocker.
 
-A disproved hypothesis, an inconclusive experiment or one blocked function is not a reason to stop if independent meaningful work remains. A genuine blocker specifies the affected scope, missing evidence or capability, attempted alternatives, the smallest requested observation and the consequence. Live original EU4 acquisition is an operator-authorized workflow, separate from the offline session. Do not give the agent an operator launch token.
+A disproved hypothesis, an inconclusive experiment or one blocked function is not a reason to stop if independent meaningful work remains. A genuine blocker specifies the affected scope, missing evidence or capability, attempted alternatives, the smallest requested observation and the consequence. Live original EU4 acquisition uses the maintained capture tools and stays outside offline qualification. Unattended campaign constraints belong at the orchestration boundary.
 
 ### 6.3 Minimal lifecycle and trust model
 
@@ -327,7 +327,7 @@ Review M1–M6 and later campaigns using the same policy, not an age cutoff. Rem
 | Focused native backend | Real Apple GL/Metal behavior and integration at API boundaries | Affected backend change |
 | Authentic qualification | Exact original observations and protected regressions | Promotion of renderer behavior |
 | Full maintained offline gate | Integrated correctness and safety, no real EU4 launches | Once before merge on retained changes |
-| Live EU4 | Missing original observation, end-to-end integration | Explicit operator authorization |
+| Live EU4 | Missing original observation, end-to-end integration | Pinned executable, bounded capture, host lease and evidence checks |
 
 Git checkpointing does not trigger a full suite. Keep existing `automation/test_runner.py` or its consolidated owner; do not add a test cache. Reuse valid build products when source/toolchain identity is verified, including exact rollbacks. Do not run multiple equivalent validations through wrappers or repeatedly after documentation-only edits. Keep skip vs failure semantics explicit, including native prerequisites unavailable on CI. A portable gate does not substitute for actual macOS GPU qualification.
 
@@ -366,7 +366,7 @@ The phases below combine repository simplification with the enabling work in the
 4. Audit all OpenGL control and Metal replay code, actual resource/state representation, capture/restore/observe/compare coverage, function oracle and ABI paths. For one authentic case record the state field, original observation availability, definedness, losslessness, candidate source of state, comparator and gap. Determine the smallest real missing discriminator before planning new code.
 5. Audit evidence retention, corpus identity, case locators, trusted reference and independent execution paths. Verify whether required local payloads exist on the host; a repository locator is not proof of recoverability.
 6. Audit DSH runtime and installed lifecycle hooks, deadline, cancellation, round checkpoint opportunity, child containment, permissions, Git isolation and campaign plugin dependencies. Determine whether `--workspace` mode can provide all required native lifecycle functionality. Record unresolved capabilities rather than assuming support.
-7. Trace safety dependencies of `campaign_guard`, host lease, launch authorization, GPU lock, offline profile, trusted execution and finalization. Distinguish indispensable invariants from obsolete campaign plumbing.
+7. Trace safety dependencies of `campaign_guard`, host lease, campaign deadline, GPU lock, offline profile, trusted execution and finalization. Distinguish indispensable invariants from obsolete campaign plumbing.
 8. Profile current tests and agent traces as specified in §8. Rank actual time sinks by cumulative wall time and repeated cost. Map each proposed test deletion to the invariant it protects and the retained alternative, if any.
 9. Produce a disposition map for historical milestone code, generated artifacts and findings, including M1–M6 and M7. Inspect actual evidence and negative conclusions before deletion recommendations.
 
@@ -418,7 +418,7 @@ Freeze the eligible authentic workload and its observation contract in operator-
 
 - Make the ordinary native DSH goal path the default. Reuse existing provisioning, interpreter pinning, workspace registration, skill loading and tool mounting. Expose a minimal operator start flow with default 120-minute duration and optional workstream; exact command/interface determined by audit. Do not create a launcher family for milestones.
 - Load compact permanent project context and discover the applicable references and current qualified baseline automatically. Use native continuation after individual successful tasks. No new objective file, sidecar, event range or acceptance script per session.
-- Extract or reuse minimal externally enforced deadline, cancellation and process containment. Separate routine offline execution from controlled live capture. Maintain operator-owned launch authorization and host-wide lease, GPU serialization and cleanup.
+- Extract or reuse minimal externally enforced deadline, cancellation and process containment. Separate routine offline execution from controlled live capture. Maintain the host-wide lease, GPU serialization and cleanup.
 - Implement mandatory changed-round Git checkpoints through the verified native lifecycle or minimal trusted boundary. Preserve the starting and latest qualified revisions, newly authored eligible files, negative findings and recovery history. Finalize on interruption after owned processes quiesce. Protect Git metadata, refs, evidence and trusted infrastructure from candidate execution. Use actual enforceable controls, not just instructions.
 - Make independent qualification callable throughout a session without campaign binding, while preserving immutable inputs, receipt verification and required regression policy. End-of-session reporting must distinguish qualified changes, WIP and evidence blockers.
 - Update `AGENTS.md`, shared reconstruction skill, README, governance and operator docs. Remove duplicated instructions and simplify experiment rationale requirements while preserving evidence value.

@@ -30,9 +30,9 @@ the action sites. The governance model has three parts and no experiment quotas
 
 | mechanism | owner | enforced before |
 | --- | --- | --- |
-| execution mode + operator-issued one-use launch authorization | `automation/campaign_guard.py` | each EU4 spawn (`run`, `run_ops`, `gfx_launch.spawn`, `m6_frame capture`) |
+| active campaign mode, deadline and stop | `automation/campaign_guard.py` | each EU4 spawn |
 | host-wide process lease | `automation/launch_lease.py` | each EU4 spawn |
-| live-capture launch ledger (operator pin, per-launch timeout) | `automation/launch_ledger.py` | a live capture with `--campaign-run-root` |
+| configured workflow budget and provenance | `automation/launch_ledger.py` | a live capture with `--campaign-run-root` |
 | experiment rationale (structure + evidence exists) | `automation/experiment_rationale.py` | agent-facing `eu4_replay`, replay CLIs, direct `m6_frame replay` |
 | operator execution deadline | sidecar declaration, seeded into the guard at launch | every expensive action (guard) and every checker run (bridge) |
 | per-process timeout | the checker/replay/launch caller | each child process |
@@ -47,9 +47,8 @@ experiments as it can explain, and continuation is progress-based.
 A campaign state is created in one of two modes:
 
 - `autonomous_reconstruction` (default): live capture is refused outright.
-- `controlled_capture`: the deliberate live-capture workflow is permitted, but
-  each launch still needs its own operator-issued authorization and the
-  host-wide lease.
+- `controlled_capture`: live development tools run under the campaign deadline
+  and acquire the host-wide lease.
 
 `ensure` validates the mode of an existing state as well as creating a new one,
 so a prepared campaign cannot be silently downgraded. Activation is host-wide and fail-closed: the marker in the fixed
@@ -63,19 +62,9 @@ clears an explicit stop without rewinding the deadline.
 Launchers require a campaign state, pass
 `--campaign-mode controlled_capture|autonomous_reconstruction`, run `ensure`
 unconditionally and seed the sidecar deadline at launch; a campaign without a
-state is refused rather than running without its deadline. The operator
-token issues one authorization per live launch and is unset before the agent
-session starts; `m6_frame.capture` never mints an authorization.
-
-Accounting is **operator-issued and one-use**, not budgeted: `authorize-launch`
-records one launch authorization (token required in both modes), `claim-launch`
-consumes it atomically immediately before `subprocess.Popen`, and `complete`
-records the verified outcome. A crash, a
-concurrent contender or a failed spawn never refunds it. Two concurrent launch
-attempts against one authorization produce exactly one process.
-
-State is a JSON document with the mode, the stop record, launch authorizations
-and a bounded audit history.
+state is refused rather than running without its deadline. Development tools
+also run directly when no campaign is active. State records mode, deadline,
+stop and bounded audit history.
 
 ### Evidence-first experiments
 
@@ -149,11 +138,8 @@ interrupted attempt stays visible after a restart.
 
 ## Offline demonstration
 
-`tests.test_campaign_guard` proves the execution mode cannot be downgraded,
-operator-issued one-use launch authorizations (including concurrent claims,
-stops, expiry and failed spawns), the explicit v1 migration, fail-closed
-host-wide activation (missing state, malformed marker, conflicting explicit
-path), and that more than ten replays run without a quota.
+`tests.test_campaign_guard` covers mode immutability, stop and expiration,
+fail-closed host activation and a stop between launch preflight and spawn.
 `tests.test_governance_entrypoints` proves the agent-facing replay paths refuse
 without a rationale, both launchers require campaign state and validate its mode
 via `ensure`, and a stopped/expired campaign refuses a replay. `tests.test_dsh_bridge` proves the attempt lifecycle remains an

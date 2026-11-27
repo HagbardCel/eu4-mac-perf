@@ -230,7 +230,7 @@ def run(args: argparse.Namespace) -> None:
                     test_profiles.ensure_live_launch("eu4_idle_pacer.run")
                 except test_profiles.LiveProfileError as exc:
                     raise base.BenchmarkError(str(exc)) from exc
-                campaign_guard.refuse_unmanaged_launch("eu4_idle_pacer.run")
+                campaign_guard.require_live_campaign()
                 lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
                 try:
                     game = subprocess.Popen(["./eu4",*launcher["exeArgs"]], cwd=base.GOG_EXE.parent,

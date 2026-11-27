@@ -98,35 +98,22 @@ hashes, not proprietary payloads.
 | Situation | Action |
 |---|---|
 | Missing case payload | Keep the locator; report the member/digest and configured `EU4_EVIDENCE_ROOT` roots. Do not scan the home directory. |
-| Interrupted reservation | Inspect the guard/lease/owned PID before retrying. An open reservation is the durable record; another launch is not automatic. |
+| Interrupted capture | Inspect the host lease and owned process before retrying. Preserve the partial output. |
 | Identical deterministic failure | Change the candidate, diagnostics or evidence. A second unchanged failure pauses as `no_progress`; do not spend another round on the same input. |
 | Terminal shadow result | The owned launch is stopped and settings restored; optional ops traces may be absent and are reported as such. |
 | Stale/foreign receipt | Fail closed. Re-run the producer for the current candidate/seal; never repair a receipt by editing it. |
 
-## Budget and leases
+## Leases and campaign deadlines
 
-EU4 launches are serialized by the host-wide process lease plus a one-use
-campaign claim. A campaign refusal happens before build/spawn. Replays and
-shadow executions are charged through the same guard; nested entry points share
-one reservation. GPU service time is not inferred from wall clock.
+The host-wide lease serializes EU4 launches. Active campaigns add a mode,
+a stop state and a deadline. The offline test profile refuses live launches.
 
 ## Event-1 UV2 diagnostic probe
 
-Opt-in diagnostic for event 1, program 310, framebuffer 6, texture 433; disabled
-by default. The capture is an operator action with a one-use authorization;
-agents must not launch EU4. See the [operator runbook](../analysis/m7/m7-operator-runbook.md).
+The opt-in probe observes event 1, program 310, framebuffer 6 and texture 433.
 
 ```fish
 set -l OUT "$HOME/eu4-uv2-capture"
-set -l STATE "$HOME/eu4-uv2-state.json"
-set -l TOKEN (cat "$HOME/.local/share/eu4-dsh/operator-token")
-env EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard ensure \
-  --state "$STATE" --mode controlled_capture --deadline-seconds 3600
-env EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard authorize-launch \
-  --state "$STATE"
-set -lx EU4_CAMPAIGN_STATE "$STATE"
-read --prompt-str 'Paste authorization ID: ' AUTH_ID
-set -lx EU4_CAMPAIGN_AUTHORIZATION "$AUTH_ID"
 python3.14 -m automation.gfx_frame capture --output "$OUT" --prefix-end 1 \
   --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310 \
   --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --seal

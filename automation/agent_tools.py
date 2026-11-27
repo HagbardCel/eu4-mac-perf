@@ -1276,7 +1276,7 @@ def eu4_capture(args: argparse.Namespace) -> dict:
     if args.capture_op == "probe":
         argv = ["automation.live_gfx", "probe", "--backend", "metal",
                 "--checkpoint", args.checkpoint, "--occurrence", str(args.occurrence),
-                "--output", args.output, "--campaign-run-root", args.campaign_run_root]
+                "--output", args.output]
         if args.caller_rva:
             argv += ["--caller-rva", args.caller_rva]
         if args.shader_cache:
@@ -1328,7 +1328,7 @@ def eu4_diff_run(args: argparse.Namespace) -> dict:
     result = gfx_dual_run.run_campaign(
         scenario,
         run_root=Path(args.run_root),
-        ledger_path=Path(args.ledger),
+        ledger_path=Path(args.ledger) if args.ledger else None,
         shader_cache=Path(args.shader_cache) if args.shader_cache else None,
         qualified_sources=(Path(args.qualified_sources) if args.qualified_sources
                            else ROOT / "analysis" / "gfx-shader" / "v0" / "qualified-sources.json"),
@@ -3473,7 +3473,6 @@ def _parser() -> argparse.ArgumentParser:
     capture.add_argument("--checkpoint", default="after-present")
     capture.add_argument("--occurrence", type=int, default=1)
     capture.add_argument("--output", default=None)
-    capture.add_argument("--campaign-run-root", default=None)
     capture.add_argument("--caller-rva", default=None)
     capture.add_argument("--shader-cache", default=None)
     capture.add_argument("--timeout", type=float, default=None)
@@ -3481,7 +3480,7 @@ def _parser() -> argparse.ArgumentParser:
     diff_run = sub.add_parser("eu4_diff_run")
     diff_run.add_argument("--scenario", required=True)
     diff_run.add_argument("--run-root", required=True)
-    diff_run.add_argument("--ledger", required=True)
+    diff_run.add_argument("--ledger")
     diff_run.add_argument("--shader-cache", default=None)
     diff_run.add_argument("--qualified-sources", default=None)
     diff_run.add_argument("--mode", choices=("streaming", "lockstep"), default=None)

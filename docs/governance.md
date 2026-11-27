@@ -24,10 +24,10 @@ counters. A campaign may run as many justified experiments as it can explain.
 - **Execution modes**: `autonomous_reconstruction` (default) refuses live
   capture; `controlled_capture` permits the capture workflow. `ensure` refuses
   a mode change.
-- **One-use launch authorization**: each live launch needs an authorization
-  issued by the operator with the campaign token. `gfx_frame.capture` never mints
-  one and refuses before preflight when the mode or authorization is wrong. The
-  claim is atomic immediately before `Popen` and is never refunded.
+- **Development tools** run directly outside an active campaign. A same-user
+  administrator token offered no isolation from an unrestricted development
+  agent. Campaign constraints belong to unattended orchestration. The
+  active campaign mode is checked again immediately before spawn.
 - **One operator deadline**: declared in the sidecar
   (`limits.deadline_seconds`), seeded into the guard at launch, never rewound by
   a resume. Expiry refuses every expensive action, including checker and replay

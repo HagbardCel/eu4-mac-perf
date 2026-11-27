@@ -1369,50 +1369,15 @@ def _shadow_terminal(shadow_dir: Path, **identity) -> bool:
 
 def capture(args: argparse.Namespace) -> int:
     import eu4_gfx_startup_trace as startup
-    from automation import live_gfx
 
     output = Path(args.output).expanduser().resolve()
     if output.exists():
         print(f"capture output already exists: {output}", file=sys.stderr)
         return 2
-    capture_guard = None
-    reservation = None
-    guard = campaign_guard.from_env()
-    if guard is not None:
-        try:
-            # Entering controlled-capture mode and authorizing one launch are
-            # separate operator decisions.  The capture tool never mints an
-            # authorization: the operator issues one with the campaign token and
-            # passes its identifier to this process.
-            guard.require()
-            status = guard.status()
-            if status.get("mode") != campaign_guard.MODE_CONTROLLED:
-                raise campaign_guard.CampaignRefusal(
-                    "live_capture_disabled",
-                    "this campaign is autonomous reconstruction; live capture "
-                    "requires a controlled_capture campaign")
-            reservation = (
-                os.environ.get("EU4_CAMPAIGN_AUTHORIZATION")
-                or os.environ.get("EU4_CAMPAIGN_RESERVATION") or "").strip()
-            if not reservation:
-                raise campaign_guard.CampaignRefusal(
-                    "launch_authorization_required",
-                    "a live launch needs an operator-issued authorization; run "
-                    "`campaign_guard authorize-launch` with the campaign token "
-                    "and export EU4_CAMPAIGN_AUTHORIZATION=<id>")
-            if not guard.validate_authorization(reservation):
-                raise campaign_guard.CampaignRefusal(
-                    "launch_authorization",
-                    f"{reservation} is not an open launch authorization for "
-                    "this campaign")
-            capture_guard = guard
-        except campaign_guard.CampaignRefusal as exc:
-            print(f"capture refused: {exc.kind}: {exc.detail}",
-                  file=sys.stderr)
-            return 3
-    if getattr(args, "observe_caller", None) is not None and capture_guard is None:
-        print("capture refused: caller observation requires an operator-authorized "
-              "controlled_capture", file=sys.stderr)
+    try:
+        campaign_guard.require_live_campaign()
+    except campaign_guard.CampaignRefusal as exc:
+        print(f"capture refused: {exc.kind}: {exc.detail}", file=sys.stderr)
         return 3
     # The coordinator record is bound to this capture before any process is
     # started, so a stale record can never settle this launch.
@@ -1437,19 +1402,6 @@ def capture(args: argparse.Namespace) -> int:
             print(f"capture refused: background display unavailable: {exc}",
                   file=sys.stderr)
             return 2
-    token = None
-    if args.campaign_run_root:
-        try:
-            token = live_gfx._claim_launch(
-                Path(args.campaign_run_root),
-                output,
-                TARGETS,
-                requested_timeout=args.timeout,
-                executable_sha256=evidence.get("executable_sha256"),
-            )
-        except live_gfx.LaunchLimit as exc:
-            print(f"campaign launch refused: {exc}", file=sys.stderr)
-            return 3
     if args.boundary_fb < -1 or args.after_ms < 0 or args.max_draws < 1:
         print("capture refused: invalid selection value; --max-draws must be "
               "positive and the scene budget must cover the complete frame",
@@ -1523,11 +1475,11 @@ def capture(args: argparse.Namespace) -> int:
         env_extra["EU4_GFX_FRAME_TRACE_OBSERVE_DEPTH_STENCIL"] = "1"
     sparse_uv2 = getattr(args, "uv2_probe_pixels", None)
     if sparse_uv2:
-        if (capture_guard is None or not getattr(args, "seal", False)
+        if (not getattr(args, "seal", False)
                 or not getattr(args, "uv2_probe", False)
                 or prefix_end != gfx_uv2_probe.SPARSE_EVENT or not gfx_uv2_probe.is_sparse_target(args)
                 or getattr(args, "shadow", False)):
-            print("capture refused: sparse UV2 requires an authorized single sealed "
+            print("capture refused: sparse UV2 requires a single sealed "
                   "capture of event 1 with --uv2-probe and --prefix-end 1",
                   file=sys.stderr)
             return 2
@@ -1701,7 +1653,6 @@ def capture(args: argparse.Namespace) -> int:
             retention="state",
             background_plan=background_plan,
             game_args=list(getattr(args, "game_arg", []) or []) or None,
-            campaign_reservation=reservation,
             terminal_result=(
                 (lambda: _shadow_terminal(
                     shadow_dir,
@@ -1714,16 +1665,6 @@ def capture(args: argparse.Namespace) -> int:
     except (startup.StartupError, OSError, RuntimeError) as exc:
         _reap_coordinator(coordinator)
         cleanup_errors = list(getattr(exc, "cleanup_errors", None) or [])
-        if token is not None:
-            live_gfx._finish_launch(
-                Path(args.campaign_run_root), token, pid=None,
-                status=f"failed: {exc}",
-            )
-        if capture_guard is not None and reservation is not None:
-            capture_guard.complete(
-                reservation, outcome="failed",
-                detail=f"{type(exc).__name__}: {exc}",
-                evidence={"output": str(output)})
         if cleanup_errors:
             print("capture cleanup failed: " + "; ".join(cleanup_errors),
                   file=sys.stderr)
@@ -1964,33 +1905,7 @@ def capture(args: argparse.Namespace) -> int:
             status = 8
             result["error"] = cleanup_detail
     result["outcome"] = "ok" if status == 0 else "failed"
-    if capture_guard is not None and reservation is not None:
-        seal_value = result.get("seal") or {}
-        sealed_frames = (seal_value.get("frames")
-                         if isinstance(seal_value, dict) else None) or []
-        detail = str(result.get("error") or result.get("seal_error")
-                     or result.get("shadow_error") or "")
-        if not cleanup_ok and detail != result.get("cleanup_failure"):
-            detail = "; ".join(filter(
-                None, [detail, str(result.get("cleanup_failure") or "")]))
-        capture_guard.complete(
-            reservation,
-            outcome="ok" if status == 0 else "failed",
-            detail=detail,
-            evidence={"output": str(output), "status": status,
-                      "pid": report.get("pid"),
-                      "frames": len(sealed_frames),
-                      "cleanup_ok": cleanup_ok})
     (output / "capture-report.json").write_text(json.dumps(result, indent=2) + "\n")
-    if token is not None:
-        live_gfx._finish_launch(
-            Path(args.campaign_run_root),
-            token,
-            pid=report.get("pid"),
-            status=("completed" if status == 0 else
-                    "failed: cleanup" if status == 8 else
-                    "failed: frame-trace"),
-        )
     print(json.dumps(result, indent=2))
     return status
 
@@ -4207,7 +4122,6 @@ def _parser() -> argparse.ArgumentParser:
 
     cap = sub.add_parser("capture", help="capture one complete original-GL frame")
     cap.add_argument("--output", required=True)
-    cap.add_argument("--campaign-run-root")
     cap.add_argument("--callers", default="0x10d52fc,0x1486ad9")
     cap.add_argument("--min-draws", type=int, default=8)
     cap.add_argument("--max-frame-draws", type=int, default=0)

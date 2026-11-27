@@ -95,10 +95,10 @@ cases, inspect capture health and the first divergent event, then narrow the
 question before any live diagnostic. Use the maintained
 `automation.agent_tools` commands or native DSH tools.
 
-Offline qualification cannot launch EU4. A live launch requires a specific
-diagnostic objective and an operator-issued one-use authorization for a
-`controlled_capture` campaign. Stop on capture-health failure or incomplete
-evidence. Use normal execution permissions and keep temporary outputs within
+Offline qualification cannot launch EU4. For live development captures, use a
+specific diagnostic objective, a fresh output path and a bounded timeout.
+Stop on capture-health failure or incomplete evidence. Active campaigns also
+apply their mode, deadline and stop state. Use normal execution permissions and keep temporary outputs within
 the authorized worktree where practical. For the historical draw-packet
 completion campaign, follow its [coordinator contract](automation/gfx_l32b_complete.py);
 the frozen v1 checker remains historical and v2 owns new campaign checks.

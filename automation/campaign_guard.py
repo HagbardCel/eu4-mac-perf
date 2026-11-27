@@ -1,55 +1,10 @@
 #!/usr/bin/env python3
-"""Campaign safety enforcement: execution modes, one-use live-launch authorization, stop state.
+"""Track active campaign modes, deadlines and stops.
 
-This module used to enforce fixed budgets (replays, corrections, sealed frames,
-shadow executions, wall clock) plus an identical-failure block.  Those quotas
-were arbitrary limits on useful investigation and are gone.  What remains is
-only what protects a boundary:
-
-* **execution mode** -- ``autonomous_reconstruction`` (the default) refuses live
-  capture entirely; ``controlled_capture`` permits the capture workflow.  The
-  mode is fixed at initialization and ``ensure`` refuses to change it, so a
-  prepared campaign cannot be silently downgraded to a weaker policy.
-* **operator-issued one-use launch authorization** -- entering capture mode and
-  authorizing one launch are separate decisions.  Every live launch needs an
-  authorization issued by the operator with the campaign token; the capture tool
-  never mints one.  The authorization is consumed atomically immediately before
-  ``subprocess.Popen``; a crash or second contender cannot reuse it, and it is
-  never refunded.
-* **stop state** -- an explicit operator stop, an unsafe environment, invalid
-  evidence or a missing observation ends campaign actions until a human acts.
-
-There is no model-accessible budget reset because there is no budget.  The one
-operator execution deadline is declared in the campaign sidecar and seeded into
-the state at launch; ``ensure`` never rewinds it, and this module refuses
-expensive actions after expiry.  Per-process timeouts live at the subprocess
-boundary.
-
-An EU4 launch authorization is one-use: ``authorize-launch`` records it,
-``claim-launch`` consumes it immediately before process creation, and
-``complete`` records the verified outcome.  An interrupted claim keeps its full
-record: a crash cannot silently restore it.
-
-Activation is host-wide and fail-closed.  ``EU4_CAMPAIGN_STATE`` names a state,
-but the host-wide marker next to the EU4 launch lease is authoritative: an
-explicit path naming a different campaign is a conflict and refuses every
-decision, and a marker naming a missing or corrupt state still refuses launches.
-There is no environment override for the marker path.  A completed campaign must
-be deactivated explicitly:
-
-    python3 -m automation.campaign_guard init --state <path> \\
-        --mode autonomous_reconstruction
-    python3 -m automation.campaign_guard authorize-launch --state <path>
-    python3 -m automation.campaign_guard claim-launch --state <path> \\
-        --authorization <id>
-    python3 -m automation.campaign_guard complete --state <path> \\
-        --authorization <id> --outcome ok
-    python3 -m automation.campaign_guard status --state <path>
-    python3 -m automation.campaign_guard stop --state <path> --reason blocked
-    python3 -m automation.campaign_guard resume --state <path> --detail ...
-    python3 -m automation.campaign_guard deactivate --state <path>
-A state using the removed fixed-budget schema is refused: start a new campaign
-state instead of migrating an old quota file.
+The host marker prevents conflicting campaigns from sharing the game host.
+An active offline campaign refuses live launches. Development tools can
+run independently when no campaign is active. Launch leases and subprocess
+timeouts belong to the launchers.
 """
 
 from __future__ import annotations
@@ -57,17 +12,14 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
-import hashlib
 import json
 import os
 import time
-import uuid
 from pathlib import Path
 
 from automation import launch_lease
 
-SCHEMA = "eu4-campaign-state/v2"
-LEGACY_SCHEMA = "eu4-campaign-state/v1"
+SCHEMA = "eu4-campaign-state/v3"
 REFUSAL_SCHEMA = "eu4-campaign-refusal/v1"
 MARKER_SCHEMA = "eu4-campaign-active/v1"
 MARKER_NAME = "active-campaign.json"
@@ -104,10 +56,6 @@ class CampaignRefusal(RuntimeError):
                 "detail": self.detail}
 
 
-def _sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
 def _marker_path() -> Path:
     """Host-wide activation marker, beside the host-wide launch lease.
 
@@ -126,7 +74,7 @@ def _marker_lock_path() -> Path:
 
 
 class Guard:
-    """One campaign's mode, launch authorizations and stop state."""
+    """One campaign's mode, deadline and stop state."""
 
     def __init__(self, state_path: Path | str):
         self.path = Path(state_path).expanduser().resolve()
@@ -163,14 +111,8 @@ class Guard:
         value = self._read()
         if value is None:
             raise CampaignRefusal("state_missing", str(self.path))
-        if value.get("schema") == LEGACY_SCHEMA:
-            raise CampaignRefusal(
-                "legacy_state",
-                "this state uses the removed fixed-budget schema; start a new "
-                "campaign state instead of migrating an old one")
         if value.get("schema") != SCHEMA:
-            raise CampaignRefusal("state_invalid", str(self.path))
-        value.setdefault("launch_authorizations", {})
+            raise CampaignRefusal("state_invalid", f"{self.path}: start a fresh campaign for this schema")
         value.setdefault("history", [])
         value.setdefault("stop", None)
         value.setdefault("deadline_epoch", None)
@@ -179,7 +121,6 @@ class Guard:
     # -- lifecycle ------------------------------------------------------
     def init(self, *, campaign_id: str = "", mode: str = MODE_AUTONOMOUS,
              worktree: str | None = None, objective_digest: str | None = None,
-             admin_token: str | None = None,
              deadline_seconds: float | None = None) -> dict:
         if mode not in MODES:
             raise CampaignRefusal("invalid_mode", mode)
@@ -204,11 +145,6 @@ class Guard:
             # resume keeps the original epoch instead of silently extending it.
             "deadline_epoch": (now + float(deadline_seconds)
                                if deadline_seconds is not None else None),
-            # Only used by an operator to authorize a live launch in
-            # autonomous mode; it is never accepted from model tool arguments.
-            "admin_token_sha256": (_sha256_text(admin_token)
-                                   if admin_token else None),
-            "launch_authorizations": {},
             "history": [],
         }
         with self._locked():
@@ -221,8 +157,7 @@ class Guard:
     def ensure(self, *, campaign_id: str = "", mode: str = MODE_AUTONOMOUS,
                worktree: str | None = None,
                objective_digest: str | None = None,
-               admin_token: str | None = None,
-               deadline_seconds: float | None = None) -> dict:
+                 deadline_seconds: float | None = None) -> dict:
         """Create a state, or verify and resume an existing one.
 
         An existing state is never rewritten with a different mode: changing
@@ -234,7 +169,7 @@ class Guard:
         if not self.path.is_file():
             return dict(self.init(
                 campaign_id=campaign_id, mode=mode, worktree=worktree,
-                objective_digest=objective_digest, admin_token=admin_token,
+                objective_digest=objective_digest,
                 deadline_seconds=deadline_seconds),
                 created=True)
         with self._locked():
@@ -353,200 +288,6 @@ class Guard:
         """Refuse when the campaign is stopped (no quotas exist to check)."""
         self._require_active(self.state())
 
-    # -- launch authorization -------------------------------------------
-    def authorize_launch(self, *, evidence=None,
-                         operator_token: str | None = None) -> str:
-        """Record one live-launch authorization.
-
-        Every live launch needs an explicit operator authorization, in both
-        modes.  The token is compared against the hash stored at
-        initialization, which the launcher unsets before the agent session.
-        Entering controlled-capture mode and authorizing one launch are
-        therefore separate decisions.
-        """
-        with self._locked():
-            state = self.state()
-            self._require_active(state)
-            if state.get("mode") != MODE_CONTROLLED:
-                raise CampaignRefusal(
-                    "live_capture_disabled",
-                    "live launch authorization requires controlled_capture mode")
-            expected = state.get("admin_token_sha256")
-            if not expected or not operator_token \
-                    or _sha256_text(operator_token) != expected:
-                raise CampaignRefusal(
-                    "operator_authorization_required",
-                    "a live EU4 launch needs an operator-issued authorization; "
-                    "the campaign cannot mint one itself")
-            identifier = (f"auth-{time.time_ns()}-{os.getpid()}-"
-                          f"{uuid.uuid4().hex[:8]}")
-            now = time.time()
-            state["launch_authorizations"][identifier] = {
-                "state": "authorized",
-                "created_at": now,
-                "campaign_id": state.get("campaign_id"),
-                "evidence": evidence,
-                "launch_claim": None,
-            }
-            state["history"].append({
-                "action": "authorize_launch",
-                "outcome": "authorized",
-                "at": now,
-                "authorization": identifier,
-                "detail": "one-use EU4 launch authorization",
-                "evidence": evidence,
-            })
-            del state["history"][:-MAX_HISTORY]
-            self._write(state)
-        return identifier
-
-    def claim_launch(self, authorization_id: str, *, evidence=None,
-                     now: float | None = None) -> dict:
-        """Atomically consume one authorization's EU4 launch entitlement.
-
-        This is the one-use claim at the process-creation boundary.  The claim is
-        persisted under the state lock *before* the caller may call
-        ``subprocess.Popen``, so two contenders cannot both be authorized.
-        """
-        now = time.time() if now is None else now
-        with self._locked():
-            state = self.state()
-            self._require_active(state)
-            if state.get("mode") != MODE_CONTROLLED:
-                raise CampaignRefusal(
-                    "live_capture_disabled",
-                    "a live launch is only possible in controlled_capture mode")
-            if not authorization_id:
-                raise CampaignRefusal(
-                    "launch_authorization",
-                    "a live launch requires a launch authorization")
-            record = (state.get("launch_authorizations") or {}).get(
-                str(authorization_id))
-            if not isinstance(record, dict):
-                raise CampaignRefusal("authorization_missing",
-                                      str(authorization_id))
-            owner = record.get("campaign_id")
-            if owner is not None and owner != state.get("campaign_id"):
-                raise CampaignRefusal(
-                    "authorization_campaign",
-                    f"{authorization_id} belongs to campaign {owner!r}, not "
-                    f"{state.get('campaign_id')!r}")
-            if record.get("state") not in ("authorized", "claimed"):
-                raise CampaignRefusal(
-                    "authorization_closed",
-                    f"{authorization_id} is {record.get('state')!r}")
-            if record.get("launch_claim"):
-                claimed = record["launch_claim"]
-                raise CampaignRefusal(
-                    "launch_already_claimed",
-                    f"{authorization_id} already authorized a launch at "
-                    f"{claimed.get('at')}")
-            claim = {"action": "eu4_launches", "at": now}
-            record["launch_claim"] = claim
-            record["state"] = "claimed"
-            state["history"].append({
-                "action": "claim_launch",
-                "outcome": "claimed",
-                "at": now,
-                "authorization": str(authorization_id),
-                "detail": "one-use eu4_launches entitlement consumed",
-                "evidence": evidence,
-            })
-            del state["history"][:-MAX_HISTORY]
-            self._write(state)
-        return dict(claim)
-
-    def complete(self, authorization_id: str, *, outcome: str = "ok",
-                 detail: str = "", evidence=None,
-                 now: float | None = None) -> dict:
-        """Record the verified outcome of one launch authorization.
-
-        A failed spawn keeps the consumed authorization: there is no refund,
-        because the process may have existed.
-        """
-        now = time.time() if now is None else now
-        if outcome not in ("ok", "failed"):
-            raise CampaignRefusal("invalid_outcome", outcome)
-        with self._locked():
-            state = self.state()
-            record = (state.get("launch_authorizations") or {}).get(
-                authorization_id)
-            if record is None:
-                raise CampaignRefusal("authorization_missing",
-                                      authorization_id)
-            if record.get("state") in ("completed", "failed", "abandoned"):
-                raise CampaignRefusal("authorization_closed",
-                                      f"{authorization_id} is "
-                                      f"{record.get('state')!r}")
-            record["state"] = ("completed" if outcome == "ok" else "failed")
-            record["completed_at"] = now
-            record["detail"] = (detail or "")[:500]
-            record["completion_evidence"] = evidence
-            state["history"].append({
-                "action": "complete",
-                "outcome": outcome,
-                "at": now,
-                "authorization": authorization_id,
-                "detail": (detail or "")[:500],
-                "evidence": evidence,
-            })
-            del state["history"][:-MAX_HISTORY]
-            self._write(state)
-        return state
-
-    def validate_authorization(self, authorization_id: str) -> bool:
-        """True when the identifier is an open authorization for a launch.
-
-        Read-only preflight only.  A launch must additionally call
-        :meth:`claim_launch`; this check never consumes the authorization.
-        """
-        if not authorization_id:
-            return False
-        try:
-            state = self.state()
-        except CampaignRefusal:
-            return False
-        record = (state.get("launch_authorizations") or {}).get(
-            str(authorization_id))
-        return isinstance(record, dict) and record.get("state") in (
-            "authorized", "claimed")
-
-    def abandon_stale(self, *, max_age_seconds: float,
-                      now: float | None = None) -> dict:
-        """Mark abandoned authorizations without restoring them.
-
-        An authorization older than ``max_age_seconds`` whose process never
-        reported an outcome is marked ``abandoned``; it is never reusable.
-        """
-        now = time.time() if now is None else now
-        with self._locked():
-            state = self.state()
-            changed = 0
-            for identifier, record in (
-                    state.get("launch_authorizations") or {}).items():
-                if record.get("state") not in ("authorized", "claimed"):
-                    continue
-                created = float(record.get("created_at") or now)
-                if now - created < float(max_age_seconds):
-                    continue
-                record["state"] = "abandoned"
-                record["abandoned_at"] = now
-                changed += 1
-                state["history"].append({
-                    "action": "abandon",
-                    "outcome": "abandoned",
-                    "at": now,
-                    "authorization": identifier,
-                    "detail": "authorization exceeded its maximum age; it is "
-                              "not reusable",
-                    "evidence": None,
-                })
-            if changed:
-                del state["history"][:-MAX_HISTORY]
-                self._write(state)
-        return state
-
-    # -- stop -----------------------------------------------------------
     def stop(self, reason: str, detail: str = "") -> dict:
         if reason not in STOP_REASONS:
             raise CampaignRefusal("unknown_stop_reason", reason)
@@ -584,19 +325,6 @@ class Guard:
 
     def status(self) -> dict:
         state = self.state()
-        counts: dict[str, int] = {}
-        open_rows = []
-        for identifier, record in (
-                state.get("launch_authorizations") or {}).items():
-            name = str(record.get("state"))
-            counts[name] = counts.get(name, 0) + 1
-            if name in ("authorized", "claimed"):
-                open_rows.append({
-                    "authorization": identifier,
-                    "state": name,
-                    "created_at": record.get("created_at"),
-                    "launch_claimed": bool(record.get("launch_claim")),
-                })
         return {
             "schema": SCHEMA,
             "campaign_id": state.get("campaign_id"),
@@ -609,8 +337,6 @@ class Guard:
                 max(0.0, float(state["deadline_epoch"]) - time.time())),
             "auto_merge": state.get("auto_merge"),
             "worktree": state.get("worktree"),
-            "authorization_counts": counts,
-            "open_authorizations": open_rows,
             "history_count": len(state.get("history") or []),
         }
 
@@ -660,21 +386,6 @@ def from_env() -> Guard | None:
     return marker
 
 
-def refuse_unmanaged_launch(operation: str) -> None:
-    """Refuse a launch from a tool that is not the campaign capture path.
-
-    The legacy benchmark drivers acquire the host lease themselves and never
-    claim a campaign authorization, so they must not act while a campaign is
-    active: otherwise a campaign could escape to live capture by invoking a
-    lower-level command instead of ``automation.gfx_frame capture``.
-    """
-    if from_env() is not None:
-        raise CampaignRefusal(
-            "launch_authorization",
-            f"{operation} is not the campaign capture path; use "
-            "automation.gfx_frame capture so the launch is authorized")
-
-
 def require_active_from_env() -> Guard | None:
     """Refuse an expensive action when the active campaign is stopped.
 
@@ -687,53 +398,15 @@ def require_active_from_env() -> Guard | None:
     return guard
 
 
-def require_launch_authorization(authorization: str | None = None,
-                                 guard: "Guard | None" = None) -> None:
-    """Refuse an EU4 spawn that does not hold an open launch authorization.
-
-    Both launch choke points call this read-only preflight, so an alternative
-    tool cannot spend an unauthorized launch.  The one-use entitlement is
-    consumed separately by :func:`claim_launch_authorization` immediately before
-    process creation.
-    """
+def require_live_campaign(guard: Guard | None = None) -> Guard | None:
+    """Apply the active campaign's mode and deadline at a live launch boundary."""
     guard = guard if guard is not None else from_env()
-    if guard is None:
-        return
-    # Refuse a stopped/expired/conflicting campaign before any caller spends
-    # preflight or build work, not only at the final atomic claim.
-    guard.require()
-    state = guard.state()
-    if state.get("mode") != MODE_CONTROLLED:
-        raise CampaignRefusal(
-            "live_capture_disabled",
-            "a live launch is only possible in controlled_capture mode")
-    if not guard.validate_authorization(_launch_token(authorization)):
-        raise CampaignRefusal(
-            "launch_authorization",
-            "this campaign requires an open EU4 launch authorization; start the "
-            "capture through automation.gfx_frame capture")
-
-
-def claim_launch_authorization(authorization: str | None = None,
-                               guard: "Guard | None" = None,
-                               evidence=None) -> dict | None:
-    """Atomically claim the one-use EU4 launch entitlement, just before spawn.
-
-    Returns ``None`` when no campaign is active.  Otherwise the claim is
-    persisted before the caller is allowed to create the process; refusal means
-    no process may be created.
-    """
-    guard = guard if guard is not None else from_env()
-    if guard is None:
-        return None
-    return guard.claim_launch(_launch_token(authorization), evidence=evidence)
-
-
-def _launch_token(authorization: str | None) -> str:
-    if authorization is not None:
-        return authorization
-    return (os.environ.get("EU4_CAMPAIGN_AUTHORIZATION")
-            or os.environ.get("EU4_CAMPAIGN_RESERVATION") or "").strip()
+    if guard is not None:
+        guard.require()
+        if guard.state().get("mode") != MODE_CONTROLLED:
+            raise CampaignRefusal("live_capture_disabled",
+                                  "the active campaign is offline")
+    return guard
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -759,21 +432,10 @@ def _parser() -> argparse.ArgumentParser:
     ensure.add_argument("--objective-digest", default=None)
     ensure.add_argument("--deadline-seconds", type=float, default=None,
                         help="operator unattended allowance, starting at launch")
-    command = common("authorize-launch")
-    command.add_argument("--evidence", default=None)
-    command = common("claim-launch")
-    command.add_argument("--authorization", required=True)
-    command.add_argument("--evidence", default=None)
-    command = common("complete")
-    command.add_argument("--authorization", required=True)
-    command.add_argument("--outcome", default="ok", choices=("ok", "failed"))
-    command.add_argument("--detail", default="")
     command = common("status")
     stop = common("stop")
     stop.add_argument("--reason", required=True, choices=STOP_REASONS)
     stop.add_argument("--detail", default="")
-    command = common("abandon-stale")
-    command.add_argument("--max-age-seconds", type=float, required=True)
     command = common("activate")
     command = common("deactivate")
     command = common("resume")
@@ -790,30 +452,14 @@ def main(argv: list[str] | None = None) -> int:
                 campaign_id=args.campaign_id, mode=args.mode,
                 worktree=args.worktree,
                 objective_digest=args.objective_digest,
-                admin_token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN") or None,
                 deadline_seconds=args.deadline_seconds)
         elif args.operation == "ensure":
             value = guard.ensure(
                 campaign_id=args.campaign_id, mode=args.mode,
                 worktree=args.worktree,
                 objective_digest=args.objective_digest,
-                admin_token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN") or None,
                 deadline_seconds=args.deadline_seconds)
-        elif args.operation == "authorize-launch":
-            value = {"ok": True, "authorization": guard.authorize_launch(
-                evidence=args.evidence,
-                operator_token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN")
-                or None)}
-        elif args.operation == "claim-launch":
-            value = guard.claim_launch(args.authorization,
-                                       evidence=args.evidence)
-        elif args.operation == "complete":
-            value = guard.complete(args.authorization, outcome=args.outcome,
-                                   detail=args.detail)
         elif args.operation == "status":
-            value = guard.status()
-        elif args.operation == "abandon-stale":
-            guard.abandon_stale(max_age_seconds=args.max_age_seconds)
             value = guard.status()
         elif args.operation == "activate":
             value = guard.activate()

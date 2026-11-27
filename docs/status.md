@@ -10,8 +10,7 @@ Operational commands live in [profiler and benchmark operations](reference/profi
   DSH, worker isolation and protected Metal scopes. All nine signed case
   receipts and artifact inventories verified. Eight requirements met policy.
   [R3 draft and verification](https://github.com/HagbardCel/eu4-mac-perf/pull/305)
-- The authentic selected draw still needs the operator-issued one-use launch
-  ID and a complete original seal. [Prepared capture and scope](../plans/repository-refactor/r3-capture-preparation.md)
+- The authentic selected draw still needs a complete original seal. [Prepared capture and scope](../plans/repository-refactor/r3-capture-preparation.md)
 - November 14 passes as a retained raw-pair diagnostic. The original
   complete-manifest bytes remain unavailable and the digest remains
   recorded. [Approved retention disposition](../plans/repository-refactor/r3-consolidation.md#november-14-approved-retention-disposition)

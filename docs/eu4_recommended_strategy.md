@@ -67,7 +67,8 @@ functionality. Aim for a nonpositive enabling change and review any exception
 explicitly. Pure moves carry no reduction credit. [Refactoring plan](../plans/repository-refactor/approved-plan.md)
 
 The repository owns scientific methodology, protected qualification and
-minimal safety enforcement. OpenCode remains the supported transitional
+minimal safety enforcement. Development capture and replay tools run directly
+under operational safeguards. DSH owns constraints on unattended campaigns. OpenCode remains the supported transitional
 campaign runtime. Native DSH owns autonomous continuation in the permanent
 target and already operates explicitly authorized DSH experiments. The
 permanent default is a two-hour autonomous session with recoverable native

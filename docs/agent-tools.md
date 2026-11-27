@@ -189,7 +189,7 @@ python3 -m automation.agent_tools eu4_capture frames --run <session-dir> --frame
 python3 -m automation.agent_tools eu4_capture frames --run <session-dir> --frame 74 --full
 python3 -m automation.agent_tools eu4_capture request --run <session-dir> --role candidate --frame 42
 python3 -m automation.agent_tools eu4_capture probe --checkpoint after-present \
-  --output <dir> --campaign-run-root <authorized-root>
+  --output <dir>
 python3 -m automation.agent_tools eu4_capture gl-control --run <capture-root>
 python3 -m automation.agent_tools eu4_capture gl-control-qualify \
   --live-image <sealed-checkpoint.bgra> --control-image <control.bgra> \

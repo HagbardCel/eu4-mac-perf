@@ -1202,7 +1202,7 @@ def run_campaign(
     scenario: dict,
     *,
     run_root: Path,
-    ledger_path: Path,
+    ledger_path: Path | None = None,
     shader_cache: Path | None,
     qualified_sources: Path | None,
     mode: str | None = None,
@@ -1221,7 +1221,7 @@ def run_campaign(
 ) -> dict:
     scenario, launch_provenance = _effective_scenario(scenario)
     run_root = Path(run_root).expanduser().resolve()
-    ledger_path = Path(ledger_path).expanduser().resolve()
+    ledger_path = Path(ledger_path).expanduser().resolve() if ledger_path else None
     shader_cache = Path(shader_cache).expanduser().resolve() if shader_cache else None
     qualified_sources = (
         Path(qualified_sources).expanduser().resolve() if qualified_sources else None
@@ -1241,7 +1241,7 @@ def run_campaign(
 
     session = gfx_session.Session.create(
         Path(run_root),
-        workflow_id=str(Path(ledger_path).stem),
+        workflow_id=ledger_path.stem if ledger_path else "dual-run",
         profile=wait_profile.name,
         scenario_digest=scenario["digest"],
         session_root_path=session_root,
@@ -1299,19 +1299,20 @@ def run_campaign(
     flight = gfx_flight.FlightRecorder(max_frames=min(256, max(16, max_frames)),
                                        max_events=512)
     try:
-        tokens = launch_ledger.claim_many(
-            ledger_path,
-            campaign_id="dual-run",
-            run_root=session.run_dir,
-            outputs=[session.run_dir / "reference", session.run_dir / "candidate"],
-            targets=["frame"],
-            requested_timeout=float(scenario["observation"]["max_runtime_seconds"]),
-            executable_sha256=identity["executable_sha256"],
-            executable_path=identity["executable"],
-            require_pinned=True,
-            roles=["reference", "candidate"],
-        )
-        result["ledger"] = {"tokens": tokens, "claimed": 2}
+        if ledger_path is not None:
+            tokens = launch_ledger.claim_many(
+                ledger_path,
+                campaign_id="dual-run",
+                run_root=session.run_dir,
+                outputs=[session.run_dir / "reference", session.run_dir / "candidate"],
+                targets=["frame"],
+                requested_timeout=float(scenario["observation"]["max_runtime_seconds"]),
+                executable_sha256=identity["executable_sha256"],
+                executable_path=identity["executable"],
+                require_pinned=True,
+                roles=["reference", "candidate"],
+            )
+            result["ledger"] = {"tokens": tokens, "claimed": 2}
         libraries = gfx_launch.build_libraries()
         result["build"] = {
             "reference_library": str(libraries["reference"]),
@@ -1377,7 +1378,7 @@ def run_campaign(
         prelaunched_ref_stream = None
         launched["reference"] = gfx_launch.spawn(
             "reference", config, session.run_dir / "reference",
-            lease=lease, session=session, token=tokens[0], libraries=libraries,
+            lease=lease, session=session, token=tokens[0] if tokens else "", libraries=libraries,
             backend=scenario.get("reference_backend", "opengl"),
         )
         if background and display_qualified is not None:
@@ -1385,8 +1386,9 @@ def run_campaign(
                 launched["reference"].process.pid, display_qualified.display,
                 window_size,
             ).start()
-        launch_ledger.start(ledger_path, launched["reference"].token,
-                            launched["reference"].process.pid)
+        if ledger_path is not None:
+            launch_ledger.start(ledger_path, launched["reference"].token,
+                                launched["reference"].process.pid)
         result["processes"]["reference"] = launched["reference"].as_dict()
         if staggered:
             # Let the (slower) reference reach the target scene before starting
@@ -1424,7 +1426,7 @@ def run_campaign(
                 raise _Finished()
         launched["candidate"] = gfx_launch.spawn(
             "candidate", config, session.run_dir / "candidate",
-            lease=lease, session=session, token=tokens[1], libraries=libraries,
+            lease=lease, session=session, token=tokens[1] if tokens else "", libraries=libraries,
             backend=scenario.get("candidate_backend", "metal"),
         )
         if background and display_qualified is not None:
@@ -1432,8 +1434,9 @@ def run_campaign(
                 launched["candidate"].process.pid, display_qualified.display,
                 window_size,
             ).start()
-        launch_ledger.start(ledger_path, launched["candidate"].token,
-                            launched["candidate"].process.pid)
+        if ledger_path is not None:
+            launch_ledger.start(ledger_path, launched["candidate"].token,
+                                launched["candidate"].process.pid)
         result["processes"]["candidate"] = launched["candidate"].as_dict()
         incremental = {
             role: gfx_diagnostics.IncrementalHealth(item.run_dir, health)
@@ -2082,25 +2085,26 @@ def run_campaign(
         if lease is not None:
             attempt("release-lease", lambda: lease.release())
             lease = None
-        finished_tokens = set()
-        for role, item in list(launched.items()):
-            def finish_item(item=item):
-                # A campaign that stopped on a confirmed difference still ran
-                # to its configured termination; its launch is not a failure.
-                ledger_status = (
-                    "completed"
-                    if result.get("result") in ("completed", "stopped")
-                    else "failed"
-                )
-                launch_ledger.finish(ledger_path, item.token, pid=item.process.pid,
-                                     status=ledger_status)
-                finished_tokens.add(item.token)
-            attempt(f"finish-ledger-{role}", finish_item)
-        for token in tokens:
-            if token not in finished_tokens:
-                attempt(f"finish-unstarted-{token}",
-                        lambda token=token: launch_ledger.finish(
-                            ledger_path, token, pid=None, status="failed"))
+        if ledger_path is not None:
+            finished_tokens = set()
+            for role, item in list(launched.items()):
+                def finish_item(item=item):
+                    # A campaign that stopped on a confirmed difference still ran
+                    # to its configured termination; its launch is not a failure.
+                    ledger_status = (
+                        "completed"
+                        if result.get("result") in ("completed", "stopped")
+                        else "failed"
+                    )
+                    launch_ledger.finish(ledger_path, item.token, pid=item.process.pid,
+                                         status=ledger_status)
+                    finished_tokens.add(item.token)
+                attempt(f"finish-ledger-{role}", finish_item)
+            for token in tokens:
+                if token not in finished_tokens:
+                    attempt(f"finish-unstarted-{token}",
+                            lambda token=token: launch_ledger.finish(
+                                ledger_path, token, pid=None, status="failed"))
         attempt("write-artifact-manifest", lambda: result.update({
             "artifact_manifest": str(store.write_manifest()),
             "artifacts": store.summary(),
@@ -2153,7 +2157,7 @@ def _parser():
     run = sub.add_parser("run", help="start and supervise a dual-process campaign")
     run.add_argument("--scenario", required=True, type=Path)
     run.add_argument("--run-root", required=True, type=Path)
-    run.add_argument("--ledger", required=True, type=Path)
+    run.add_argument("--ledger", type=Path, help="account against an existing workflow budget")
     run.add_argument("--shader-cache", type=Path, default=None)
     run.add_argument("--qualified-sources", type=Path,
                      default=ROOT / "analysis" / "gfx-shader" / "v0" / "qualified-sources.json")

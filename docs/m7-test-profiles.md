@@ -79,9 +79,8 @@ Rules:
 - `EU4_LIVE_CASE` must name an already-captured case that passes
   `gfx_replay_case.verify()` and is independently reproducible. A path with a
   `case.json` is not sufficient. The module does not launch EU4 by itself.
-- A real launch still needs its operator authorization/ledger and the existing
-  capture timeout/cleanup/artifact retention. `EU4_TEST_PROFILE=live` only
-  removes the offline refusal; it is not authorization.
+- A real launch uses a bounded timeout, the host lease and owned-process
+  cleanup. The live profile permits deliberate live tests.
 - Live evidence is never promoted into the offline gate and is never run by CI.
 
 ## CI

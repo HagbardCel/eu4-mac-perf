@@ -123,7 +123,6 @@ export function buildArgs(tool, args = {}) {
     add('--checkpoint', 'checkpoint')
     add('--occurrence', 'occurrence')
     add('--output', 'output')
-    add('--campaign-run-root', 'campaign_run_root')
     add('--caller-rva', 'caller_rva')
     add('--shader-cache', 'shader_cache')
     add('--timeout', 'timeout')

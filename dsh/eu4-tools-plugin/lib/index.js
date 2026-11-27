@@ -144,7 +144,6 @@ export function definitions(run) {
         checkpoint: string('probe checkpoint'),
         occurrence: integer('probe occurrence'),
         output: string('probe output directory'),
-        campaign_run_root: string('authorized campaign run root for probe'),
         caller_rva: string('probe caller RVA'),
         shader_cache: string('shader-cache JSON file for probe'),
         timeout: { type: 'number', description: 'probe timeout seconds' },
@@ -154,11 +153,11 @@ export function definitions(run) {
     ),
     tool(
       'eu4_diff_run',
-      'Start and supervise a dual-process OpenGL-vs-Metal differential campaign from a validated scenario and an authorized ledger.',
+      'Start and supervise a dual-process OpenGL-vs-Metal differential campaign from a validated scenario.',
       {
         scenario: string('scenario JSON path'),
         run_root: string('campaign run root'),
-        ledger: string('authoritative workflow ledger'),
+        ledger: string('optional workflow budget ledger'),
         shader_cache: string('Metal shader-cache JSON file'),
         qualified_sources: string('qualified shader sources JSON'),
         mode: { type: 'string', enum: ['streaming', 'lockstep'], description: 'synchronization mode' },
