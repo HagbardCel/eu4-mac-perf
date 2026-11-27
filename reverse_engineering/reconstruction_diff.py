@@ -663,7 +663,7 @@ def validate_reference(reference: dict[str, Any],
 def qualify_candidate(repo: Path, commit: str, directory: Path, reference_identity: dict, *,
                       previous: Path | None = None, public_key: bytes | None = None) -> dict:
     from automation import candidate_snapshot, dsh_receipts, native_build, qualification_sandbox
-    from automation.gfx_artifacts import sha256_bytes, sha256_file
+    from automation.gfx_artifacts import sha256_file
 
     import platform
 
@@ -683,14 +683,9 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, reference_identi
         return {"verdict": "invalid_provenance", "problems": problems}
 
     compiler, sdk = native_build.qualification_toolchain("clang++")
-    harness_sources = (FUNCTION_DIR / "reconstruction/harness.cpp",
-                       FUNCTION_DIR / "reconstruction/arith_literals.cpp")
-    harness_inputs = directory / "harness"
-    harness_inputs.mkdir()
-    for source in harness_sources:
-        body = source.read_bytes()
-        (harness_inputs / source.name).write_bytes(body)
-        closure[str(source.relative_to(repo))] = sha256_bytes(body)
+    harness_sources = tuple((FUNCTION_DIR / "reconstruction" / name).relative_to(repo).as_posix()
+                            for name in ("harness.cpp", "arith_literals.cpp"))
+    candidate_snapshot.stage_trusted_sources(repo, candidate, harness_sources, closure)
     build = directory / "build"
     build.mkdir()
     executable = build / "function-oracle"
@@ -698,8 +693,8 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, reference_identi
              "-fsanitize=undefined", "-fno-sanitize-recover=all")
     linked = native_build.qualification_compile(
         compiler, sdk, [*flags, "-I", (candidate / sources[0]).parent, candidate / sources[0],
-                        *(harness_inputs / item.name for item in harness_sources), "-o", executable],
-        build=build, readable=(candidate, harness_inputs))
+                        *(candidate / item for item in harness_sources), "-o", executable],
+        build=build, readable=(candidate,))
     if linked.returncode:
         return {"verdict": "execution_failure",
                 "problems": [f"function compiler exit {linked.returncode}: "

@@ -173,10 +173,8 @@ def qualify_candidate(commit: str, directory: Path, original: Path, reference: d
         path.relative_to(ROOT).as_posix() for path in HEADERS if path.is_file()})
     closure = candidate_snapshot.materialize_commit(ROOT, commit, snapshot, tuple(paths))
     harness_name = HOST_SOURCE.relative_to(ROOT).as_posix()
+    candidate_snapshot.stage_trusted_sources(ROOT, snapshot, (harness_name,), closure)
     harness = snapshot / harness_name
-    harness.parent.mkdir(parents=True)
-    harness.write_bytes(HOST_SOURCE.read_bytes())
-    closure[harness_name] = _sha(harness)
     compiler, sdk = native_build.qualification_toolchain("clang")
     build = directory / "build"
     build.mkdir()
