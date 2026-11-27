@@ -165,6 +165,12 @@ int main(int argc, char **argv) {
                     with self.subTest(profile=profile):
                         probe = qualification_sandbox.run(arguments, writable=worker, graphics=profile)
                         self.assertEqual(probe.returncode, 0, probe.stderr)
+                translated = root / "probe-x86_64"
+                subprocess.run([compiler, "-arch", "x86_64", "-isysroot", sdk, code,
+                                "-o", translated], check=True, timeout=30)
+                probe = qualification_sandbox.run(
+                    [translated, *arguments[1:]], writable=worker, graphics="gl", translated=True)
+                self.assertEqual(probe.returncode, 0, probe.stderr)
             self.assertTrue(all(path.read_bytes() == b"protected" for path in protected))
 
             pid_file = worker / "descendant"
@@ -245,7 +251,7 @@ int main(int argc, char **argv) {
             result = gfx_gl_control_qualification.qualify_candidate(
                 repo, state.trusted_git(repo, "rev-parse", "HEAD").strip(), stage,
                 Path(restricted["path"]), blobs / "expected",
-                {"architecture": "arm64", "package_sha256": restricted["package_sha256"],
+                {"architecture": "x86_64", "package_sha256": restricted["package_sha256"],
                  "expected_sha256": expected["sha256"], "gl": {}})
             self.assertEqual(result["verdict"], "exact", {
                 key: result.get(key) for key in ("problems", "earliest_observed_divergence")})
@@ -273,7 +279,7 @@ int main(int argc, char **argv) {
                 result = gfx_gl_control_qualification.qualify_candidate(
                     repo, state.trusted_git(repo, "rev-parse", "HEAD").strip(), sequence,
                     Path(restricted["path"]), blobs / "expected",
-                    {"architecture": "arm64", "package_sha256": restricted["package_sha256"],
+                    {"architecture": "x86_64", "package_sha256": restricted["package_sha256"],
                      "expected_sha256": expected["sha256"], "gl": {}, "repeat_count": 2})
             self.assertEqual(result["verdict"], "different", result.get("problems"))
             self.assertEqual(result["scope"]["transitions"], 2)

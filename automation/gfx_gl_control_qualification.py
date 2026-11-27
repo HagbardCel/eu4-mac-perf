@@ -1505,16 +1505,26 @@ def preflight_reference(frame_dir: Path, trace: dict, seal: dict, trusted: dict,
         if history.get("status") == "invalid":
             return {"verdict": "invalid_provenance", "scope": scope,
                     "problems": history.get("reasons") or ["invalid texture history"]}
-        read = _event(events, checkpoint_id) or {}
+        reads = ([_event(events, checkpoint_id) or {}] if "checkpoint" in selection else
+                 [event for event in events
+                  if type(event.get("index")) is int and event["index"] > draw_id])
         fetched = [
-            level for texture in read.get("textures") or []
+            (read["index"], level) for read in reads for texture in read.get("textures") or []
             if texture.get("name") == attachment["name"]
             for level in texture.get("levels") or [] if level.get("level") == 0]
         if len(fetched) != 1:
             missing.append("unique later readback of the selected original subresource")
         elif history.get("status") != "verified":
+            scope["later_readback"] = fetched[0][0]
             missing.append("sealed texture lifecycle between production and later readback")
         else:
+            scope["later_readback"] = fetched[0][0]
+            name = str(attachment["name"])
+            changes = [*history.get("delete_events", {}).get(name, []),
+                       *history.get("mutation_events", {}).get(name, []),
+                       *(producer["event"] for producer in producers)]
+            if any(draw_id < event <= fetched[0][0] for event in changes):
+                missing.append("later readback crosses an attachment write or lifetime change")
             # A later sampled texture inventory lacks an authenticated
             # immediate observation and freshness witness for this contract.
             missing.append("authenticated freshness and lifetime of the later readback")
@@ -1832,7 +1842,8 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, package: Path, e
         with launch_lease.gpu_execution():
             observed = qualification_sandbox.run(
                 [executable, mode, width, height, "--control", control, "--out", work],
-                writable=work, readable=(package, control), graphics="gl")
+                writable=work, readable=(package, control), graphics="gl",
+                translated=target == "x86_64")
         allowed = {"execution.json", "result.bgra", "observed-context.txt",
                    "depth-after.f32", "stencil-after.u8"}
         allowed.update(f"observed-{n}-{phase}.bgra" for n, phase in order)

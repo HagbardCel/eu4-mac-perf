@@ -15,7 +15,8 @@ from automation import campaign_guard
 
 def run(command, *, writable: Path, readable=(), tools=(), timeout: float = 60,
         input: str | None = None, graphics: str | None = None,
-        original_executable: tuple[str, str] | None = None) -> subprocess.CompletedProcess:
+        original_executable: tuple[str, str] | None = None,
+        translated: bool = False) -> subprocess.CompletedProcess:
     """Supervise one Seatbelt job. Compiler subprocesses inherit the fence."""
     command = [str(arg) for arg in command]
     program = Path(command[0])
@@ -43,6 +44,14 @@ def run(command, *, writable: Path, readable=(), tools=(), timeout: float = 60,
         profile.append(f"(allow process-exec* file-read* file-map-executable (literal {json.dumps(tool)}))")
     if tools:
         profile.append("(allow process-fork)")
+    if translated:
+        profile.extend([
+            '(allow system-fcntl (fcntl-command 104))',  # F_ADDFILESUPPL for Rosetta AOT signatures.
+            "(allow dynamic-code-generation)",  # Rosetta translates remaining x86 code in memory.
+            '(allow file-read* file-map-executable (subpath "/private/var/db/oah") '
+            '(literal "/Library/Apple/usr/libexec/oah/libRosettaRuntime"))',
+            '(allow mach-lookup (global-name "com.apple.oahd"))',
+        ])
     if graphics is not None:
         profile.extend([
             '(import "system.sb")',
