@@ -178,3 +178,42 @@ existing enabling ledger and assign recorder/comparison behavior separately,
 with moved source counted once. This reporting leaves documentation at −98 LOC.
 The R3 enabling deviation is **269 lines above the −200 target** and remains
 pending explicit review. The cumulative repository target remains in force.
+
+## Final protected qualification
+
+Governed DSH satisfied nine of nine requirements at
+`165d431b93720660f71f02a603d0090796c81245`. The signed decision
+`655778deb1ffe65da4f05076927e4b6567330ca0b67c961da6d7fdffb30e63de`
+binds protected deployment `0a9ffde3f01a4e8c17d3e6e79ea5232542762a3ab4269054c37dd0a6008f9296`.
+The independent aggregate verifier checked all case signatures,
+revision and policy bindings, and referenced artifact bytes.
+
+| Protected requirement | Verified result | Case receipt digest |
+| --- | --- | --- |
+| Synthetic GL | Exact synthetic control | `32e95f303a8c0fc4bca268f5287a11849375dcfc0c355328745f73c71e22f1d2` |
+| `_GfxSetConstantBuffer` | Exact across all 414 emulated-original scenarios | `a9df93865b421ccd1d66b8a03ef462a6f63edb7ad2ec1ed76ee60f56891b4a44` |
+| M7 Metal | Exact prefix `[0, 0]` and verified event-1 difference | `ca7e41bf4c1536853c7381be244af765258ddaaf18ea82583df2e719f4edb0fe` |
+| M7 event-1 GL | Verified original evidence with unsupported execution scope | `f59c458774bd0d169b76cbfdddbaa4b426d2e3d5db753f19e0605a95252ff38e` |
+| M7 drawable | Missing drawable equivalence and lossless D32 observation | `98b5ac622a5f115e85ed40820fa468c69a34f6090b8e77c3afd0e224112e0a92` |
+| Selected authentic offscreen draw | Exact original comparison and independently verified draw omission | `13de4086dac102f0ca6bb951e8dbb37683a280abac0fdf1b2f10cc0f6edf876d` |
+| M6 Metal | Exact BGRA across 326 events | `0e87738f1eb28c127e8a6aaa831a27714fb35823459284388687a1d7d297b6c3` |
+| M5 sprite | Exact logical comparison, including zero alpha mismatches | `e7a3589cebd47e0ed3f2fdd7da70ed286d099da6c043c5c397d9d69a01a13a61` |
+| November 14 | Verified raw-pair comparison, 26,042 pixels over tolerance and max channel error 228 | `aaeed7fb743c7df32b3be5bb8664b0b3462bec7e8c5ff222fc5295731e218438` |
+
+[Original evidence, controls and scope](r3-capture-preparation.md#authenticated-selected-draw-qualification)
+
+The sampler capability correction and cache-hit regression add 32 scientific
+and 12 test lines after `627dcf1d`. The retained implementation measures
+**+69 enabling**, **+700 scientific**, **+296 protected policy**, and **+306
+test** lines relative to R2b. The original enabling target was **−200**.
+The **269-line** deviation remains in cumulative accounting and requires
+explicit approval. The documented migration and retirement conditions
+remain assigned to their existing owners.
+
+The final native offline run for the retained implementation is
+`20261127T232837Z-100bfe36`. Its result and portable CI are recorded in
+[PR #305](https://github.com/HagbardCel/eu4-mac-perf/pull/305). Subsequent
+reporting changes documentation only. Draft closure also requires
+independent review of the capture, applicable environment and trust boundary.
+
+Final documentation accounting is **+31 LOC** relative to R2b.

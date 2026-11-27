@@ -51,3 +51,9 @@ Indirect call instructions in the body: 2. An indirect site is not a resolved ca
   check returned `GL_INVALID_ENUM` in both runs. The qualifying continuity
   witness remains incomplete, including after correction of two invalid
   resolve-observer queries. [Original run identities and limits](../../../../../plans/repository-refactor/r3-capture-preparation.md#authoritative-capture-with-submission-diagnostics)
+- The independently qualified original transaction at caller `0xed7ba9`
+  uses one nonindexed `glDrawArrays(5, 0, 4)` on a single 864×558 RGBA8
+  texture attachment. The immutable candidate matched required linked
+  program state, inputs, target continuity and all post-draw color bytes.
+  A paired omission matched restoration, submitted zero draws and differed
+  at every attachment pixel. [Verified scope, original seal and receipts](../../../../../plans/repository-refactor/r3-capture-preparation.md#authenticated-selected-draw-qualification)

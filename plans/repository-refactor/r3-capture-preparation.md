@@ -245,3 +245,35 @@ Protected deployment pins its trusted package manifest SHA-256
 `2c8af5db28b51900628e7030c965041f8b152d8c3e64c788dd597823a45a8c99`
 and the original seal digest above. The package verifier checked 1,165
 files. The original frame manifest is independently bound by the seal.
+
+## Authenticated selected-draw qualification
+
+The governed DSH gate qualified candidate revision
+`165d431b93720660f71f02a603d0090796c81245`. Its x86-64 OpenGL executable SHA-256
+is `5cd712c9eb8430d8440c82eaf38f29d8db990f32cdaa45140e4a7f923ea5c1d1`.
+Both controls ran in legacy CGL on the same Apple GL implementation and
+applicable macOS build as the original. The fenced worker received the
+verified pre-state and input resources. The comparison read original
+post-draw bytes on the verifier side.
+
+The exact positive control matched the restored attachment and effective
+state, linked shaders, active attribute/vertex contents, uniforms, sampler
+and texture contents, applicable raster state and actual submission. Its
+BGRA8 post image differs from original at zero pixels, including alpha.
+The omission restores the same state and image, submits zero draws and
+leaves the attachment equal to the initial image. Its independent comparison
+against original found 482,112 differing pixels and 482,112 alpha differences.
+Both results apply to the single 864×558 level-0 attachment transaction.
+
+The authentic signed case receipt is
+`13de4086dac102f0ca6bb951e8dbb37683a280abac0fdf1b2f10cc0f6edf876d`.
+It binds worker receipt digests
+`c8452be715d11e59407ae48d55496ebf67a245a2a582f7ee53fb70f13dde471e` (draw)
+and `feb543b3a891db01ec2d73fc4268b6374e36d7d329fdd9fb15cc50271eebf7c3`
+(omission) and the worker observations, reports and image artifacts. The
+signed mandatory decision and case outputs are retained in
+`.local/r3-dsh-check/runs/qualification-91ywgd7m/`.
+
+An independently verified copy of the complete reference is retained under
+`.local/r3-original-evidence/` in the primary checkout. It has the same
+locator key, manifest and seal identities as the active deployment copy.

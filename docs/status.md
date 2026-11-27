@@ -5,15 +5,17 @@ Operational commands live in [profiler and benchmark operations](reference/profi
 
 ## Current capability and qualification
 
-- Draft verification at `f23bebbe` covered native synthetic controls,
-  ordered transitions, all 414 emulated-original function cases, governed
-  DSH, worker isolation and protected Metal scopes. All nine signed case
-  receipts and artifact inventories verified. Eight requirements met policy.
-  [R3 draft and verification](https://github.com/HagbardCel/eu4-mac-perf/pull/305)
-- Native original capture observed one selected `glDrawArrays(5, 0, 4)`
-  with matching contexts and attachment fields. An entry `GL_INVALID_ENUM`
-  persisted after the two resolve-observer fixes and prevents admitting the
-  seal. Authentic exact and omission qualification remain open. [Capture outcomes and scope](../plans/repository-refactor/r3-capture-preparation.md#authoritative-capture-with-submission-diagnostics)
+- The governed R3 gate at `165d431b` satisfied all nine protected
+  requirements. The aggregate verifier checked every case signature and
+  output artifact. The gate retains the 414 emulated-original function
+  scenarios, synthetic controls and established Metal scopes and diagnostics.
+  [R3 draft](https://github.com/HagbardCel/eu4-mac-perf/pull/305)
+- The original draw at caller `0xed7ba9` now has a verified seal and an exact
+  independently executed OpenGL result for its 864×558 RGBA8 level-0
+  attachment. The paired omission preserved initialization, submitted zero
+  draws and differed at every pixel. The result is scoped to that transaction
+  and its verified x86-64 legacy Apple GL environment.
+  [Scientific result and receipts](../plans/repository-refactor/r3-capture-preparation.md#authenticated-selected-draw-qualification)
 - November 14 passes as a retained raw-pair diagnostic. The original
   complete-manifest bytes remain unavailable and the digest remains
   recorded. [Approved retention disposition](../plans/repository-refactor/r3-consolidation.md#november-14-approved-retention-disposition)
