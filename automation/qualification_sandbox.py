@@ -14,7 +14,8 @@ from automation import campaign_guard
 
 
 def run(command, *, writable: Path, readable=(), tools=(), timeout: float = 60,
-        input: str | None = None, graphics: str | None = None) -> subprocess.CompletedProcess:
+        input: str | None = None, graphics: str | None = None,
+        original_executable: tuple[str, str] | None = None) -> subprocess.CompletedProcess:
     """Supervise one Seatbelt job. Compiler subprocesses inherit the fence."""
     command = [str(arg) for arg in command]
     program = Path(command[0])
@@ -72,6 +73,8 @@ def run(command, *, writable: Path, readable=(), tools=(), timeout: float = 60,
     env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "HOME": str(writable),
            "TMPDIR": str(writable) + "/", "EU4_TEST_PROFILE": "offline",
            "EU4_OFFLINE_ONLY": "1", "EU4_QUALIFICATION_WORKER": "1"}
+    if original_executable is not None:
+        env["EU4_GFX_EXPECTED_EXE"], env["EU4_GFX_EXECUTABLE_SHA256"] = original_executable
     campaign_guard.require_active_from_env()
     expires = time.monotonic() + timeout
     def interrupted(_number, _frame):

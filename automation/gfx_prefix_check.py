@@ -1224,6 +1224,135 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     return result
 
 
+def _build_fenced_candidate(repo: Path, trusted_revision: str, commit: str,
+                            directory: Path) -> tuple[Path, dict]:
+    """Build the Metal core from the candidate and the CLI from the trusted checkout."""
+    import platform
+
+    from automation import candidate_snapshot, native_build, qualification_sandbox
+
+    host = replay_host_dependencies
+    sources = host.candidate_sources(repo, trusted_revision)
+    closure = host.dependency_paths(repo, sources, strict=True)
+    entry_point = sources[1]
+    snapshot = directory / "sources"
+    digests = candidate_snapshot.materialize_commit(
+        repo, commit, snapshot, tuple(path for path in closure if path != entry_point))
+    entry = snapshot / entry_point
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_bytes((repo / entry_point).read_bytes())
+    digests[entry_point] = _sha256(entry)
+
+    clang, sdk = native_build.qualification_toolchain("clang")
+    build = directory / "build"
+    build.mkdir()
+    executable = build / "metal-replay"
+    flags = host.BUILD_FLAGS
+    linked = qualification_sandbox.run(
+        [clang, *flags, "-isysroot", sdk, "-o", executable,
+         *(snapshot / path for path in sources)],
+        writable=build, readable=(snapshot, sdk, clang.parent.parent),
+        tools=(clang.parent / "ld",), timeout=300)
+    if linked.returncode:
+        raise PrefixCheckError(f"Metal compiler exit {linked.returncode}: "
+                               + (linked.stderr or linked.stdout)[-2500:])
+    producer = {"revision": commit, "source_digests": digests,
+                "build": {"host_sha256": _sha256(executable)},
+                "architecture": platform.machine()}
+    return executable, producer
+
+
+def qualify_candidate(repo: Path, trusted_revision: str, commit: str, directory: Path,
+                      frame: Path, trusted: dict, case: dict) -> dict:
+    executable, producer = _build_fenced_candidate(repo, trusted_revision, commit, directory)
+    result = evaluate(
+        frame, trusted_root=trusted["_root"], trusted_execution=True,
+        require_end=case["require_end"], trusted_run_dir=directory,
+        fenced_host=(executable, producer))
+    observed = {row["event"]: row for row in result.get("events", [])
+                if row.get("status") in ("match", "divergent")
+                and row.get("independently_verified")}
+    exact_regressions = [event for event in case.get("preserve_exact", [])
+                         if observed.get(event, {}).get("status") != "match"]
+    if result.get("problems") or result.get("failed_execution"):
+        verdict = "execution_failure"
+    elif not result.get("independent_equality") or exact_regressions:
+        verdict = "regression"
+    elif result.get("qualified"):
+        verdict = "exact"
+    elif result.get("verdict") == "FIRST_DIVERGENCE":
+        verdict = "different"
+    else:
+        verdict = "unsupported"
+    event = result.get("first_divergence")
+    execution_dir = result.get("execution_dir")
+    evidence = (Path(execution_dir) / "metal" / "trusted-execution.json"
+                if execution_dir else None)
+    return {
+        "verdict": verdict, "evidence_tier": "original-eu4",
+        "execution": "completed" if result.get("independent_equality") else "failed",
+        "independently_verified": bool(result.get("independent_equality")),
+        "execution_receipt_sha256": _sha256(evidence) if evidence is not None else None,
+        "reference": case["reference"], "coverage": sorted(observed),
+        "candidate": producer, "scope": {"through": case["require_end"]},
+        "earliest_observed_divergence": observed.get(event),
+        "preserved_exact": [n for n in observed if observed[n]["status"] == "match"],
+        "execution_dir": (execution_dir
+                          or (result.get("failed_execution") or {}).get("execution_dir")),
+        "problems": result.get("problems", []) + [
+            f"previously exact event {required} is {observed.get(required, {}).get('status', 'unverified')}"
+            for required in exact_regressions],
+    }
+
+
+def qualify_full_frame(repo: Path, trusted_revision: str, commit: str, directory: Path,
+                       frame: Path, reference: dict) -> dict:
+    """Preserve the pre-seal M6 frame using its separately pinned file identities."""
+    from automation import dsh_receipts, m6_compare, qualification_sandbox
+
+    trace = m6_frame.load_trace(frame, verify_blobs=True)
+    identities = {"manifest_sha256": _sha256(frame / "frame-trace.json"),
+                  "event_stream_sha256": _sha256(frame / "frame-events.jsonl"),
+                  "image_sha256": trace["frame"]["reference_sha256"]}
+    if any(reference.get(key) != value for key, value in identities.items()):
+        return {"verdict": "invalid_provenance", "problems": ["M6 reference identity differs"]}
+    if len(trace["_events"]) != reference["event_count"]:
+        return {"verdict": "invalid_provenance", "problems": ["M6 original event coverage differs"]}
+    executable, producer = _build_fenced_candidate(repo, trusted_revision, commit, directory)
+    replay_input = directory / "inputs"
+    graph = gfx_frame_graph.build(frame, trace=trace)
+    inputs = m6_frame.materialize_replay_input(frame, trace, replay_input, graph=graph)
+    if inputs["shared_input_outputs"]:
+        return {"verdict": "invalid_provenance", "problems": ["M6 inputs overlap original outputs"]}
+    shaders = directory / "shaders"
+    m6_frame.translate_for_replay(frame, shaders, timeout=300)
+    output = directory / "metal"
+    output.mkdir()
+    command = m6_frame.replay_host_command(executable, frame=replay_input, shaders=shaders, out=output)
+    with launch_lease.gpu_execution():
+        run = qualification_sandbox.run(command, writable=output,
+                                        readable=(replay_input, shaders), graphics="metal", timeout=600)
+    allowed = {"metal-frame.bgra", "replay.json", "replay-provenance.jsonl"}
+    if run.returncode:
+        raise PrefixCheckError(f"fenced M6 worker failed: {run.stderr[-1500:]}")
+    outputs = dsh_receipts.worker_outputs(output, allowed, required=allowed, base=directory)
+    if _sha256(executable) != producer["build"]["host_sha256"]:
+        raise PrefixCheckError("M6 candidate executable changed")
+    output_record = _read_json(output / "replay.json")
+    if (output_record.get("frame") or {}).get("raw_file") != "metal-frame.bgra":
+        raise PrefixCheckError("M6 readback file identity differs")
+    report = m6_compare.compare(frame, output, _read_json(repo / "analysis/m6/comparison-policy.json"))
+    stats = report["statistics"]
+    exact = report["status"] == "pass" and stats["mismatched_pixels"] == 0
+    return {"verdict": "exact" if exact else "different", "evidence_tier": "original-eu4",
+            "execution": "completed", "independently_verified": True, "reference": identities,
+            "candidate": producer, "coverage": ["all-events-encoded", "exact-bgra"],
+            "scope": {"events": reference["event_count"], "channels": "BGRA"},
+            "outputs": outputs,
+            "earliest_observed_divergence": None if exact else {"phase": "final", "statistics": stats},
+            "problems": [] if exact else ["M6 final attachment differs"]}
+
+
 def _main(argv: list[str]) -> int:
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)

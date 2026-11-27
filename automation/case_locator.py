@@ -1141,6 +1141,44 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_sealed_reference(roots: list | None, reference: dict, workspace: Path):
+    from automation import gfx_prefix_check, m6_frame
+    from automation.state import outside_workspace
+
+    matches = []
+    if not isinstance(roots, list) or not roots:
+        return None, {"verdict": "missing_original_observation",
+                      "problems": ["operator evidence roots are unconfigured"]}
+    for root in roots:
+        root_path = outside_workspace(Path(root), workspace)
+        located = locate(root_path, key=reference["key"])
+        if located["state"] in ("root_unavailable", "unknown"):
+            continue
+        if located["state"] == "missing_payload":
+            return None, {"verdict": "missing_original_payload",
+                          "problems": [f"{root_path}: locator payload is missing"]}
+        if not located["safe_to_reuse"]:
+            return None, {"verdict": "invalid_provenance",
+                          "problems": [f"{root_path}: {located['state']}"]}
+        matches.extend(located["matches"])
+    if len(matches) != 1:
+        return None, {"verdict": "invalid_provenance" if matches else "missing_original_observation",
+                      "problems": ["trusted reference has no unique verified locator"]}
+    row = matches[0]
+    if any(row["identity"].get(key) != reference.get(key)
+           for key in ("manifest_sha256", "seal_sha256")):
+        return None, {"verdict": "invalid_provenance", "problems": ["locator identity differs"]}
+    root = outside_workspace(Path(row["resolved_path"]), workspace)
+    try:
+        frame, _ = gfx_prefix_check.trusted_frame_path(root, portable=True)
+        trusted = gfx_prefix_check.verify_trusted_evidence(root, frame)
+        trace = m6_frame.load_trace(frame)
+        seal = m6_frame.load_seal(frame, trace=trace, trusted_evidence=trusted)
+    except (OSError, ValueError, gfx_prefix_check.PrefixCheckError, m6_frame.FrameError) as exc:
+        return None, {"verdict": "invalid_provenance", "problems": [str(exc)]}
+    return (frame, trace, seal, trusted), None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:

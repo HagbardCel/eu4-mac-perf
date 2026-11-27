@@ -464,6 +464,33 @@ def compare_payloads(
     return result
 
 
+def verify_dual_run_reference(case: Path, reference: dict, comparison_policy: dict) -> dict:
+    """Recompare the historic original pair under its protected case identity."""
+    import json
+    from automation.gfx_artifacts import sha256_file
+
+    manifest = case / "manifest.json"
+    if sha256_file(manifest) != reference["manifest_sha256"]:
+        return {"verdict": "invalid_provenance",
+                "problems": ["restored November 14 case manifest differs from its protected identity"]}
+    originals = json.loads((case / "difference/statistics.json").read_text())["comparison"]
+    payloads = []
+    for role in ("reference", "candidate"):
+        raw = case / "frames" / f"{role}-frame-74.bgra"
+        if sha256_file(raw) != reference[f"{role}_sha256"]:
+            return {"verdict": "invalid_provenance", "problems": [f"November 14 {role} digest differs"]}
+        payloads.append(raw.read_bytes())
+    result = compare_payloads(
+        payloads[0], originals["reference"], payloads[1], originals["candidate"],
+        policy={**comparison_policy, "pixel_tolerance": comparison_policy["max_channel_error"]},
+        regions=comparison_policy["regions"])
+    if any(result[key] != originals[key] for key in ("regions", "statistics", "status", "pixel_verdict")):
+        return {"verdict": "regression", "problems": ["November 14 diagnostic comparison changed"]}
+    return {"verdict": "different", "execution": "completed", "independently_verified": True,
+            "coverage": ["nov14-raw-comparison"], "evidence_tier": "retained-original-pair",
+            "reference": reference, "scope": result["statistics"], "problems": []}
+
+
 # ---------------------------------------------------------------------------
 # Temporal frame diagnostics
 #

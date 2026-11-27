@@ -273,6 +273,7 @@ static struct {
     int gl_draw_buffer;
     int gl_read_buffer;
     char pre_image_json[2048];
+    uint64_t pre_image_call_id;
     int pre_image_valid;
     char seed_json[2048];
     int seed_width;
@@ -3029,6 +3030,12 @@ static int capture_target_pixels(const char *prefix, const char *member,
     GLint framebuffer = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
     GLint width = 0, height = 0;
+    GLint object_type = 0, object_name = 0, level = 0, internal_format = 0;
+    int selected_pre = g.prefix_caller != 0 && strcmp(member, "pre_image") == 0;
+    if (selected_pre && (framebuffer == 0 ||
+            glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)) {
+        return -1;
+    }
     if (framebuffer == 0) {
         GLint viewport[4] = {0, 0, 0, 0};
         glGetIntegerv(GL_VIEWPORT, viewport);
@@ -3042,7 +3049,6 @@ static int capture_target_pixels(const char *prefix, const char *member,
             height = viewport[3];
         }
     } else {
-        GLint object_type = 0, object_name = 0, level = 0;
         glGetFramebufferAttachmentParameteriv(
             GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
             GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &object_type);
@@ -3060,6 +3066,10 @@ static int capture_target_pixels(const char *prefix, const char *member,
                                      &width);
             glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT,
                                      &height);
+            if (selected_pre) {
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_INTERNAL_FORMAT,
+                                         &internal_format);
+            }
             glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
         } else {
             GLint previous_renderbuffer = 0;
@@ -3073,6 +3083,10 @@ static int capture_target_pixels(const char *prefix, const char *member,
         }
     }
     if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
+        return -1;
+    }
+    if (selected_pre && (object_type != GL_TEXTURE || object_name <= 0 || level != 0 ||
+                         internal_format != GL_RGBA8)) {
         return -1;
     }
     size_t bytes = (size_t)width * (size_t)height * 4;
@@ -3094,8 +3108,14 @@ static int capture_target_pixels(const char *prefix, const char *member,
     free(pixels);
     jprintf(out,
             "\"%s\":{\"width\":%d,\"height\":%d,\"file\":\"%s\","
-            "\"sha256\":\"%s\"}",
+            "\"sha256\":\"%s\"",
             member, width, height, blob_name, blob_sha);
+    if (selected_pre) {
+        jprintf(out, ",\"framebuffer\":%d,\"attachment\":%d,\"level\":%d,"
+                "\"internal_format\":%d,\"pixel_format\":\"BGRA8\",\"origin\":\"lower_left\"",
+                framebuffer, object_name, level, internal_format);
+    }
+    jprintf(out, "}");
     if (out_width != NULL) {
         *out_width = width;
     }
@@ -5974,6 +5994,10 @@ static int read_observation_pixels(uint32_t framebuffer, GLenum read_buffer,
     if (pixels == NULL) {
         return -1;
     }
+    if (g.prefix_caller != 0 && glGetError() != GL_NO_ERROR) {
+        free(pixels);
+        return -1;
+    }
     observation_readback_guard guard;
     begin_observation_readback(&guard, framebuffer, read_buffer, texture);
     if (texture != 0) {
@@ -5983,6 +6007,10 @@ static int read_observation_pixels(uint32_t framebuffer, GLenum read_buffer,
                      pixels);
     }
     end_observation_readback(&guard);
+    if (g.prefix_caller != 0 && glGetError() != GL_NO_ERROR) {
+        free(pixels);
+        return -1;
+    }
     *out_pixels = pixels;
     return 0;
 }
@@ -6652,6 +6680,28 @@ int eu4_gfx_frame_trace_test_observe(const char *directory, int event,
     snprintf(blobs, sizeof(blobs), "%s/blobs", g.dir);
     if (mkdir_p(blobs) != 0) {
         return -1;
+    }
+    if (strcmp(timing, "selected_pre_draw") == 0) {
+        char *json = NULL;
+        size_t size = 0;
+        FILE *memory = open_memstream(&json, &size);
+        if (memory == NULL) {
+            return -1;
+        }
+        uint64_t caller = g.prefix_caller;
+        g.prefix_caller = 1;
+        json_out out = {memory, 0};
+        jprintf(&out, "{");
+        int status = capture_target_pixels("pre", "pre_image", &out, NULL, NULL);
+        jprintf(&out, "}");
+        fclose(memory);
+        g.prefix_caller = caller;
+        int ok = status == 0 && !out.failed && out_record != NULL && size < out_size;
+        if (ok) {
+            memcpy(out_record, json, size + 1);
+        }
+        free(json);
+        return ok ? 0 : -1;
     }
     if (g.prefix_observations != NULL) {
         fclose(g.prefix_observations);
@@ -9390,26 +9440,32 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         g_pending.base_vertex = base_vertex;
     }
     if (g.armed && g.events != NULL) {
-        for (int i = 0; i < g.pre_post_count; i++) {
-            if (g.pre_post_callers[i] != call->caller_rva) {
-                continue;
-            }
+        int selected_pre = !g.test_only && g.prefix_caller != 0 &&
+                           g.prefix_caller == call->caller_rva;
+        int observe_pre = selected_pre;
+        for (int i = 0; i < g.pre_post_count && !observe_pre; i++) {
+            observe_pre = g.pre_post_callers[i] == call->caller_rva;
+        }
+        if (observe_pre) {
             char *pre_json = NULL;
             size_t pre_size = 0;
             FILE *pre_stream = open_memstream(&pre_json, &pre_size);
             if (pre_stream != NULL) {
                 json_out pre_out = {pre_stream, 0};
-                (void)capture_target_pixels("pre", "pre_image", &pre_out, NULL,
-                                            NULL);
+                int captured = capture_target_pixels("pre", "pre_image", &pre_out, NULL, NULL);
                 fclose(pre_stream);
-                if (!pre_out.failed && pre_json != NULL) {
-                    snprintf(g.pre_image_json, sizeof(g.pre_image_json), "%s",
-                             pre_json);
+                if (captured == 0 && !pre_out.failed && pre_json != NULL &&
+                    pre_size < sizeof(g.pre_image_json)) {
+                    snprintf(g.pre_image_json, sizeof(g.pre_image_json), "%s", pre_json);
                     g.pre_image_valid = 1;
+                    g.pre_image_call_id = call->call_id;
+                } else if (selected_pre) {
+                    fail_capture_locked("selected_pre_image_unavailable");
                 }
                 free(pre_json);
+            } else if (selected_pre) {
+                fail_capture_locked("selected_pre_image_unavailable");
             }
-            break;
         }
     }
     if (g.armed && g.events != NULL && !g.have_seed) {
@@ -9540,11 +9596,15 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 }
                 g.seed_emitted = 1;
             }
-            if (g.pre_image_valid) {
+            int selected_pre = g.prefix_caller != 0 && g.prefix_caller == call->caller_rva;
+            if (selected_pre && (!g.pre_image_valid || g.pre_image_call_id != call->call_id)) {
+                fail_capture_locked("selected_pre_image_unattached");
+            }
+            if (g.pre_image_valid && g.pre_image_call_id == call->call_id) {
                 jprintf(&out, ",%s", g.pre_image_json);
                 char *post_json = NULL;
                 size_t post_size = 0;
-                FILE *post_stream = open_memstream(&post_json, &post_size);
+                FILE *post_stream = selected_pre ? NULL : open_memstream(&post_json, &post_size);
                 if (post_stream != NULL) {
                     json_out post_out = {post_stream, 0};
                     (void)capture_target_pixels("post", "post_image", &post_out,

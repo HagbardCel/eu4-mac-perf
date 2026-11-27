@@ -441,8 +441,10 @@ candidate worktree. Set `EU4_QUALIFICATION_POLICY` to that document and
 `EU4_QUALIFICATION_POLICY_SHA256` to its approved SHA-256 in the trusted
 launcher environment. The policy names the approved validator revision,
 protected output root, evidence roots, and per-case exact, diagnostic or
-optional requirements. The DSH adapter takes the workspace from the session
-and imports the Python core from the configured trusted checkout.
+optional requirements. It binds `receipt_public_key` to the 32-byte Ed25519
+seed in the operator-owned file named by `receipt_signing_key`. The seed file
+must grant access to its owner only. The DSH adapter takes the workspace from
+the session and imports the Python core from the configured trusted checkout.
 
 ```sh
 python3.14 -m automation.agent_tools eu4_replay qualify \
@@ -454,17 +456,26 @@ report. Focused runs never qualify a revision. The validator writes execution
 receipts at their actual revisions. A function case can name a protected
 earlier receipt through `reuse_receipt`; the validator verifies applicability
 and referenced output bytes before the qualification record can link to it.
+The signed decision carries the digests of the case receipts. Missing named
+protected cases appear in `missing_protected_cases` and block mandatory
+qualification.
 
-The native candidate path supports the reviewed synthetic GL fixture and its
-draw-omission control. Authentic GL currently stops at reference preflight.
-The retained M7
-window draw lacks drawable equivalence and lossless depth. The event 273
-offscreen draw lacks sealed texture lifetime evidence for its later readback.
-These assessments do not qualify a candidate draw. For a separately
-authorized capture, use `m6_frame capture --seal --observe-caller <rva>
---observe-depth-stencil` with the established capture options. The sealed
-frame must contain one matching caller. Qualification verifies the shader
-identities and attachment contract against the selected workload.
+The selected-draw path accepts the reviewed synthetic fixture and verified
+original color-only RGBA8 texture attachments through the same candidate
+executor. It compares effective vertex data, float uniforms, relevant
+two-dimensional texture and sampler state, raster state, submission and
+pre/post attachment bytes. Other resource formats require further coverage.
+The GL candidate and observer share a native address space. Seatbelt protects
+the process boundary and the verifier's files. In-process manipulation by
+arbitrary hostile native code lies outside the observation trust boundary.
+
+The retained M7 window draw lacks drawable equivalence and lossless depth.
+The event 273 offscreen draw lacks sealed texture lifetime evidence for its
+later readback. A separately authorized
+`m6_frame capture --seal --observe-caller <rva> --observe-depth-stencil`
+records the uniquely selected caller's pre- and post-draw attachment.
+Qualification verifies its shader identities and attachment contract against
+the selected semantic workload. [R3 capture preparation](../plans/repository-refactor/r3-capture-preparation.md)
 
 ```sh
 # v1 single-frame and v2 ordered-prefix Strategy B cases are recognized by the

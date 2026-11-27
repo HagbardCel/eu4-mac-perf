@@ -15,6 +15,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from automation import gfx_ed25519
 from automation.state import atomic_write
 from automation.verification_manifest import (
     canonical_json,
@@ -24,6 +25,7 @@ from automation.verification_manifest import (
 )
 
 SCHEMA = "eu4-dsh-qualification/v1"
+REVISION_SCHEMA = "eu4-revision-qualification/v1"
 
 
 def tree_digest(root: Path) -> tuple[str, list[dict]]:
@@ -91,14 +93,77 @@ def write_identity(run_root: Path, value: dict) -> Path:
     return path
 
 
-def write_receipt(run_root: Path, receipt: dict) -> tuple[Path, dict]:
+def write_receipt(run_root: Path, receipt: dict, *, seed: bytes | None = None) -> tuple[Path, dict]:
     """Seal and store the one qualification record."""
     body = dict(receipt)
     body.pop("receipt_digest", None)
+    body.pop("signature", None)
+    if seed is not None:
+        body["signature"] = gfx_ed25519.sign(seed, canonical_json(body).encode()).hex()
     body["receipt_digest"] = digest_text(canonical_json(body))
     target = paths(run_root).qualification
     atomic_write(target, canonical_json(body))
     return target, body
+
+
+def worker_outputs(directory: Path, allowed, *, required=(), base: Path | None = None) -> list[dict]:
+    """Inventory a terminated worker's closed output set without following links."""
+    parents = {parent.as_posix() for name in allowed for parent in Path(name).parents}
+    records = {}
+    for path in sorted(directory.rglob("*")):
+        name = path.relative_to(directory).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"worker output is a symlink: {name}")
+        if path.is_dir() and name in parents:
+            continue
+        info = path.stat()
+        if name not in allowed or not path.is_file() or info.st_nlink != 1:
+            raise ValueError(f"unexpected worker output: {name}")
+        records[name] = {"file": path.relative_to(base or directory).as_posix(),
+                         "bytes": info.st_size, "sha256": digest_file(path)}
+    if missing := set(required) - records.keys():
+        raise ValueError(f"required worker outputs are absent: {sorted(missing)}")
+    return list(records.values())
+
+
+def authentic_receipt(receipt: dict, public_key: bytes) -> bool:
+    if verify_receipt_digest(receipt):
+        return False
+    try:
+        signature = bytes.fromhex(receipt["signature"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    body = {key: value for key, value in receipt.items()
+            if key not in ("receipt_digest", "signature")}
+    return gfx_ed25519.verify(public_key, canonical_json(body).encode(), signature)
+
+
+def applicable_execution(receipt_path: Path, binding: dict, public_key: bytes) -> dict | None:
+    """Verify a protected receipt and its outputs without relabeling it."""
+    try:
+        if (receipt_path.is_symlink() or not receipt_path.is_file()
+                or receipt_path.stat().st_nlink != 1):
+            return None
+        previous = read_json(receipt_path)
+        if (not isinstance(previous, dict) or previous.get("schema") != REVISION_SCHEMA
+                or previous.get("execution") != "completed"
+                or not authentic_receipt(previous, public_key)
+                or any(previous.get(key) != value for key, value in binding.items())):
+            return None
+        outputs = previous.get("outputs")
+        if not isinstance(outputs, list) or not outputs:
+            return None
+        for item in outputs:
+            name = item["file"]
+            if not name or Path(name).name != name or name in (".", ".."):
+                return None
+            path = receipt_path.parent / name
+            if (path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1
+                    or path.stat().st_size != item["bytes"] or digest_file(path) != item["sha256"]):
+                return None
+        return previous
+    except (KeyError, TypeError, ValueError, OSError):
+        return None
 
 
 def load_current_receipt(run_root: Path) -> dict | None:

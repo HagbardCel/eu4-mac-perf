@@ -20,6 +20,8 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from automation.state import trusted_git
+
 SCHEMA = "eu4-candidate-snapshot/v1"
 KINDS = ("add", "modify", "delete", "rename", "typechange")
 MODE_FILE = "100644"
@@ -245,7 +247,7 @@ def build_candidate(
 def materialize_commit(repo: Path, revision: str, destination: Path,
                        paths: tuple[str, ...]) -> dict[str, str]:
     """Stage only approved regular files from the pinned Git tree."""
-    entries = _git(repo, "--no-replace-objects", "ls-tree", "-z", revision, "--", *paths)
+    entries = trusted_git(repo, "ls-tree", "-z", revision, "--", *paths)
     files = {}
     for row in filter(None, entries.split("\0")):
         metadata, name = row.split("\t", 1)
@@ -258,9 +260,7 @@ def materialize_commit(repo: Path, revision: str, destination: Path,
     destination.mkdir()
     result = {}
     for name, object_id in files.items():
-        content = subprocess.check_output(
-            ["/usr/bin/git", "--no-replace-objects", "-C", str(repo),
-             "cat-file", "blob", object_id], timeout=60)
+        content = trusted_git(repo, "cat-file", "blob", object_id, text=False)
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)

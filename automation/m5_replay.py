@@ -138,6 +138,87 @@ def run_replay(reference_dir: Path, output: Path, *, force_build: bool = False) 
     }
 
 
+def qualify_candidate(commit: str, directory: Path, original: Path, reference: dict) -> dict:
+    """Run the production sprite encoder with the four protected pre-draw inputs."""
+    from automation import (candidate_snapshot, dsh_receipts, gfx_compare, launch_lease,
+                            native_build, qualification_sandbox)
+
+    manifest_path = ROOT / "analysis/m5/evidence-manifest.json"
+    if _sha(manifest_path) != reference["manifest_sha256"]:
+        raise ReplayError("M5 evidence manifest identity differs")
+    evidence = json.loads(manifest_path.read_text())
+    spec = evidence["reference"]
+    descriptor = original / spec["descriptor"]
+    if _sha(descriptor) != spec["descriptor_sha256"]:
+        raise ReplayError("M5 original descriptor identity differs")
+    inputs = directory / "inputs"
+    inputs.mkdir()
+    for key in ("vertex", "constant", "texture", "pre_draw"):
+        item = spec[key]
+        source = original / item["file"]
+        contents = source.read_bytes()
+        if len(contents) != item["bytes"] or _sha(source) != item["sha256"]:
+            raise ReplayError(f"M5 input {key} differs from its pinned identity")
+        if item["sha256"] == spec["raw"]["sha256"]:
+            raise ReplayError("M5 pre-draw input duplicates the protected output")
+        (inputs / source.name).write_bytes(contents)
+    original_capture = gfx_compare.from_gl_reference(descriptor)
+    policy_path = ROOT / evidence["policy"]["path"]
+    if _sha(policy_path) != evidence["policy"]["sha256"]:
+        raise ReplayError("M5 comparison policy differs from its pinned identity")
+
+    snapshot = directory / "sources"
+    relative = [path.relative_to(ROOT).as_posix() for path in SOURCES]
+    paths = sorted(set(relative) | {
+        path.relative_to(ROOT).as_posix() for path in HEADERS if path.is_file()})
+    closure = candidate_snapshot.materialize_commit(ROOT, commit, snapshot, tuple(paths))
+    harness_name = HOST_SOURCE.relative_to(ROOT).as_posix()
+    harness = snapshot / harness_name
+    harness.parent.mkdir(parents=True)
+    harness.write_bytes(HOST_SOURCE.read_bytes())
+    closure[harness_name] = _sha(harness)
+    compiler, sdk = native_build.qualification_toolchain("clang")
+    build = directory / "build"
+    build.mkdir()
+    executable = build / "sprite-replay"
+    flags = ("-arch", "arm64", "-O2", "-fobjc-arc", "-lc++", "-framework", "Foundation",
+             "-framework", "Metal", "-framework", "QuartzCore")
+    linked = qualification_sandbox.run(
+        [compiler, *flags, "-isysroot", sdk, "-I", snapshot / "benchmark", "-o", executable,
+         harness, *(snapshot / path for path in relative)], writable=build,
+        readable=(snapshot, sdk, compiler.parent.parent), tools=(compiler.parent / "ld",),
+        timeout=180)
+    if linked.returncode:
+        raise ReplayError(f"M5 candidate build failed: {(linked.stderr or linked.stdout)[-1800:]}")
+    expected_exe = json.loads(descriptor.read_text())["provenance"]
+    executable_digest = _sha(executable)
+    output = directory / "metal"
+    output.mkdir()
+    (output / "events").mkdir()
+    with launch_lease.gpu_execution():
+        completed = qualification_sandbox.run(
+            [executable, "--reference", inputs, "--out", output], writable=output,
+            readable=(inputs,), graphics="metal", timeout=180,
+            original_executable=(expected_exe["executable"], evidence["executable_sha256"]))
+    required = {"metal-logical.json", "metal-logical.bgra"}
+    allowed = required | {"events/create.json", "events/init.json", "events/shader-set-001.json"}
+    if completed.returncode or _sha(executable) != executable_digest:
+        raise ReplayError(f"M5 candidate execution failed: {(completed.stderr or completed.stdout)[-1800:]}")
+    outputs = dsh_receipts.worker_outputs(output, allowed, required=required, base=directory)
+    result_path = output / "metal-logical.json"
+    if json.loads(result_path.read_text())["capture"]["raw_file"] != "metal-logical.bgra":
+        raise ReplayError("M5 readback file identity differs")
+    report = gfx_compare.compare(original_capture, gfx_compare.from_metal_logical(result_path),
+                                 gfx_compare.load_policy(policy_path))
+    exact = report["status"] == "pass" and report["samples"]["mismatched_pixels"] == 0
+    return {"verdict": "exact" if exact else "different", "evidence_tier": "original-eu4",
+            "execution": "completed", "independently_verified": True,
+            "reference": reference, "coverage": ["sprite-logical-bgra"], "scope": report["samples"],
+            "candidate": {"source_digests": closure, "executable_sha256": executable_digest},
+            "outputs": outputs,
+            "problems": [] if exact else report["reasons"]}
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 

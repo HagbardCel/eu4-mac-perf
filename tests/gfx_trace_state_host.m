@@ -69,7 +69,8 @@ static GLuint make_texture_internal(GLenum internal, GLenum format,
 }
 
 static int record_blob_name(const char *record, char *out, size_t size) {
-    const char *key = "\"color\":{\"file\":\"";
+    const char *key = strstr(record, "\"pre_image\"") != NULL
+                          ? "\"file\":\"" : "\"color\":{\"file\":\"";
     const char *start = strstr(record, key);
     if (start == NULL) {
         return -1;
@@ -595,6 +596,50 @@ int main(int argc, char **argv) {
         obs_read_buffer_after != GL_COLOR_ATTACHMENT0 ||
         texture_binding != (GLint)b) {
         observation = 0;
+    }
+
+    /* Caller-selected readback uses a complete color-only FBO, a direct
+       pre-draw BGRA8 seed and a separate original RGBA8 post observation. */
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "selected_pre_draw", "draw", -1, record, sizeof(record)) != 0 ||
+        strstr(record, "\"pre_image\"") == NULL ||
+        strstr(record, "\"internal_format\":32856") == NULL ||
+        strstr(record, "\"pixel_format\":\"BGRA8\"") == NULL) {
+        observation = 0;
+        fprintf(stderr, "selected pre-draw readback: %s\n", record);
+    }
+    {
+        const uint8_t expected[4] = {0, 0, 255, 255};
+        if (record_blob_name(record, blob, sizeof(blob)) != 0 ||
+            !blob_equals(argv[1], blob, expected, sizeof(expected))) {
+            observation = 0;
+        }
+    }
+    glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "draw", -1, record, sizeof(record)) != 0 ||
+        strstr(record, "\"pixel_format\":\"RGBA8\"") == NULL ||
+        strstr(record, "\"depth_present\":false") == NULL ||
+        strstr(record, "\"stencil_present\":false") == NULL) {
+        observation = 0;
+        fprintf(stderr, "selected post-draw readback: %s\n", record);
+    }
+    {
+        const uint8_t expected[4] = {0, 0, 255, 255};
+        if (record_blob_name(record, blob, sizeof(blob)) != 0 ||
+            !blob_equals(argv[1], blob, expected, sizeof(expected))) {
+            observation = 0;
+        }
+    }
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_bound);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture_binding);
+    GLenum selected_error = glGetError();
+    if (pack_bound != (GLint)pack_buffer || texture_binding != (GLint)b ||
+        selected_error != GL_NO_ERROR) {
+        observation = 0;
+        fprintf(stderr, "selected readback state PBO=%d texture=%d GL error=0x%x\n",
+                pack_bound, texture_binding, selected_error);
     }
 
     /* RGB8 has no stored alpha; the readback is BGRA8 and alpha is out of

@@ -225,6 +225,19 @@ _GL_CLANG = "Apple clang version 21.0.0 (clang-2100.4.1.1)"
 _GL_SDK_BUILD = "26B118"
 
 
+def xcrun(*args: str) -> str:
+    return subprocess.check_output(
+        ["/usr/bin/xcrun", *args], env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+        text=True, timeout=60, stderr=subprocess.PIPE).strip()
+
+
+def qualification_toolchain(driver: str) -> tuple[Path, Path]:
+    compiler = Path(xcrun("--find", driver))
+    if not compiler.is_absolute() or not compiler.is_file():
+        raise ValueError("xcrun did not resolve an absolute native compiler")
+    return compiler, Path(xcrun("--sdk", "macosx", "--show-sdk-path")).resolve(strict=True)
+
+
 def _gl_control_paths(directory: Path) -> dict[str, str]:
     driver = directory / _GL_DRIVER
     executable = directory / _GL_EXECUTABLE
@@ -247,20 +260,15 @@ def deploy_gl_control() -> dict[str, str]:
     if destination.exists():
         return _gl_control_paths(destination)
 
-    def xcrun(*args: str) -> str:
-        return subprocess.check_output(
-            ["xcrun", "--sdk", "macosx", *args], text=True, timeout=30,
-            stderr=subprocess.PIPE).strip()
-
     source = ROOT / "renderer/gl/eu4_gfx_draw_control.c"
     if sha256_file(source) != _GL_SOURCE_SHA256:
         raise ValueError("OpenGL authority native source does not match the reviewed digest")
-    clang = xcrun("--find", "clang")
+    clang = xcrun("--sdk", "macosx", "--find", "clang")
     version = subprocess.check_output([clang, "--version"], text=True, timeout=30)
-    sdk_build = xcrun("--show-sdk-build-version")
+    sdk_build = xcrun("--sdk", "macosx", "--show-sdk-build-version")
     if not version.startswith(_GL_CLANG + "\n") or sdk_build != _GL_SDK_BUILD:
         raise ValueError(f"OpenGL authority requires {_GL_CLANG} and SDK build {_GL_SDK_BUILD}")
-    sdk = xcrun("--show-sdk-path")
+    sdk = xcrun("--sdk", "macosx", "--show-sdk-path")
     parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".build-", dir=parent) as temporary:
         stage = Path(temporary) / "install"

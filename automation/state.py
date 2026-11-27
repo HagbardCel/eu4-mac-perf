@@ -140,16 +140,33 @@ def require_worktree(path: Path, repo: Path, commit: str) -> None:
         raise RuntimeError("worktree HEAD is not the pinned commit")
 
 
+def outside_workspace(path: Path, workspace: Path) -> Path:
+    resolved = path.expanduser().resolve()
+    if resolved.is_relative_to(workspace) or workspace.is_relative_to(resolved):
+        raise RuntimeError(f"path overlaps candidate workspace: {resolved}")
+    return resolved
+
+
 def _git(path: Path, *args: str) -> str:
+    return trusted_git(path, *args).strip()
+
+
+def trusted_git(path: Path, *args: str, text: bool = True):
+    """Resolve immutable Git data without caller environment or replace refs."""
     try:
         completed = subprocess.run(
-            ["git", "-C", str(path), *args],
-            capture_output=True, text=True, check=True,
+            ["/usr/bin/git", "--no-replace-objects", "-c", "core.fsmonitor=false",
+             "-C", str(path), *args],
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C",
+                 "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"},
+            capture_output=True, text=text, check=True, timeout=60,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
-        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        if isinstance(detail, bytes):
+            detail = detail.decode(errors="replace")
         raise RuntimeError(f"git {' '.join(args)} failed: {detail}") from exc
-    return completed.stdout.strip()
+    return completed.stdout
 
 
 def ensure_workspace(seed: Path, live: Path) -> None:
