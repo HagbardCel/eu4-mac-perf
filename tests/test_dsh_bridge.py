@@ -565,8 +565,7 @@ class CampaignStopTests(BridgeTestCase):
         marker.start()
         self.addCleanup(marker.stop)
         guard = campaign_guard.Guard(state)
-        guard.init(mode=campaign_guard.MODE_AUTONOMOUS,
-                   admin_token="token")
+        guard.init(mode=campaign_guard.MODE_AUTONOMOUS)
         guard.stop("operator_stop", "operator cancelled")
         self.run_bridge("prepare", sidecar)
         with mock.patch.dict("os.environ",
