@@ -140,6 +140,8 @@ def run_replay(reference_dir: Path, output: Path, *, force_build: bool = False) 
 
 def qualify_candidate(commit: str, directory: Path, original: Path, reference: dict) -> dict:
     """Run the production sprite encoder with the four protected pre-draw inputs."""
+    import platform
+
     from automation import (candidate_snapshot, dsh_receipts, gfx_compare, launch_lease,
                             native_build, qualification_sandbox)
 
@@ -211,7 +213,9 @@ def qualify_candidate(commit: str, directory: Path, original: Path, reference: d
     return {"verdict": "exact" if exact else "different", "evidence_tier": "original-eu4",
             "execution": "completed", "independently_verified": True,
             "reference": reference, "coverage": ["sprite-logical-bgra"], "scope": report["samples"],
-            "candidate": {"source_digests": closure, "executable_sha256": executable_digest},
+            "candidate": {"source_digests": closure, "executable_sha256": executable_digest,
+                          "architecture": "arm64"},
+            "environment": {"macos": platform.mac_ver()[0], "os_build": platform.version()},
             "recipe": native_build.qualification_recipe(compiler, sdk, flags),
             "validation_contract": {"comparison_policy_sha256": _sha(policy_path)},
             "outputs": outputs,
