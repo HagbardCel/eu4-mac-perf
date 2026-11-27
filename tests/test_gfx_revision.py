@@ -396,7 +396,10 @@ int main(int argc, char **argv) {
             frame = stage / "frame"
             pre, native_draw, post, gl = self._native_capture(repo, stage, frame)
             self.assertEqual(native_draw.pop("fixture_samples"), 864 * 558)
-            failure = native_draw.pop("failed_event")["submission_failure"]
+            self.assertFalse(native_draw.pop("fixture_capture_failed"))
+            failed_event = native_draw.pop("failed_event")
+            self.assertTrue(failed_event["fixture_capture_failed"])
+            failure = failed_event["submission_failure"]
             self.assertEqual(failure["reason"], "submission_arguments")
             self.assertEqual(failure["expected_arguments"], [5, 0, 4])
             self.assertEqual(failure["actual_arguments"], [5, 0, 0])
@@ -415,6 +418,8 @@ int main(int argc, char **argv) {
             self.assertGreater(changed["entry_target"]["read_framebuffer"], 0)
             self.assertEqual(changed["exit_target"]["read_framebuffer"], 0)
             self.assertIsNone(changed["exit_target"]["gl_error"])
+            self.assertIsNone(changed["exit_target"]["attachment"])
+            self.assertIsNone(changed["exit_target"]["depth_type"])
             draw = {"kind": "draw", "index": 0, **pre, **native_draw}
             shader = draw["program"]["shaders"]
             source = self._seal_native_fixture(frame, draw, post, gl)

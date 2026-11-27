@@ -116,9 +116,11 @@ in the live process.
 
 The recorder now writes a valid failure member with the first failed check,
 observed submission count, expected and observed arguments, context matches,
-and available entry/submission/exit target state. An unchecked GL error is
-recorded as null. The existing `glGetError` check consumes an error when
-performed. The selected-target diagnostics avoid additional error consumption after
+and available entry/submission/exit target state. Unqueried fields, including GL
+errors, are recorded as null. Successful target continuity compares semantic
+bindings and attachment properties independently of diagnostic metadata. The
+existing `glGetError` check consumes an error when performed. The selected-target
+diagnostics avoid additional error consumption after
 a disqualifying observation. The fixture checks GL bindings, program, active
 texture, buffer and pack state and viewport across the successful observation
 and readbacks. Seeded negative controls distinguish argument mismatch,

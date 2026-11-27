@@ -1067,8 +1067,24 @@ typedef struct {
     GLint framebuffer, read_framebuffer, draw_buffer, read_buffer;
     GLint attachment, level, samples, depth, stencil, attachment_type, other_buffer;
     GLenum framebuffer_status, error;
-    int error_checked;
+    unsigned queried;
 } selected_draw_target;
+
+enum {
+    SELECTED_BINDINGS = 1u << 0, SELECTED_STATUS = 1u << 1,
+    SELECTED_TYPE = 1u << 2, SELECTED_ATTACHMENT = 1u << 3,
+    SELECTED_BUFFERS = 1u << 4, SELECTED_ERROR = 1u << 5,
+};
+
+static int selected_target_equal(const selected_draw_target *a,
+                                 const selected_draw_target *b) {
+    /* The callers have already validated the target contracts. */
+    return a->framebuffer == b->framebuffer &&
+           a->read_framebuffer == b->read_framebuffer &&
+           a->draw_buffer == b->draw_buffer && a->read_buffer == b->read_buffer &&
+           a->attachment == b->attachment && a->level == b->level &&
+           a->samples == b->samples && a->depth == b->depth && a->stencil == b->stencil;
+}
 
 static int selected_target(selected_draw_target *target, int check_error) {
     GLint type = 0, buffers = 0;
@@ -1076,15 +1092,18 @@ static int selected_target(selected_draw_target *target, int check_error) {
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &target->read_framebuffer);
     glGetIntegerv(GL_DRAW_BUFFER, &target->draw_buffer);
     glGetIntegerv(GL_READ_BUFFER, &target->read_buffer);
+    target->queried |= SELECTED_BINDINGS;
     if (target->framebuffer <= 0 || target->read_framebuffer != target->framebuffer ||
         target->draw_buffer != GL_COLOR_ATTACHMENT0 || target->read_buffer != GL_COLOR_ATTACHMENT0)
         return 0;
     target->framebuffer_status = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+    target->queried |= SELECTED_STATUS;
     if (target->framebuffer_status != GL_FRAMEBUFFER_COMPLETE) return 0;
 #define ATTACHMENT(slot, field, value) glGetFramebufferAttachmentParameteriv( \
     GL_DRAW_FRAMEBUFFER, (slot), GL_FRAMEBUFFER_ATTACHMENT_##field, &(value))
     ATTACHMENT(GL_COLOR_ATTACHMENT0, OBJECT_TYPE, type);
     target->attachment_type = type;
+    target->queried |= SELECTED_TYPE;
     if (type != GL_TEXTURE) return 0;
     ATTACHMENT(GL_COLOR_ATTACHMENT0, OBJECT_NAME, target->attachment);
     ATTACHMENT(GL_COLOR_ATTACHMENT0, TEXTURE_LEVEL, target->level);
@@ -1092,21 +1111,24 @@ static int selected_target(selected_draw_target *target, int check_error) {
     ATTACHMENT(GL_STENCIL_ATTACHMENT, OBJECT_TYPE, target->stencil);
 #undef ATTACHMENT
     glGetIntegerv(GL_SAMPLES, &target->samples);
+    target->queried |= SELECTED_ATTACHMENT;
     glGetIntegerv(GL_MAX_DRAW_BUFFERS, &buffers);
     for (GLint i = 1; i < buffers; i++) {
         GLint other = 0;
         glGetIntegerv(GL_DRAW_BUFFER0 + i, &other);
         if (other != GL_NONE) {
             target->other_buffer = other;
+            target->queried |= SELECTED_BUFFERS;
             return 0;
         }
     }
+    if (buffers > 0) target->queried |= SELECTED_BUFFERS;
     if (target->attachment <= 0 || target->level != 0 ||
         target->samples || target->depth || target->stencil) return 0;
     /* This established query consumes an error. Inspect it for a potentially
        valid observation only, never to enrich an already-refused result. */
     if (check_error) {
-        target->error_checked = 1;
+        target->queried |= SELECTED_ERROR;
         target->error = glGetError();
     }
     return target->error == GL_NO_ERROR;
@@ -1172,7 +1194,7 @@ void eu4_gfx_frame_trace_submit_arrays(unsigned mode, int first, int count) {
     if (mode != (unsigned)g_selected.mode || first != g_selected.first ||
         count != g_selected.vertices) selected_failure("submission_arguments");
     if (!selected_target(&g_selected.submission, g_selected.failure == NULL)) selected_failure("submission_target");
-    else if (memcmp(&g_selected.entry, &g_selected.submission, sizeof(g_selected.entry)))
+    else if (!selected_target_equal(&g_selected.entry, &g_selected.submission))
         selected_failure("submission_target_changed");
 }
 
@@ -6774,17 +6796,29 @@ int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
 
 static void write_selected_target(json_out *out, const char *key,
                                   const selected_draw_target *target) {
-    jprintf(out, ",\"%s\":{\"framebuffer\":%d,\"read_framebuffer\":%d,"
-            "\"draw_buffer\":%d,\"read_buffer\":%d,\"attachment\":%d,"
-            "\"level\":%d,\"samples\":%d,\"depth_type\":%d,\"stencil_type\":%d,"
-            "\"attachment_type\":%d,\"other_draw_buffer\":%d,"
-            "\"framebuffer_status\":%u,\"gl_error\":",
-            key, target->framebuffer, target->read_framebuffer, target->draw_buffer,
-            target->read_buffer, target->attachment, target->level, target->samples,
-            target->depth, target->stencil, target->attachment_type, target->other_buffer,
-            target->framebuffer_status);
-    if (target->error_checked) jprintf(out, "%u}", target->error);
-    else jprintf(out, "null}");
+    jprintf(out, ",\"%s\":{", key);
+    const char *separator = "";
+#define FIELD(group, name, member, format) do { \
+    jprintf(out, "%s\"" name "\":", separator); \
+    if (target->queried & (group)) jprintf(out, format, target->member); \
+    else jprintf(out, "null"); \
+    separator = ","; \
+} while (0)
+    FIELD(SELECTED_BINDINGS, "framebuffer", framebuffer, "%d");
+    FIELD(SELECTED_BINDINGS, "read_framebuffer", read_framebuffer, "%d");
+    FIELD(SELECTED_BINDINGS, "draw_buffer", draw_buffer, "%d");
+    FIELD(SELECTED_BINDINGS, "read_buffer", read_buffer, "%d");
+    FIELD(SELECTED_STATUS, "framebuffer_status", framebuffer_status, "%u");
+    FIELD(SELECTED_TYPE, "attachment_type", attachment_type, "%d");
+    FIELD(SELECTED_ATTACHMENT, "attachment", attachment, "%d");
+    FIELD(SELECTED_ATTACHMENT, "level", level, "%d");
+    FIELD(SELECTED_ATTACHMENT, "samples", samples, "%d");
+    FIELD(SELECTED_ATTACHMENT, "depth_type", depth, "%d");
+    FIELD(SELECTED_ATTACHMENT, "stencil_type", stencil, "%d");
+    FIELD(SELECTED_BUFFERS, "other_draw_buffer", other_buffer, "%d");
+    FIELD(SELECTED_ERROR, "gl_error", error, "%u");
+#undef FIELD
+    jprintf(out, "}");
 }
 
 static int capture_selected_submission(json_out *out, uint64_t call_id) {
@@ -6795,7 +6829,7 @@ static int capture_selected_submission(json_out *out, uint64_t call_id) {
     if (g_selected.count == 0) selected_failure("missing_submission");
     if (!exit_context_matches) selected_failure("exit_context");
     else if (!selected_target(&exit_target, g_selected.failure == NULL)) selected_failure("exit_target");
-    else if (memcmp(&g_selected.entry, &exit_target, sizeof(exit_target)))
+    else if (!selected_target_equal(&g_selected.entry, &exit_target))
         selected_failure("exit_target_changed");
     if (g_selected.failure != NULL) {
         jprintf(out, ",\"submission_failure\":{\"reason\":\"%s\",\"count\":%u,"
@@ -6828,13 +6862,21 @@ static int capture_selected_submission(json_out *out, uint64_t call_id) {
     return !out->failed;
 }
 
+static int write_selected_submission(json_out *out, uint64_t call_id) {
+    int complete = capture_selected_submission(out, call_id);
+    if (!complete) fail_capture_locked("selected_submission_or_target_unverified");
+    g_selected.call_id = 0;
+    return complete;
+}
+
 void eu4_gfx_frame_trace_test_begin_arrays(unsigned mode, int first, int count) {
     begin_selected(1, 1, (int)mode, first, count);
 }
 
 int eu4_gfx_frame_trace_test_write_arrays(FILE *output) {
     json_out out = {output, 0};
-    int ok = capture_selected_submission(&out, 1);
+    int ok = write_selected_submission(&out, 1);
+    jprintf(&out, ",\"fixture_capture_failed\":%s", g.capture_failed ? "true" : "false");
     if (ok) {
         const eu4_gfx_observe_call call = {.call_id = 1, .caller_rva = 1};
         uint64_t caller = g.prefix_caller;
@@ -9789,10 +9831,7 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
             }
             int selected_pre = g.prefix_caller != 0 && g.prefix_caller == call->caller_rva;
             if (selected_pre) {
-                if (!capture_selected_submission(&out, call->call_id)) {
-                    fail_capture_locked("selected_submission_or_target_unverified");
-                }
-                g_selected.call_id = 0;
+                write_selected_submission(&out, call->call_id);
             }
             if (selected_pre && (!g.pre_image_valid || g.pre_image_call_id != call->call_id)) {
                 fail_capture_locked("selected_pre_image_unattached");
