@@ -59,6 +59,11 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def is_leaf_name(value: object) -> bool:
+    """Identify a single named artifact member without resolving or opening it."""
+    return isinstance(value, str) and value not in ("", ".", "..") and Path(value).name == value
+
+
 @dataclass
 class StoredArtifact:
     sha256: str

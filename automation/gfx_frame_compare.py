@@ -461,6 +461,13 @@ def verify_dual_run_reference(case: Path, reference: dict, configuration: dict) 
         if sha256_file(raw) != reference[f"{role}_sha256"]:
             return {"verdict": "invalid_provenance", "problems": [f"November 14 {role} digest differs"]}
         payloads.append(raw.read_bytes())
+    scope = configuration["raw_scope"]
+    if any(
+        any(originals[role].get(key, "BGRA8" if key == "pixel_format" else None) != value
+            for key, value in scope.items())
+        for role in ("reference", "candidate")
+    ):
+        return {"verdict": "invalid_provenance", "problems": ["historical raw-pair scope differs"]}
     result = compare_payloads(
         payloads[0], originals["reference"], payloads[1], originals["candidate"],
         policy={**comparison_policy, "pixel_tolerance": comparison_policy["max_channel_error"]},

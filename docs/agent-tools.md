@@ -761,3 +761,15 @@ reuse `EU4_DSH_WORKSPACE`, which the campaign bridge reserves for its candidate
 workspace assertion. `run-campaign.sh` mounts the plugin in its headless
 overlay with `infra` pinned to the trusted checkout. Plugin tests:
 `npm test --prefix dsh/eu4-tools-plugin` (Node `--test`, no EU4).
+
+
+### Receipt verification and applicability
+
+Historical execution verification checks the signed receipt and retained
+artifacts. It requires no candidate rebuild. Reuse is a separate trusted
+applicability decision for the current candidate. It matches the source
+closure, toolchain recipe, environment and evidence identity, and preserves
+the actual execution revision. Aggregate verification checks the signed
+case records against the protected rules, including the pinned function
+corpus digest and its 414 observations. An aggregate can verify successfully
+and still record open qualification requirements.

@@ -37,7 +37,8 @@ from pathlib import Path
 
 from automation import (  # noqa: E402
     campaign_guard, gfx_observation, replay_host_dependencies)
-from automation.gfx_artifacts import sha256_file as _sha256
+from automation import gfx_uv2_probe
+from automation.gfx_artifacts import is_leaf_name, sha256_file as _sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
@@ -858,11 +859,10 @@ def load_seal(
                     "trusted evidence frame is not the verified snapshot")
 
     def member(name: object, label: str) -> Path:
-        text = str(name or "")
-        path = Path(text)
-        if not text or path.is_absolute() or path.name != text or "/" in text:
+        if not is_leaf_name(name):
             raise FrameError(f"sealed {label} path is invalid")
-        return frame_dir / path
+        return frame_dir / name
+
 
     manifest_path = member(seal.get("manifest_file"), "manifest")
     if not manifest_path.is_file():
@@ -1525,9 +1525,7 @@ def capture(args: argparse.Namespace) -> int:
     if sparse_uv2:
         if (capture_guard is None or not getattr(args, "seal", False)
                 or not getattr(args, "uv2_probe", False)
-                or prefix_end != 1 or args.uv2_probe_event != 1
-                or (args.uv2_probe_program, args.uv2_probe_framebuffer,
-                    args.uv2_probe_texture) != (310, 6, 433)
+                or prefix_end != gfx_uv2_probe.SPARSE_EVENT or not gfx_uv2_probe.is_sparse_target(args)
                 or getattr(args, "shadow", False)):
             print("capture refused: sparse UV2 requires an authorized single sealed "
                   "capture of event 1 with --uv2-probe and --prefix-end 1",
@@ -2180,12 +2178,16 @@ def frame_execution_lease():
 def execute_frame(host: Path, *, frame: Path, shaders: Path, out: Path,
                   checkpoints: Path | None = None, options=(), env=None, cwd=None,
                   timeout: float = 600, fenced: bool = False, locked: bool = False,
-                  checkpoint_outputs=()):
+                  checkpoint_outputs=(), restricted_inputs: dict | None = None):
     """Run the selected Metal host with the appropriate replay isolation."""
     from automation import dsh_receipts, qualification_sandbox
 
     command = replay_host_command(host, frame=frame, shaders=shaders, out=out,
                                   checkpoints=checkpoints) + list(options)
+    replay_path = out / "replay.json"
+    host_digest = _sha256(host) if host.is_file() else None
+    request_digest = _sha256(checkpoints) if checkpoints else None
+    started = time.time()
     with nullcontext() if locked else frame_execution_lease():
         if fenced:
             readable = (frame, shaders, checkpoints) if checkpoints else (frame, shaders)
@@ -2194,12 +2196,35 @@ def execute_frame(host: Path, *, frame: Path, shaders: Path, out: Path,
         else:
             ran = subprocess.run(command, cwd=cwd, env=env, capture_output=True,
                                  text=True, check=False, timeout=timeout)
-    outputs = None
+    finished = time.time()
+    outputs = []
+    if fenced and (
+        _sha256(host) != host_digest or
+        (checkpoints is not None and _sha256(checkpoints) != request_digest)
+    ):
+        raise FrameError("fenced replay inputs or executable changed during execution")
     if fenced and ran.returncode == 0:
         required = {"replay.json", "metal-frame.bgra", "replay-provenance.jsonl"}
         outputs = dsh_receipts.worker_outputs(out, required | set(checkpoint_outputs),
                                               required=required)
-    return ran, command, outputs
+    result = None
+    if replay_path.is_file():
+        try:
+            result = _read_json(replay_path)
+        except FrameError:
+            if fenced:
+                raise
+    shader_manifest = shaders / "shaders.json"
+    execution = {
+        "replay_host": str(host), "replay_host_sha256": host_digest, "command": command,
+        "returncode": ran.returncode, "started_epoch": started, "finished_epoch": finished,
+        "executed_request_sha256": request_digest, "outputs": outputs,
+        "replay_input": restricted_inputs,
+        "shaders_json_sha256": _sha256(shader_manifest) if shader_manifest.is_file() else None,
+        "replay_json_sha256": _sha256(replay_path) if replay_path.is_file() else None,
+        **{key: (result or {}).get(key) for key in ("status", "events", "encoded", "failed")},
+    }
+    return ran, result, execution
 
 
 def build_replay_host(force: bool = False) -> Path:
@@ -2706,11 +2731,7 @@ def _replay_command_body(args: argparse.Namespace,
     sparse_primitives = None
     uv2_checkpoints = None
     if sparse_uv2:
-        from automation import gfx_uv2_probe
-
-        if (not getattr(args, "uv2_probe", False) or args.uv2_probe_event != 1
-                or (args.uv2_probe_program, args.uv2_probe_framebuffer,
-                    args.uv2_probe_texture) != (310, 6, 433)
+        if (not getattr(args, "uv2_probe", False) or not gfx_uv2_probe.is_sparse_target(args)
                 or args.only_event is not None or args.stop_after is not None
                 or args.seed_marked or args.depth_from_prefix or args.checkpoint_request):
             raise FrameError("sparse UV2 requires the normal sealed replay and "
@@ -2820,7 +2841,7 @@ def _replay_command_body(args: argparse.Namespace,
     executable = replay_host_snapshot(host) if sparse_uv2 else nullcontext((host, None))
     try:
         with executable as (path, producer):
-            ran, command, _ = execute_frame(
+            ran, result, execution = execute_frame(
                 path, frame=frame_dir, shaders=shaders, out=out, checkpoints=checkpoint_path,
                 options=options, timeout=1200, env=child_env)
     except campaign_guard.CampaignRefusal as exc:
@@ -2828,7 +2849,8 @@ def _replay_command_body(args: argparse.Namespace,
         print(f"replay refused: {exc.kind}: {exc.detail}", file=sys.stderr)
         return 3
     result_path = out / "replay.json"
-    if ran.returncode != 0 or not result_path.is_file():
+    command = execution["command"]
+    if ran.returncode != 0 or result is None:
         _replay_mark(evidence, status="error", returncode=ran.returncode,
                      stderr_tail=(ran.stderr or "")[-2000:],
                      replay_command=command,
@@ -2846,14 +2868,13 @@ def _replay_command_body(args: argparse.Namespace,
             )
         )
         return 1
-    result = json.loads(result_path.read_text())
     if producer is not None:
         try:
             gfx_independent_replay.write_producer_receipt(
                 out, frame_dir, producer, result_path, shaders=shaders, env=child_env)
         except gfx_independent_replay.ReplayError as exc:
             raise FrameError(f"sparse UV2 producer receipt: {exc}") from exc
-    _replay_mark(evidence, status=result.get("status"),
+    _replay_mark(evidence, status=result.get("status"), execution_identity=execution,
                  returncode=ran.returncode,
                  stderr_tail=(ran.stderr or "")[-2000:],
                  replay_command=command,
@@ -4249,10 +4270,10 @@ def _parser() -> argparse.ArgumentParser:
              "probe) after the engine's own draw; requires --prefix-end")
     cap.add_argument("--uv2-probe-pixels", type=_uv2_probe_pixels, metavar="X,Y;X,Y",
                      help="use sparse fragment observation at lower-left coordinates")
-    cap.add_argument("--uv2-probe-event", type=int, default=1)
-    cap.add_argument("--uv2-probe-program", type=int, default=310)
-    cap.add_argument("--uv2-probe-framebuffer", type=int, default=6)
-    cap.add_argument("--uv2-probe-texture", type=int, default=433)
+    cap.add_argument("--uv2-probe-event", type=int, default=gfx_uv2_probe.SPARSE_EVENT)
+    cap.add_argument("--uv2-probe-program", type=int, default=gfx_uv2_probe.SPARSE_PROGRAM)
+    cap.add_argument("--uv2-probe-framebuffer", type=int, default=gfx_uv2_probe.SPARSE_FRAMEBUFFER)
+    cap.add_argument("--uv2-probe-texture", type=int, default=gfx_uv2_probe.SPARSE_TEXTURE)
     cap.add_argument("--shadow", action="store_true",
                      help="execute the sealed frame through the in-process Metal bridge")
     cap.add_argument("--continuous", action="store_true",
@@ -4374,10 +4395,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     rep.add_argument("--uv2-probe-pixels", type=_uv2_probe_pixels, metavar="X,Y;X,Y",
                      help="use sparse fragment observation at lower-left coordinates")
-    rep.add_argument("--uv2-probe-event", type=int, default=1)
-    rep.add_argument("--uv2-probe-program", type=int, default=310)
-    rep.add_argument("--uv2-probe-framebuffer", type=int, default=6)
-    rep.add_argument("--uv2-probe-texture", type=int, default=433)
+    rep.add_argument("--uv2-probe-event", type=int, default=gfx_uv2_probe.SPARSE_EVENT)
+    rep.add_argument("--uv2-probe-program", type=int, default=gfx_uv2_probe.SPARSE_PROGRAM)
+    rep.add_argument("--uv2-probe-framebuffer", type=int, default=gfx_uv2_probe.SPARSE_FRAMEBUFFER)
+    rep.add_argument("--uv2-probe-texture", type=int, default=gfx_uv2_probe.SPARSE_TEXTURE)
     rep.set_defaults(handler=replay_command)
 
     iso = sub.add_parser("isolate", help="isolated marked-draw differential")

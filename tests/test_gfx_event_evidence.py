@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from automation import (agent_tools, gfx_event_evidence, gfx_frame_graph,
                         gfx_independent_replay, gfx_replay_case)  # noqa: E402
-from tests.test_m6_frame import _write_blob, build_synthetic_trace  # noqa: E402
+from tests.test_gfx_frame import _write_blob, build_synthetic_trace  # noqa: E402
 
 WIDTH, HEIGHT = 4, 3
 

@@ -24,6 +24,17 @@ import struct
 import sys
 from pathlib import Path
 
+SPARSE_EVENT = 1
+SPARSE_PROGRAM = 310
+SPARSE_FRAMEBUFFER = 6
+SPARSE_TEXTURE = 433
+
+
+def is_sparse_target(args) -> bool:
+    return (args.uv2_probe_event, args.uv2_probe_program, args.uv2_probe_framebuffer,
+            args.uv2_probe_texture) == (SPARSE_EVENT, SPARSE_PROGRAM, SPARSE_FRAMEBUFFER, SPARSE_TEXTURE)
+
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))

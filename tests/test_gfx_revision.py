@@ -401,8 +401,6 @@ int main(int argc, char **argv) {
             with self.assertRaises(subprocess.TimeoutExpired):
                 qualification_sandbox.run(["/bin/sleep", "5"], writable=job, timeout=0.01)
             commit = state.trusted_git(gfx_revision.ROOT, "rev-parse", "HEAD").strip()
-            contract = json.loads(gfx_revision.POLICY_CONTRACT.read_text())
-            reference = contract["cases"]["constant-buffer"]["reference"]
             signing_key = root / "key"
             seed = bytes(range(32))
             signing_key.write_text(seed.hex())
@@ -436,11 +434,12 @@ int main(int argc, char **argv) {
                 digests[paths[0]] = sha256_file(source)
                 return digests
 
-            mutated = root / "function-mutation"
-            mutated.mkdir()
-            with mock.patch.object(candidate_snapshot, "materialize_commit",
-                                   side_effect=corrupt_dirty_byte):
-                result = reconstruction_diff.qualify_candidate(gfx_revision.ROOT, commit, mutated, reference)
+            with (mock.patch.object(candidate_snapshot, "materialize_commit",
+                                    side_effect=corrupt_dirty_byte),
+                  mock.patch.object(gfx_revision, "_policy", return_value=(policy, "digest"))):
+                result = gfx_revision.qualify(workspace, commit, "constant-buffer")["cases"][0]
+            self.assertFalse(result.get("execution_reused"))
+            self.assertNotEqual(result["receipt"], first["receipt"])
             self.assertEqual(result["verdict"], "different", result.get("problems", [])[:1])
             self.assertTrue(result["problems"])
 

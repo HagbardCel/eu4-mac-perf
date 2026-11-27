@@ -1,147 +1,97 @@
 # Agent defaults
 
-Current capabilities, evidence status and open limits are recorded in
-[docs/status.md](docs/status.md). Consult it before planning graphics work or
-claiming that a capability exists. Use the [renderer index](docs/renderer/README.md)
-for components, function contracts, backends, and findings.
+Read [current status](docs/status.md) before planning renderer work or claiming
+a capability. Use the [renderer index](docs/renderer/README.md) for contracts and
+evidence. The [permanent strategy](docs/eu4_recommended_strategy.md) defines
+ownership and the order of reconstruction, qualification and migration.
+
+## Architecture and evidence
+
+- Original EU4 is the ultimate scientific authority. Reconstruct the relevant
+  OpenGL behavior faithfully before migrating it to Metal.
+- Use reconstructed GL as a reference only for independently qualified scopes.
+  Distinguish native original observations, emulated-original results and
+  synthetic fixtures. Preserve their executable, environment and seal identity.
+- Metal is the production target. Measure optimizations after correctness is
+  established. Production rendering does not depend on GL/Metal interoperation.
+- Name reusable modules, tests and CLI operations by function. Milestone IDs
+  belong in evidence, protected cases, historical reports and reproduction
+  commands. Maintained execution must not depend on planning documents or
+  historical campaign wrappers.
+- Reuse capture, replay, comparison, receipt and candidate-build owners. Extend
+  an existing contract where a real workload requires it. Consolidate before
+  renaming. Count pure moves as zero and measure enabling changes separately
+  from scientific functionality. Aim for nonpositive net enabling LOC and
+  obtain explicit review for exceptions.
+
+## Qualification
+
+- Verify the immutable original seal, candidate revision, effective command,
+  execution environment, observations and output bytes independently.
+- Keep original evidence, derived portable evidence and restricted candidate
+  inputs distinct. Keep protected expectations and signing keys on the
+  verifier side. Document shared-address-space limits and unsupported scopes.
+- Require exact observations for exact claims. Keep tolerated policy outcomes,
+  execution success and evidence verification distinct from qualification.
+- Verify historical receipt authenticity and artifacts without rebuilding.
+  Current-candidate applicability requires a trusted check of the relevant
+  source closure, recipe, environment and reference. Aggregate verification
+  checks protected policy and signed case decisions.
+- Discover retained evidence with `python3 -m automation.agent_tools
+  eu4_session discover`. Set `EU4_EVIDENCE_ROOT` to the intended worktrees.
+  Discovery is read-only. Select a session with `eu4_diff_inspect --run`.
+  Keep original shader and texture payloads under `.local`. Track hashes,
+  lengths, and provenance.
+
+## Supported runtime and permanent direction
+
+For cohesive reconstruction or migration of EU4 renderer functionality, use
+the supported OpenCode campaign runtime through `python3 -m automation.cli`
+and the relevant skill and independent checker. Load
+`opengl-metal-reconstruction` when replacing OpenGL calls. Interactive work
+covers contracts, review, evidence and tooling.
+
+When an operator starts a native DSH `/goal` reconstruction experiment, work
+in its authorized worktree through DSH. DSH owns its orchestration. The permanent
+target is native DSH continuation with repository-owned scientific methodology
+and minimal safety enforcement. R4 owns broader lifecycle and checkpointing
+migration. See [runtime contracts](automation/README.md) and
+[the approved refactoring plan](plans/repository-refactor/approved-plan.md).
 
 ## Verification workflow
 
-Use [automation/test_runner.py](automation/test_runner.py) instead of starting
-long `unittest` commands repeatedly. It preserves the child exit code, writes
-the complete log under `.local/test-runs/`, returns a compact summary, and
-returns an already-running identical suite instead of launching a duplicate.
+Use [test_runner](automation/test_runner.py). It records complete logs under
+`.local/test-runs/` and avoids starting duplicate running suites.
 
-1. **After a code change**, run the focused modules that exercise it:
-   ```sh
-   python3.14 -m automation.test_runner run --profile offline \
-     --module tests.test_agent_tools --module tests.test_gfx_case
-   ```
-2. **Once focused tests pass**, run the dependent modules they touch (the
-   neighbouring suites named in the change or its plan).
-3. **Final verification**: for retained implementation changes being prepared
-   for merge, run the full offline gate once in an appropriate verification
-   environment:
+1. Run the focused modules after a change with `python3.14 -m
+   automation.test_runner run --profile offline --module <module>`.
+2. Run the dependent modules after the focused checks pass.
+3. For a retained implementation PR, run one full offline gate with
    `python3.14 -m automation.test_runner run --profile offline --label full`.
-   During autonomous reconstruction campaigns, use relevant focused tests and
-   the existing independent checker instead. Temporary diagnostic
-   modifications, exact rollbacks and individual `/goal` rounds do not trigger
-   the full offline gate. The offline profile is the default and cannot launch
-   EU4. Live tests are explicit: `--profile live --module <module>`, with a
-   real case and bounded timeout, and are never part of the default gate.
-4. **Compare failures against base** before claiming a regression:
-   run the same focused modules in a base worktree (`--cwd`) and use
-   `python3 -m automation.test_runner compare --base <id|record> --candidate <id|record>`.
-   A pre-existing failure is reported as pre-existing, not fixed or introduced.
-5. Inspect a running or finished invocation with
-   `python3 -m automation.test_runner status --id <id>`; do not poll a log file.
+   Temporary probes, exact rollbacks and individual autonomous rounds use
+   focused checks instead. Use the independent checker for retained
+   renderer corrections.
+4. Compare unexpected failures against the same focused selection in a base
+   worktree using `--cwd` and `test_runner compare --base <id|record>
+   --candidate <id|record>`.
+5. Use `test_runner status --id <id>` for progress and results.
 
-| Situation | Required action |
-| --- | --- |
-| Temporary experiment | Relevant focused build/test or diagnostic replay |
-| Experiment reverted exactly | Verify restored source/diff identity and reuse previous results |
-| Rollback differs from previous state | Investigate the unexpected differences |
-| Retained renderer correction | Focused tests and the trusted independent checker |
-| Final implementation PR | Full offline gate when appropriate |
+Keep `test_runner.py` unchanged and avoid test caching. A valid build may be
+reused after a byte-identical rollback. Resolve the diagnostic interpreter
+with `python3.14 -m automation.python_runtime resolve`. Fix
+`EU4_DSH_PYTHON` if a native tool reports an interpreter or NumPy mismatch.
 
-Do not require a native rebuild after a byte-identical rollback when a valid
-build of the restored source already exists. Do not modify
-`automation/test_runner.py` or add test caching.
+## Capture and debugging
 
-`python3.14 -m automation.python_runtime resolve` is the checked interpreter
-for the diagnostic core. The profile split is enforced by
-`automation.test_profiles` and by the capture/launch entry points: an explicit
-`EU4_TEST_PROFILE=offline` (or `EU4_OFFLINE_ONLY=1`) refuses a real EU4 launch. If a native tool reports an interpreter or NumPy mismatch,
-fix `EU4_DSH_PYTHON` rather than running the tool again with another Python.
+Query existing engine knowledge and run focused checks first. Replay retained
+cases, inspect capture health and the first divergent event, then narrow the
+question before any live diagnostic. Use the maintained
+`automation.agent_tools` commands or native DSH tools.
 
-## Evidence discovery
-
-Historical campaigns are indexed, read-only, through
-`python3 -m automation.agent_tools eu4_session discover`. Set
-`EU4_EVIDENCE_ROOT` (OS-path-separated) to the worktrees whose `.local` evidence
-should be visible. Discovery never searches the filesystem, copies artifacts or
-mutates historical evidence; select a session with `eu4_diff_inspect --run`.
-
-## DSH permission discipline
-
-- Use normal tool execution without sandbox escalation by default.
-- Do not request `sandbox_permissions` proactively for
-  file inspection, process monitoring, tests, or builds.
-- Retry with elevated permissions only after a real
-  sandbox denial, and only when necessary.
-- Keep compiler caches and temporary build outputs
-  inside the workspace where practical.
-- Do not repeatedly request elevated permissions
-  for equivalent diagnostic commands.
-
-## EU4 reconstruction and migration
-
-For cohesive reconstruction or migration of EU4 functionality—especially `_Gfx*` OpenGL→Metal work (shaders, render state, draws, lifecycle remediations)—**do not** implement the migration body by hand in an interactive session.
-
-**Default path:** run an OpenCode campaign through `python3 -m automation.cli` with the appropriate skill (load `opengl-metal-reconstruction` when replacing OpenGL graphics calls) and an independent campaign checker under `campaigns/`.
-
-**Native DSH exception:** when the operator starts a `/goal` reconstruction experiment through DSH Web, DSH owns orchestration. Work directly in the session's authorized worktree; do not launch the OpenCode runner and do not build a replacement agent loop. OpenCode remains the supported default for campaign-run work.
-
-**Interactive / human focus:** semantic constraints, acceptance criteria, evidence review, and deciding genuine ambiguities or `BLOCKER:` lines.
-
-See [automation/README.md](automation/README.md) for the runner, worktree pin, and session contract. Campaign layout lives under `campaigns/`. A checker `pass` is offline qualification only; independent PR review remains the merge gate.
-
-### Reusable reconstruction capabilities
-
-All new graphics reconstruction and migration work should strengthen the autonomous investigation, implementation and validation workflow.
-
-Prefer functionality that is independently usable by DSH and OpenCode through existing command-line tools.
-
-When implementing a new rendering capability:
-
-- Reuse existing graphics-state reconstruction, backend lifecycle, evidence capture, replay and validation.
-- Separate game-independent mechanisms from function-specific semantic knowledge.
-- Make new observation or validation functionality reusable across graphics operations.
-- Demonstrate reuse with an existing second case when practical.
-- Avoid one-off launchers, capture scripts, agent orchestration and duplicate rendering implementations.
-- Do not generalize speculative future requirements. Extend shared abstractions only where a real use case requires them.
-- Preserve explicit evidence provenance, unsupported-state diagnostics and independently reviewable outcomes.
-
-The objective is not to maximize tooling. It is to minimize the engineering required for each subsequent authentic graphics reconstruction.
-
-## L3.2b completion
-
-For the L3.2b-II draw-packet completion campaign, do not pre-assign `_Gfx*`
-functions or predefine shader → texture → state contract versions. Use the
-dynamic coordinator ([automation/gfx_l32b_complete.py](automation/gfx_l32b_complete.py))
-and let the agent inventory the unresolved fields, choose draw-time reads or
-minimal entry observers, and produce provisional checkpoints. Contract
-qualification is a separate campaign with an independent reviewer; a
-`qualified` review outcome is required. The v1 checker
-`automation/gfx_draw_accept.py` is frozen by the completed L3.2b-I manifest; new
-campaigns use `automation/gfx_draw_accept_v2.py`. Original shader and texture
-bytes stay under `.local`; only hashes, lengths and provenance are tracked.
-
-## Differential debugging defaults
-
-Before starting another live EU4 run:
-
-1. query existing Ghidra/engine-contract knowledge (`eu4_re_query` /
-   `eu4_research`);
-2. run the focused native/static tests;
-3. replay known local cases (`eu4_replay`);
-4. inspect the recorded differential observations (`eu4_diff_inspect`,
-   `eu4_capture health/frames`);
-5. inspect the first divergent event (`eu4_case_inspect --event ...`) before a
-   numerical experiment; it reuses captured evidence;
-6. use one targeted live diagnostic if the evidence is insufficient;
-7. run a dual-process campaign only when no adequate offline case exists;
-8. run the full qualification after corrections.
-
-Use `python3 -m automation.agent_tools <tool> ...` (or the native DSH tools) for
-these steps; do not compose new launch/capture scripts. A new EU4 launch needs a
-specific diagnostic objective and an operator-issued one-use launch
-authorization for a `controlled_capture` campaign; the offline autonomous
-campaign cannot launch EU4. If two
-launches for the same defect are inconclusive, redesign the instrumentation or
-experiment before a third. Use normal permissions first; request sandbox
-escalation only after a genuine denial.
-
-`eu4_capture health` is the stop signal: a rejected draw, pipeline/validation
-failure, failed resolve/readback or failed command buffer ends the current
-diagnostic result. Command-buffer completion is not pixel correctness.
+Offline qualification cannot launch EU4. A live launch requires a specific
+diagnostic objective and an operator-issued one-use authorization for a
+`controlled_capture` campaign. Stop on capture-health failure or incomplete
+evidence. Use normal execution permissions and keep temporary outputs within
+the authorized worktree where practical. For the historical draw-packet
+completion campaign, follow its [coordinator contract](automation/gfx_l32b_complete.py);
+the frozen v1 checker remains historical and v2 owns new campaign checks.

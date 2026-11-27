@@ -3,7 +3,21 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
-## Current navigation — 21 November 2026
+## Current capability and qualification
+
+- Final draft verification at `5ecde67c` covered native synthetic controls,
+  ordered transitions, the 414-case emulated-original function, governed DSH,
+  worker isolation and protected Metal scopes. The signed mandatory decision
+  verified nine case receipts and their artifact inventories. Seven met policy.
+  [R3 draft and verification](https://github.com/HagbardCel/eu4-mac-perf/pull/305)
+- Authentic selected-draw qualification awaits a separately authorized capture.
+  November 14 complete-manifest bytes remain unavailable, and the protected
+  digest remains enforced. [Prepared capture and scope](../plans/repository-refactor/r3-capture-preparation.md) · [Retention disposition](../plans/repository-refactor/r3-consolidation.md#november-14-retention-disposition-for-operator-review)
+- OpenCode remains the supported transitional campaign runtime. Native DSH
+  operates authorized experiments. R4 owns broader autonomous continuation
+  and checkpoint integration. [Permanent strategy](eu4_recommended_strategy.md)
+
+## Archived navigation — 21 November 2026
 
 This section is the starting point. Everything below it is retained as dated
 history and must be read with its original run/seal identity.
@@ -1237,7 +1251,7 @@ Evidence: [qualification report](../analysis/m6/qualification-report.md),
   captured-state replay; it does not independently reconstruct the upstream
   terrain pass. A synthetic capture-format/replay regression now covers a
   sparse 16-bit index list with a nonzero signed base vertex and a nonzero
-  captured `vertex_origin` (`tests.test_m6_frame.SparseIndexReplayTests`). It
+  captured `vertex_origin` (`tests.test_gfx_frame.SparseIndexReplayTests`). It
   builds a frame-trace document in the captured format and does not exercise
   the OpenGL capture writer; the historical canonical frame's origins are zero,
   so it does not exercise that path either. A negative case omits the origin and

@@ -39,6 +39,25 @@ added 11 lines for executable and macOS build identity. The test migration
 and reuse coverage added 22 net lines. The earlier R2b baseline and the −200
 target remain recorded in the R0 disposition.
 
+## Final consolidation slice
+
+Relative to the reviewed `5ecde67c`, this slice removes 441 net enabling
+lines, leaving +1,058 relative to the R2b baseline. The test-module rename
+carries zero credit. Policy data and documentation are excluded.
+
+| Responsibility | Removed work and replacement owner |
+| --- | --- |
+| Agent tool responses | The replay and case projections use fixed bounded views instead of iterative stripping. Independent replay and diagnosis share one envelope. Full diagnostic reports remain on disk. |
+| Metal execution | The core frame executor captures host identity, command, input/request and shader digests, parsed completion and fenced outputs. Direct replay, diagnosis and the two trusted comparisons share it. Checkpoint receipts retain their historical shape. |
+| Scientific results | Current independent replay derives its status from the canonical diagnosis. The archived classifier and legacy outcome serialization remain for compatibility. |
+| OpenGL and evidence | Authority attribution reuses the common verified pixel comparison. Plain file hashing and leaf-member checks share artifact helpers. Strong no-follow and scope-specific package checks remain with their existing owners. |
+| Function policy | The protected case requires all 414 observations at the pinned corpus identity. The public revision qualifier exercises both successful reuse and rejection after a relevant source change. |
+| Runtime ownership | The generic frame CLI delegates UV2 scope to its probe owner. The sprite command no longer exports an import alias. Two archived reproduction scripts still import the older frame and comparison names. Continuation and capture lifecycle retirement stay with R4/R6. |
+
+The reductions leave a budget deviation. Larger remaining savings would
+require further consumer migration and verification. The approval and
+independent review requirements remain open.
+
 ## November 14 retention disposition for operator review
 
 The committed complete-manifest digest remains
@@ -48,7 +67,9 @@ The only recovered manifest hashes to
 The original bytes are unavailable in the checked archive and historical
 worktree locations. Exact field differences require those bytes.
 
-Both retained raw images match the committed identities. Recomparison
+Both retained raw images match the committed identities in the protected
+policy. Its proposed raw scope pins tightly packed 1728×1117 BGRA8 images
+with lower-left origin and the historical comparison configuration. Recomparison
 reproduced the recorded regions and statistics, including 26,042 differing
 pixels and maximum channel error 228. The complete case remains
 `invalid_provenance` in mandatory qualification. The proposed disposition

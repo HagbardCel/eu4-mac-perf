@@ -42,6 +42,7 @@ import uuid
 from pathlib import Path
 
 from automation import gfx_replay_case
+from automation.gfx_artifacts import sha256_file
 
 SCHEMA = "gfx-case-locator/v1"
 LOCATOR_DIR = "locators"
@@ -68,14 +69,7 @@ def _json(path: Path) -> dict:
 
 
 def _sha(path: Path) -> str | None:
-    path = Path(path)
-    if not path.is_file():
-        return None
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return sha256_file(path) if path.is_file() else None
 
 
 def _now() -> str:

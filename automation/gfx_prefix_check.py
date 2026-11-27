@@ -575,7 +575,6 @@ def _run_trusted_replay(frame_dir: Path, request: dict | None,
     if fenced_host is not None and input_record["shared_input_outputs"]:
         raise PrefixCheckError("fenced Metal input overlaps protected original outputs")
     request_path = None
-    executed_request_sha = None
     if request is not None:
         request_path = execution_dir / "checkpoint-request.json"
         native_request = request
@@ -587,7 +586,6 @@ def _run_trusted_replay(frame_dir: Path, request: dict | None,
                                 for row in request["checkpoints"]],
             }
         request_path.write_text(json.dumps(native_request, indent=2) + "\n")
-        executed_request_sha = _sha256(request_path)
     shaders = execution_dir / "shaders"
     translated = gfx_frame.translate_for_replay(
         frame_dir, shaders, cache_dir=run_root / "cache" / "translation",
@@ -637,33 +635,29 @@ def _run_trusted_replay(frame_dir: Path, request: dict | None,
                 f"trusted replay host build failed: {exc}") from exc
     replay_dir = execution_dir / "metal"
     replay_dir.mkdir()
-    started = time.time()
-    completed, replay_command, outputs = gfx_frame.execute_frame(
+    completed, replay, execution = gfx_frame.execute_frame(
         host, frame=replay_input, shaders=shaders, out=replay_dir, checkpoints=request_path,
         env=None if fenced_host else _execution_environment(execution_dir),
         cwd=str(execution_dir), fenced=fenced_host is not None,
-        checkpoint_outputs=(row["file"] for row in (request or {}).get("checkpoints", [])))
-    finished = time.time()
+        checkpoint_outputs=(row["file"] for row in (request or {}).get("checkpoints", [])),
+        restricted_inputs=input_record)
     if completed.returncode != 0:
         raise PrefixCheckError(
             f"trusted Metal replay exited with {completed.returncode}: "
             + (completed.stderr.strip() or completed.stdout.strip())[-2400:])
-    if candidate is not None and _sha256(host) != candidate["build"]["host_sha256"]:
+    if candidate is not None and execution["replay_host_sha256"] != candidate["build"]["host_sha256"]:
         raise PrefixCheckError("candidate replay host changed after execution")
     if candidate is not None and fenced_host is None:
         post_execution = replay_host_dependencies.relative_dependencies(workspace, sources, strict=True)
         if post_execution != candidate["source_digests"]:
             raise PrefixCheckError(
                 "candidate renderer source changed after the trusted build")
-    if fenced_host is not None and request_path and _sha256(request_path) != executed_request_sha:
-        raise PrefixCheckError("fenced replay request changed during execution")
-    replay_path = replay_dir / "replay.json"
-    replay = _read_json(replay_path)
-    if replay.get("status") != "ok" or replay.get("failed") != 0:
+    if candidate is not None and fenced_host is None and _sha256(host) != execution["replay_host_sha256"]:
+        raise PrefixCheckError("candidate replay host changed after execution")
+    if not replay or replay.get("status") != "ok" or replay.get("failed") != 0:
         raise PrefixCheckError("trusted Metal replay did not complete cleanly")
     if request is None:
-        return {"metal_dir": replay_dir, "result": replay, "outputs": outputs,
-                "command": replay_command, "replay_input": input_record}
+        return {"metal_dir": replay_dir, "result": replay, "execution": execution}
     (replay_dir / "checkpoint-request.json").write_text(
         json.dumps(request, indent=2) + "\n")
     seal_path = frame_dir / "frame-seal.json"
@@ -672,13 +666,12 @@ def _run_trusted_replay(frame_dir: Path, request: dict | None,
         seal, replay_dir / "checkpoint-request.json", shaders)
     (replay_dir / "shader-receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\n")
-    outputs = []
-    for path in sorted(replay_dir.iterdir()):
-        if path.is_file() and path.name not in (
-                "replay.json", "shader-receipt.json",
-                "checkpoint-request.json", "trusted-execution.json"):
-            outputs.append({"file": path.name, "bytes": path.stat().st_size,
-                            "sha256": _sha256(path)})
+    if fenced_host is not None:
+        outputs = [row for row in execution["outputs"] if row["file"] != "replay.json"]
+    else:
+        outputs = [{"file": path.name, "bytes": path.stat().st_size, "sha256": _sha256(path)}
+                   for path in sorted(replay_dir.iterdir()) if path.is_file()
+                   and path.name not in ("replay.json", "shader-receipt.json", "checkpoint-request.json")]
     isolation = None
     if fenced_host is not None:
         isolation = {"mechanism": "seatbelt", "reference_roots": [str(frame_dir)]}
@@ -691,33 +684,13 @@ def _run_trusted_replay(frame_dir: Path, request: dict | None,
                 "performed by the checker after execution"),
             "reference_roots": [str(frame_dir)],
         }
-    execution = {
-        "schema": "gfx-trusted-execution/v1",
-        "mode": ("candidate-build-and-replay" if candidate is not None
-                 else "checker-native-replay"),
-        "reference_isolation": isolation,
-        "candidate": candidate,
-        "outputs": outputs,
-        "execution_dir": str(execution_dir),
-        "started_epoch": started,
-        "finished_epoch": finished,
-        "frame_dir": str(frame_dir),
-        "replay_input": input_record,
-        "request_sha256": _sha256(replay_dir / "checkpoint-request.json"),
-        "executed_request_sha256": executed_request_sha,
-        "replay_host": str(host),
-        "replay_host_sha256": _sha256(host),
-        "shaders_json_sha256": _sha256(shaders / "shaders.json")
-        if (shaders / "shaders.json").is_file() else None,
-        "replay_json_sha256": _sha256(replay_path),
-        "receipt_sha256": _sha256(replay_dir / "shader-receipt.json"),
-        "status": replay.get("status"),
-        "events": replay.get("events"),
-        "encoded": replay.get("encoded"),
-        "failed": replay.get("failed"),
-        "command": replay_command,
-        "returncode": completed.returncode,
-    }
+    execution.update(
+        schema="gfx-trusted-execution/v1",
+        mode="candidate-build-and-replay" if candidate is not None else "checker-native-replay",
+        reference_isolation=isolation, candidate=candidate, outputs=outputs,
+        execution_dir=str(execution_dir), frame_dir=str(frame_dir),
+        request_sha256=_sha256(replay_dir / "checkpoint-request.json"),
+        receipt_sha256=_sha256(replay_dir / "shader-receipt.json"))
     record_path = execution_dir / "execution.json"
     record_path.write_text(json.dumps(execution, indent=2) + "\n")
     (replay_dir / "trusted-execution.json").write_text(
@@ -1275,6 +1248,7 @@ def qualify_candidate(repo: Path, trusted_revision: str, commit: str, directory:
         "execution_receipt_sha256": _sha256(evidence) if evidence is not None else None,
         "reference": case["reference"], "coverage": sorted(observed),
         "candidate": producer, "scope": {"through": case["require_end"]},
+        "execution_identity": execution_record if evidence is not None else None,
         "earliest_observed_divergence": observed.get(event),
         "preserved_exact": [n for n in observed if observed[n]["status"] == "match"],
         "execution_dir": (execution_dir
@@ -1305,7 +1279,7 @@ def qualify_full_frame(repo: Path, trusted_revision: str, commit: str, directory
     output = executed["metal_dir"]
     output_record = executed["result"]
     outputs = [{**item, "file": (output / item["file"]).relative_to(directory).as_posix()}
-               for item in executed["outputs"]]
+               for item in executed["execution"]["outputs"]]
     if (output_record.get("events") != reference["event_count"]
             or output_record.get("encoded") != reference["event_count"]):
         raise PrefixCheckError("final-frame replay did not encode the protected event set")
@@ -1316,7 +1290,7 @@ def qualify_full_frame(repo: Path, trusted_revision: str, commit: str, directory
     exact = report["status"] == "pass" and stats["mismatched_pixels"] == 0
     return {"verdict": "exact" if exact else "different", "evidence_tier": "original-eu4",
             "execution": "completed", "independently_verified": True, "reference": identities,
-            "candidate": producer, "coverage": ["all-events-encoded", "exact-bgra"],
+            "candidate": producer, "execution_identity": executed["execution"], "coverage": ["all-events-encoded", "exact-bgra"],
             "scope": {"events": reference["event_count"], "channels": "BGRA"},
             "outputs": outputs,
             "earliest_observed_divergence": None if exact else {"phase": "final", "statistics": stats},

@@ -41,7 +41,7 @@ def build_candidate_fixture(root: Path) -> Path:
     own output for that event.  The fixture is synthetic by construction and
     never claims original-frame authority.
     """
-    from tests.test_m6_frame import _write_blob, build_synthetic_trace
+    from tests.test_gfx_frame import _write_blob, build_synthetic_trace
 
     frame = Path(root) / "frame"
     build_synthetic_trace(frame)

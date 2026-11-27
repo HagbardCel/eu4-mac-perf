@@ -181,6 +181,9 @@ def case_satisfies(case: dict, row: dict) -> bool:
     if (case.get("evidence_tier") not in (None, row.get("evidence_tier"))
             or not set(case.get("preserve_exact", [])).issubset(row.get("preserved_exact", []))):
         return False
+    if any((row.get("scope") or {}).get(key) != value
+           for key, value in case.get("required_scope", {}).items()):
+        return False
     if row["verdict"] == "exact":
         return row.get("execution") == "completed" and row.get("independently_verified") is True
     if case["category"] != "diagnostic":

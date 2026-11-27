@@ -1259,12 +1259,7 @@ def _evidence_recheck(qualification: dict) -> bool:
             or expected.get("draw_event") != draw_event \
             or expected.get("checkpoint_resource") != resource:
         return False
-    try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return False
-    if not isinstance(receipt, dict):
-        return False
+    receipt = _read_json(receipt_path, "control_receipt")
     reasons, _unsupported, execution = _validate_receipt(
         receipt, nonce=str(checked.get("nonce") or ""),
         renderer_sha=str(checked.get("renderer_sha256") or ""),
@@ -1275,23 +1270,10 @@ def _evidence_recheck(qualification: dict) -> bool:
         artifact=control_path, evidence=evidence)
     if reasons or execution != "completed":
         return False
-    try:
-        live_bytes = live_path.read_bytes()
-        control_bytes = control_path.read_bytes()
-    except OSError:
-        return False
-    if hashlib.sha256(live_bytes).hexdigest() != derived.get(
-            "checkpoint_reference_sha256"):
-        return False
-    if hashlib.sha256(control_bytes).hexdigest() != control_sha:
-        return False
-    try:
-        recomputed = compare_payloads(
-            live_bytes, control_bytes, width, height,
-            live_path=live_path, control_path=control_path)
-    except QualificationError:
-        return False
-    return recomputed.get("exact") is True
+    recomputed = compare(live_path, control_path, width, height)
+    return (recomputed.get("exact") is True
+            and recomputed["live"]["sha256"] == derived.get("checkpoint_reference_sha256")
+            and recomputed["control"]["sha256"] == control_sha)
 
 
 def attribution(qualification: dict) -> dict:

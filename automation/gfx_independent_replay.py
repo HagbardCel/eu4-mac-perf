@@ -4266,7 +4266,7 @@ def _replay_locked_serialized(
     receipt_error: str | None = None
     try:
         with gfx_frame.replay_host_snapshot(host) as (snapshot, producer):
-            ran, command, _ = gfx_frame.execute_frame(
+            ran, replay_result, execution = gfx_frame.execute_frame(
                 snapshot, frame=frame_dir, shaders=shader_dir, out=out_dir,
                 checkpoints=out_dir / "checkpoint-request.json", env=env, timeout=timeout,
                 locked=True)
@@ -4284,7 +4284,7 @@ def _replay_locked_serialized(
         frame_dir, out_dir, policy, trace=trace, seal=seal, graph=graph,
         request=request, request_source="published", faults=faults,
         host_returncode=ran.returncode, receipt_error=receipt_error)
-    replay_result = _optional_json(result_path) or {}
+    replay_result = replay_result or {}
     evaluation = diagnosis.get("evaluation") or {}
     checkpoints = diagnosis.get("checkpoints") or []
     checkpoint_validation = diagnosis.get("checkpoint_validation") or {}
@@ -4297,17 +4297,31 @@ def _replay_locked_serialized(
         coverage = "partial"
     semantic = "match" if audit.get("ok") else "divergent"
     pixels = final.get("status", "invalid")
-    status, outcome = classify_replay(
-        execution_ok=execution_ok, coverage=coverage, semantic=semantic,
-        pixels=pixels, checkpoints=checkpoints,
-        checkpoint_validation=checkpoint_validation, faults=faults,
-        state_cov=str(states.get("status") or "invalid"),
-        identity=str((diagnosis.get("identity") or {}).get("status")
-                     or "unverified_session"),
-        capture_validity=str(
-            (diagnosis.get("capture") or {}).get("validity") or "incomplete"),
-        provenance=str((diagnosis.get("provenance") or {}).get("status")
-                       or "incomplete"))
+    public = classification_outcome(diagnosis)
+    invalid = public["diagnostic"] in ("failed", "invalid") or not execution_ok
+    intermediate = any(row.get("status") == "divergent" and row.get("authoritative")
+                       for row in checkpoints)
+    if invalid:
+        status = "invalid"
+    elif public["qualified"]:
+        status = "qualified"
+    elif public["verdict"] == "different" and not faults:
+        status = ("semantic_divergence" if semantic == "divergent" else
+                  "confirmed_rendering_difference" if coverage == "complete"
+                  else "partial_rendering_difference")
+    else:
+        status = "partial"
+    outcome = {
+        "execution": "ok" if execution_ok else "failed",
+        "coverage": coverage, "pixels": pixels, "semantic": semantic,
+        "semantic_scope": "binding_audit", "state_coverage": states.get("status", "invalid"),
+        "checkpoints": checkpoint_validation.get("status", "invalid"),
+        "identity": (diagnosis.get("identity") or {}).get("status", "unverified_session"),
+        "capture_validity": (diagnosis.get("capture") or {}).get("validity", "incomplete"),
+        "provenance": (diagnosis.get("provenance") or {}).get("status", "incomplete"),
+        "qualified": public["qualified"], "intermediate_divergence": intermediate,
+        "fault_injection": bool(faults),
+    }
     report = {
         "schema": SCHEMA,
         "frame_dir": str(frame_dir),
@@ -4316,7 +4330,8 @@ def _replay_locked_serialized(
         "outcome": outcome,
         "receipt_error": receipt_error,
         "execution": diagnosis.get("execution"),
-        "command": command,
+        "command": execution["command"],
+        "execution_identity": execution,
         "returncode": ran.returncode,
         "stderr": (ran.stderr or "")[-4000:],
         "classification": diagnosis.get("classification"),

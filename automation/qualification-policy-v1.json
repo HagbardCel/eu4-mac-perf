@@ -24,7 +24,10 @@
         "corpus_sha256": "c67f45ab6ec0116094673798175cc361833eed3b7f7131d838c8bbc95971dd88",
         "reference_sha256": "34b273977eddbbc658399d4515794887515dbf2d4957c148e9b29feb6d0df24e"
       },
-      "evidence_tier": "emulated-original"
+      "evidence_tier": "emulated-original",
+      "required_scope": {
+        "cases": 414
+      }
     },
     "m7-metal": {
       "kind": "metal-prefix",
@@ -234,7 +237,13 @@
           "reference": "frames/reference-frame-74.bgra",
           "candidate": "frames/candidate-frame-74.bgra"
         },
-        "recorded_comparison": "difference/statistics.json"
+        "recorded_comparison": "difference/statistics.json",
+        "raw_scope": {
+          "width": 1728,
+          "height": 1117,
+          "origin": "lower_left",
+          "pixel_format": "BGRA8"
+        }
       },
       "evidence_tier": "retained-original-pair"
     }

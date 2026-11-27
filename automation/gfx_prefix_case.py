@@ -15,7 +15,7 @@ import shutil
 from pathlib import Path
 
 from automation import gfx_frame_graph, gfx_frame
-from automation.gfx_artifacts import sha256_file as _sha
+from automation.gfx_artifacts import is_leaf_name, sha256_file as _sha
 from automation.gfx_independent_replay import _path_overlap
 
 SCHEMA = "gfx-observation-case/v1"
@@ -60,6 +60,8 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     for record in [initial, *post]:
         blob_names |= gfx_frame.event_blob_names([record])
     for name in sorted(blob_names):
+        if not is_leaf_name(name):
+            raise PrefixCaseError(f"invalid blob member: {name}")
         source = frame_dir / "blobs" / name
         if not source.is_file():
             raise PrefixCaseError(f"referenced blob is absent: {name}")
@@ -72,8 +74,10 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     observation_path = destination / "prefix-observations.jsonl"
     observation_path.write_text(observations_text)
     reference = trace.get("frame") or {}
-    shutil.copyfile(frame_dir / str(reference["reference"]),
-                    destination / str(reference["reference"]))
+    reference_name = reference.get("reference")
+    if not is_leaf_name(reference_name):
+        raise PrefixCaseError("invalid reference member")
+    shutil.copyfile(frame_dir / reference_name, destination / reference_name)
     prefix_block = dict(trace.get("prefix") or {})
     prefix_block.update({
         "end": end,
