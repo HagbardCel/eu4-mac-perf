@@ -107,6 +107,32 @@ campaign checker.
 
 ## Selected-draw OpenGL control
 
+The maintained revision qualifier independently executes a captured-state
+OpenGL transaction from caller `0xed7ba9` on one 864×558 RGBA8 level-0
+texture. The applicable environment is x86-64 legacy CGL, macOS build
+`26A434`, and Apple M5 Max `2.1 Metal - 91.7`. The original and candidate
+submit `glDrawArrays(5, 0, 4)`. Qualification checks restoration, effective
+state and resources, submission and every post-draw attachment byte,
+including alpha. The paired omission restores the same state, submits
+zero draws and preserves the initial attachment, which differs from the
+original result at all 482,112 pixels.
+
+Use governed DSH `eu4_replay` with `op=qualify` and a full candidate commit
+for mandatory qualification. The equivalent maintained CLI is
+`python3.14 -m automation.agent_tools eu4_replay qualify --workspace <path> --commit <sha>`.
+The operator deployment pins the reference and policy. Candidate inputs
+exclude the expected post-draw image. This result covers the captured
+transaction. Broader `_GfxDraw` engine behavior, general drawable equivalence,
+lossless D32 and stencil reconstruction, and other attachment contracts
+remain outside the qualified scope.
+
+[Function dossier](../../analysis/reconstruction/gfx-semantic/v1/draw/_GfxDraw.md) ·
+[Revision qualifier](../../automation/gfx_revision.py) ·
+[Native executor](../../renderer/gl/eu4_gfx_draw_control.c) ·
+[Authenticated original and receipts](../evidence-retention.md#r3-authentic-opengl-selected-draw)
+
+### Historical default-framebuffer authority
+
 The [authority registry](../../automation/gfx_gl_control_authorities.py) pins
 the UUID-linked driver `153fd964…`, native executor `092a3cdb…`, restricted
 input verifier and receipt signer for the default-framebuffer route. Run

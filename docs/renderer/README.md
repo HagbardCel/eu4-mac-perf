@@ -8,13 +8,12 @@ for recovery status.
 ## Components and backends
 
 - [Original EU4 renderer](eu4_renderer.md) covers original OpenGL observation, draw and resource lifecycles, and the limits of static and captured evidence.
-- **Faithful OpenGL** is a reviewed selected-draw control for the supported
-  default-framebuffer route. Qualification requires same-seal inputs,
-  live-drawable equivalence and exact output. M7 event 1 uses offscreen
-  framebuffer 6 and remains outside this route.
-  [Driver](../../automation/gfx_gl_control_renderer.py) ·
-  [Native executor](../../renderer/gl/eu4_gfx_draw_control.c) ·
-  [Qualification and limitations](metal.md#selected-draw-opengl-control)
+- **Faithful OpenGL** independently qualifies one captured-state 864×558
+  offscreen RGBA8 draw, including actual submission, exact attachment bytes
+  and a paired draw omission. The verified scope uses x86-64 legacy CGL on
+  the recorded macOS and Apple GL implementation. [Qualification interface,
+  scope and limitations](metal.md#selected-draw-opengl-control) ·
+  [Native executor](../../renderer/gl/eu4_gfx_draw_control.c)
 - [Faithful Metal](metal.md) covers captured-state replay and exact attachment comparison.
 - [Optimized Metal](metal_optimized.md) records the proposed workload, measurement and qualification requirements.
 

@@ -5,11 +5,13 @@ Operational commands live in [profiler and benchmark operations](reference/profi
 
 ## Current capability and qualification
 
-- The governed R3 gate at `165d431b` satisfied all nine protected
-  requirements. The aggregate verifier checked every case signature and
+- The governed R3 gate satisfied all nine protected requirements at
+  the fully tested implementation `165d431b`. The final immutable check
+  and retained receipts are indexed in the private evidence record. The aggregate verifier checked every case signature and
   output artifact. The gate retains the 414 emulated-original function
   scenarios, synthetic controls and established Metal scopes and diagnostics.
-  [R3 draft](https://github.com/HagbardCel/eu4-mac-perf/pull/305)
+  [Retention and recovery](evidence-retention.md#r3-authentic-opengl-selected-draw) ·
+  [R3 draft and final revision](https://github.com/HagbardCel/eu4-mac-perf/pull/305)
 - The original draw at caller `0xed7ba9` now has a verified seal and an exact
   independently executed OpenGL result for its 864×558 RGBA8 level-0
   attachment. The paired omission preserved initialization, submitted zero

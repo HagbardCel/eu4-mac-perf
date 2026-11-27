@@ -70,6 +70,36 @@ A byte-identical restore matches every `case.json` member size/digest and the lo
 
 Use SHA-256 for artifact identity, `gfx_gl_replay_input.verify_package` for the restricted packages, and `gfx_gl_control_qualification._validate_receipt` for the original request, recorded component paths and public-key binding. The input verifier SHA-256 is `6c93974f4df9612c45c0645ad27a0d6cd5b3a7885ea2b6829be43b5401c02166` and receipt signer SHA-256 is `52e03dd0c0b80c10c4e8acf2f72d4307a07c2c0321a06bd1107e0903f3ffa3b4`. OpenSSL verified both copied receipts with their respective public keys and canonical JSON signing bodies. This collection establishes synthetic registered default-framebuffer execution. Authentic drawable equivalence remains unresolved. [Authority registry](../automation/gfx_gl_control_authorities.py) · [Package verifier](../automation/gfx_gl_replay_input.py) · [Receipt verifier](../automation/gfx_gl_control_qualification.py)
 
+### R3 authentic OpenGL selected draw
+
+The operator deployment pins original locator
+`74c3f427-1fed-4545-bc26-0d968cd07f5d-1-31f9fe67f1558872-reference`, published
+package manifest SHA-256
+`2c8af5db28b51900628e7030c965041f8b152d8c3e64c788dd597823a45a8c99`, and original
+seal SHA-256 `31f9fe67f1558872719904bd14a0b7ec4df74c0839d131dae0befc79b6c62927`.
+The package contains 1,165 verified frame members plus its manifest. The
+seal binds the original frame manifest and event stream. The direct pre-draw
+image binds SHA-256 `e139eeac793146caccdfa4f6735bc1d16e81a96c57916084e501ffec5acd1c2a`
+and the original post-draw image binds SHA-256
+`63c6d8c04571f84843ead7f8326b441ce85dcbc98ca9d6625003fdfdb593aad0`.
+
+The private retention root is `.local/r3-original-evidence/` in the primary
+checkout. The maintained locator and sealed-reference verifier recovered the
+eligible event 273 reference using only that root, independently of the
+producer worktree. `automation.case_locator locate`,
+`gfx_prefix_check.verify_trusted_evidence` and `gfx_frame.load_seal` check
+publication identity, payload inventory and original seal. The incomplete
+captures and debugger observation stay in their separate diagnostic runs.
+
+Retained qualification records and their artifact trees live under
+`qualification/` in the same private root. `qualification/final.json` locates
+the final immutable signed aggregate and authentic case, both worker receipts,
+the protected deployment snapshot and the signed artifact inventories. Recover
+signed case and output paths at their recorded run locations for
+`dsh_receipts.verify_revision`. Private signing material remains in the
+operator deployment. [Original observation and scope](../plans/repository-refactor/r3-capture-preparation.md#authenticated-selected-draw-qualification) ·
+[Aggregate verifier](../automation/dsh_receipts.py)
+
 ## Gate R1 retrieval acceptance
 
 Start at the [renderer index](renderer/README.md). These four paths resolved to the named evidence, verifier and recorded recovery status.

@@ -217,3 +217,20 @@ reporting changes documentation only. Draft closure also requires
 independent review of the capture, applicable environment and trust boundary.
 
 Final documentation accounting is **+31 LOC** relative to R2b.
+
+## Final review and immutable handoff
+
+The operator reviewed `3ee55ffa` and accepted the scientific result,
+recorder fixes, protected qualification, ownership and consolidation. The
+fully native-tested implementation is `165d431b`. The final amendments are
+documentation-only. The private retention record
+`.local/r3-original-evidence/qualification/final.json` identifies the exact
+final commit and governed offline decision, with physically executed draw
+and omission controls using the same frozen original reference.
+[Retention and recovery](../../docs/evidence-retention.md#r3-authentic-opengl-selected-draw)
+
+The final amendments leave enabling, scientific, policy and test counts
+unchanged. The documentation total moves from +31 to +105 LOC.
+The operator decision on the phase-specific +69 enabling LOC
+exception, 269 lines above the original −200 target, remains pending. Carry
+the actual deviation forward without credit for future retirements.
