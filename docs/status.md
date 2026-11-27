@@ -5,14 +5,16 @@ Operational commands live in [profiler and benchmark operations](reference/profi
 
 ## Current capability and qualification
 
-- Draft verification at `08d56ed1` covered native synthetic controls,
-  ordered transitions, the 414-case emulated-original function, governed DSH,
-  worker isolation and protected Metal scopes. The signed mandatory decision
-  verified nine case receipts and their artifact inventories. Seven met policy.
+- Draft verification at `f23bebbe` covered native synthetic controls,
+  ordered transitions, all 414 emulated-original function cases, governed
+  DSH, worker isolation and protected Metal scopes. All nine signed case
+  receipts and artifact inventories verified. Eight requirements met policy.
   [R3 draft and verification](https://github.com/HagbardCel/eu4-mac-perf/pull/305)
-- Authentic selected-draw qualification awaits a separately authorized capture.
-  November 14 complete-manifest bytes remain unavailable, and the protected
-  digest remains enforced. [Prepared capture and scope](../plans/repository-refactor/r3-capture-preparation.md) · [Retention disposition](../plans/repository-refactor/r3-consolidation.md#november-14-retention-disposition-for-operator-review)
+- The authentic selected draw still needs the operator-issued one-use launch
+  ID and a complete original seal. [Prepared capture and scope](../plans/repository-refactor/r3-capture-preparation.md)
+- November 14 passes as a retained raw-pair diagnostic. The original
+  complete-manifest bytes remain unavailable and the digest remains
+  recorded. [Approved retention disposition](../plans/repository-refactor/r3-consolidation.md#november-14-approved-retention-disposition)
 - OpenCode remains the supported transitional campaign runtime. Native DSH
   operates authorized experiments. R4 owns broader autonomous continuation
   and checkpoint integration. [Permanent strategy](eu4_recommended_strategy.md)
