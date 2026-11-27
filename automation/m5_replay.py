@@ -183,11 +183,10 @@ def qualify_candidate(commit: str, directory: Path, original: Path, reference: d
     executable = build / "sprite-replay"
     flags = ("-arch", "arm64", "-O2", "-fobjc-arc", "-lc++", "-framework", "Foundation",
              "-framework", "Metal", "-framework", "QuartzCore")
-    linked = qualification_sandbox.run(
-        [compiler, *flags, "-isysroot", sdk, "-I", snapshot / "benchmark", "-o", executable,
-         harness, *(snapshot / path for path in relative)], writable=build,
-        readable=(snapshot, sdk, compiler.parent.parent), tools=(compiler.parent / "ld",),
-        timeout=180)
+    linked = native_build.qualification_compile(
+        compiler, sdk, [*flags, "-I", snapshot / "benchmark", "-o", executable,
+                        harness, *(snapshot / path for path in relative)],
+        build=build, readable=(snapshot,), timeout=180)
     if linked.returncode:
         raise ReplayError(f"M5 candidate build failed: {(linked.stderr or linked.stdout)[-1800:]}")
     expected_exe = json.loads(descriptor.read_text())["provenance"]
@@ -215,6 +214,8 @@ def qualify_candidate(commit: str, directory: Path, original: Path, reference: d
             "execution": "completed", "independently_verified": True,
             "reference": reference, "coverage": ["sprite-logical-bgra"], "scope": report["samples"],
             "candidate": {"source_digests": closure, "executable_sha256": executable_digest},
+            "recipe": native_build.qualification_recipe(compiler, sdk, flags),
+            "validation_contract": {"comparison_policy_sha256": _sha(policy_path)},
             "outputs": outputs,
             "problems": [] if exact else report["reasons"]}
 

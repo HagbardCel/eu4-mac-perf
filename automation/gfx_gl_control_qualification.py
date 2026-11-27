@@ -1431,8 +1431,8 @@ def preflight_reference(frame_dir: Path, trace: dict, seal: dict, trusted: dict,
     """Classify original evidence before a renderer is built or executed."""
     from automation import gfx_frame_graph, gfx_observation
 
-    if gfx_observation.authority(trace, seal) != "authentic":
-        return {"verdict": "invalid_provenance", "problems": ["reference is not original EU4"]}
+    if gfx_observation.authority(trace, seal) not in ("authentic", "synthetic"):
+        return {"verdict": "invalid_provenance", "problems": ["reference has no verified execution tier"]}
     events = trace["_events"]
     draw_id = selection.get("draw")
     resource = selection.get("resource")
@@ -1445,6 +1445,7 @@ def preflight_reference(frame_dir: Path, trace: dict, seal: dict, trusted: dict,
             shaders = (event.get("program") or {}).get("shaders") or []
             if (event.get("kind") == "draw"
                     and draw.get("caller_rva") == workload["caller_rva"]
+                    and len(shaders) == len(workload["shader_sha256"])
                     and {row["stage"]: row["sha256"] for row in shaders}
                     == workload["shader_sha256"]
                     and all(color.get(key) == value for key, value in
@@ -1530,6 +1531,25 @@ def preflight_reference(frame_dir: Path, trace: dict, seal: dict, trusted: dict,
             missing.append("authenticated freshness and lifetime of the later readback")
         missing.append("direct original attachment observation including depth/stencil applicability")
     else:
+        semantics = draw.get("draw") or {}
+        submission = draw.get("submission") or {}
+        required_submission = {
+            "api": "glDrawArrays", "target_continuity": "entry_submission_exit",
+            "framebuffer": target["framebuffer"], "read_framebuffer": target["framebuffer"],
+            "attachment": attachment["name"], "level": 0, "samples": 0,
+            "draw_buffer": 0x8ce0, "read_buffer": 0x8ce0,
+            "depth_present": False, "stencil_present": False,
+            **{key: semantics.get(key) for key in ("mode", "first", "count")},
+        }
+        if (semantics.get("indexed") is not False or semantics.get("instance_count") != 1
+                or semantics.get("base_vertex") != 0
+                or semantics.get("mode") not in (4, 5)
+                or type(semantics.get("first")) is not int or semantics["first"] < 0
+                or type(semantics.get("count")) is not int or semantics["count"] < 3):
+            missing.append("supported nonindexed glDrawArrays semantics")
+        if (type(submission.get("call_id")) is not int or submission["call_id"] <= 0
+                or any(submission.get(key) != value for key, value in required_submission.items())):
+            missing.append("effective GL submission and entry-to-exit attachment continuity")
         observed_target = direct.get("target") or {}
         observed_attachment = observed_target.get("color_attachment") or {}
         if (observed_target.get("framebuffer") != target.get("framebuffer")
@@ -1658,18 +1678,24 @@ def _offscreen_package(frame: Path, trace: dict, seal: dict, facts: dict, direct
                                "sha256": replay_input.sha256_bytes(seed)},
                      "depth": {"source": "not_required"}, "stencil": {"source": "not_required"}},
     }
-    # The existing builder uses this checkpoint slot solely as a protected
-    # output digest. It does not serialize the slot into restricted inputs.
-    selected = {**draw, "default_checkpoint": expected}
-    return replay_input.build_package(
-        frame_dir=view, trace={"_events": [selected]}, seal=seal, evidence=evidence,
+    package = replay_input.build_package(
+        frame_dir=view, trace={"_events": [draw]}, seal=seal, evidence=evidence,
         checkpoint_event=scope["draw"], draw_event=scope["draw"], width=width, height=height,
         resource=scope["resource"], out_dir=directory / "inputs")
+    packaged = json.loads((Path(package["path"]) / "replay-input.json").read_text())
+    if forbidden.intersection(item["sha256"] for item in packaged["files"]):
+        raise replay_input.ReplayInputError("reference_leak", "offscreen reference payload")
+    return package
 
 
 def qualify_published_candidate(repo: Path, commit: str, directory: Path,
                                 source: tuple, case: dict) -> dict:
+    from automation import gfx_observation
+
     frame, trace, seal, trusted = source
+    if seal.get("_verified") is not True:
+        return {"verdict": "invalid_provenance", "problems": ["selected frame seal is unverified"]}
+    tier = gfx_observation.authority(trace, seal)
     facts = preflight_reference(frame, trace, seal, trusted, case["selection"])
     original = trace.get("gl") or {}
     gl_identity = {key: original.get(key) for key in ("vendor", "renderer", "version")}
@@ -1683,7 +1709,8 @@ def qualify_published_candidate(repo: Path, commit: str, directory: Path,
         if facts["problems"]:
             facts["verdict"] = "missing_original_observation"
     provenance = {"reference": case["reference"],
-                  "evidence_tier": "original-eu4" if facts["verdict"] != "invalid_provenance" else None,
+                  "evidence_tier": ({"authentic": "original-eu4", "synthetic": "synthetic"}.get(tier)
+                                    if facts["verdict"] != "invalid_provenance" else None),
                   "original_environment": {"architecture": architecture, **gl_identity, "profile": context},
                   "original_evidence_verified": facts["verdict"] != "invalid_provenance"}
     if facts["verdict"] != "eligible":
@@ -1741,6 +1768,8 @@ def _required_observations(manifest: dict) -> dict:
         "stencil_test": int(state["stencil"]["test"]), "cull": int(state["cull"]["enabled"]),
         "dither": int(state["dither"]), "color_mask": state["color_mask"],
         "active_uniforms": len(uniforms), "active_attributes": len(attributes),
+        "shader_sha256": {shader["stage"]: shader["sha256"]
+                          for shader in manifest["program"]["shaders"]},
         "uniforms": uniforms,
         "attributes": {
             item["name"]: {"location": item["index"], "components": item["components"],
@@ -1769,6 +1798,7 @@ def _required_observations(manifest: dict) -> dict:
     if state["logic_op"]["enabled"]:
         restored["logic_mode"] = replay_input._gl_enum(state["logic_op"]["mode"])
     if target["depth_bits"] == target["stencil_bits"] == 0:
+        restored["read_buffer"] = 0x8ce0
         restored["attachments"] = {"color_type": 0x1702, "color_level": 0,
                                    "depth_type": 0, "stencil_type": 0,
                                    "format": 0x8c43 if state["framebuffer_srgb"] else 0x8058,
@@ -1815,7 +1845,7 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, package: Path, e
     target = expectation["architecture"]
     if target not in ("arm64", "x86_64"):
         raise QualificationError("unsupported OpenGL build architecture")
-    flags = ("-arch", target, "-isysroot", sdk, "-O2", "-Wno-deprecated-declarations")
+    flags = ("-arch", target, "-O2", "-Wno-deprecated-declarations")
     redirects = ("-Dmain=eu4_candidate_draw_main",
                  "-DglDrawArrays=eu4_observed_draw_arrays",
                  "-DglDrawElements=eu4_observed_draw_elements")
@@ -1823,10 +1853,8 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, package: Path, e
     for arguments in (
             [*redirects, "-c", staged / input_source, "-o", candidate_object],
             [observer, candidate_object, "-framework", "OpenGL", "-o", executable]):
-        built = qualification_sandbox.run(
-            [clang, *flags, *arguments], writable=build,
-            readable=(staged, observer, sdk, clang.parent.parent),
-            tools=(clang.parent / "ld",), timeout=300)
+        built = native_build.qualification_compile(
+            clang, sdk, [*flags, *arguments], build=build, readable=(staged, observer))
         if built.returncode:
             return {"verdict": "execution_failure", "problems": [built.stderr[-2500:]]}
 
@@ -1877,8 +1905,7 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, package: Path, e
             "schema": dsh_receipts.REVISION_SCHEMA, "execution": "completed", "execution_revision": commit,
             "scope": "selected-draw", "control": mode, "architecture": target,
             "source_digests": digests, "executable_sha256": _sha(executable),
-            "recipe": {"compiler_sha256": _sha(clang), "sdk": str(sdk),
-                       "flags": [*map(str, flags), *redirects]},
+            "recipe": native_build.qualification_recipe(clang, sdk, [*flags, *redirects]),
             "package_sha256": package_record["package_sha256"],
             "outputs": outputs + [{"file": observations.name, "bytes": observations.stat().st_size,
                                    "sha256": _sha(observations)}],
@@ -1919,8 +1946,16 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, package: Path, e
     earliest = differences[0] if differences else None
     problems = [f"transition {row['transition']} {row['phase']}.{row['field']} differs"
                 for row in differences]
+    output_names = [
+        (Path(control["receipt"]).parent / item["file"]).relative_to(directory).as_posix()
+        for control in results.values() for item in control["outputs"]
+    ] + [Path(control["receipt"]).relative_to(directory).as_posix() for control in results.values()]
     return {
         "verdict": "different" if problems else "exact", "evidence_tier": "synthetic",
+        "outputs": dsh_receipts.artifact_records(directory, output_names),
+        "recipe": native_build.qualification_recipe(clang, sdk, [*flags, *redirects]),
+        "environment": results["draw"]["environment"],
+        "validation_contract": {"gl_observer_sha256": _sha(repo / "renderer/gl/eu4_gfx_draw_observer.c")},
         "execution": "completed", "independently_verified": True, "candidate": {
             "executable_sha256": _sha(executable), "source_digests": digests,
             "architecture": target,

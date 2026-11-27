@@ -1,0 +1,169 @@
+{
+  "schema": "eu4-operator-qualification/v1",
+  "authentic_case": "offscreen-273",
+  "cases": {
+    "r2b-synthetic-gl": {
+      "kind": "synthetic-gl",
+      "category": "exact",
+      "reference": {
+        "package_sha256": "704fce9fd9ccf031cd3761ca3ae50a1ab1f59ed7c3d1c79a69c0194e7cc11513",
+        "expected_sha256": "e5f58358cc2305886bae06af04a2c55098b36d97e2e9eb01dbd9e4cef885b0a7"
+      },
+      "minimum_coverage": [
+        "restoration",
+        "submission",
+        "post-attachment",
+        "draw-omission"
+      ]
+    },
+    "constant-buffer": {
+      "kind": "constant-buffer",
+      "category": "exact",
+      "reference": {
+        "corpus_sha256": "c67f45ab6ec0116094673798175cc361833eed3b7f7131d838c8bbc95971dd88",
+        "reference_sha256": "34b273977eddbbc658399d4515794887515dbf2d4957c148e9b29feb6d0df24e"
+      }
+    },
+    "m7-metal": {
+      "kind": "metal-prefix",
+      "category": "diagnostic",
+      "require_end": 1,
+      "preserve_exact": [
+        0,
+        10,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "minimum_coverage": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ],
+      "reference": {
+        "key": "47590918-d63a-4798-9737-df00285ad51b-1-8dd94e482d169e24-reference",
+        "manifest_sha256": "c9d0993fa9e5f2b2d9eed16f258c94ddb71f558d76c5ac1077b155ce653efc05",
+        "seal_sha256": "8dd94e482d169e247e55a584309ac982de82dc01cf548c8ce857a6516b58654f"
+      }
+    },
+    "m7-gl-event1": {
+      "kind": "gl",
+      "category": "diagnostic",
+      "reference": {
+        "key": "47590918-d63a-4798-9737-df00285ad51b-1-8dd94e482d169e24-reference",
+        "manifest_sha256": "c9d0993fa9e5f2b2d9eed16f258c94ddb71f558d76c5ac1077b155ce653efc05",
+        "seal_sha256": "8dd94e482d169e247e55a584309ac982de82dc01cf548c8ce857a6516b58654f"
+      },
+      "selection": {
+        "draw": 1,
+        "resource": "tex:433"
+      },
+      "original_limitations": [
+        "selected target is outside the color-only RGBA8 level-0 scope"
+      ]
+    },
+    "m7-window": {
+      "kind": "gl",
+      "category": "diagnostic",
+      "reference": {
+        "key": "90825686-5154-4173-99b6-d2704893839e-1-07f54bcee877cc01-reference",
+        "manifest_sha256": "e5c58bd94aa0437466316e3ba432970af7bc818f31dd85abcf0bcd2bcffca863",
+        "seal_sha256": "07f54bcee877cc017872cc58e1c15cc641ec5c98e50ed5283d5c081e5da0c8ce"
+      },
+      "selection": {
+        "draw": 18,
+        "checkpoint": 19,
+        "resource": "fb:0"
+      },
+      "original_limitations": [
+        "the live default drawable's internal pixel/depth/stencil component formats and render-target path were not captured; the control target's equivalence is unproven",
+        "lossless original D32 depth observation"
+      ]
+    },
+    "offscreen-273": {
+      "kind": "gl",
+      "category": "exact",
+      "selection": {
+        "workload": {
+          "caller_rva": "0xed7ba9",
+          "shader_sha256": {
+            "vertex": "daa5cc914bf99d3d648b406df66944008f094d039f29352302344a871f95e7c2",
+            "pixel": "4b21816285bcd71041a2c52b8e9b2cc86db71947e6201d455a54b38863c6d4eb"
+          },
+          "color_attachment": {
+            "type": "texture",
+            "level": 0,
+            "internal_format": "RGBA8",
+            "width": 864,
+            "height": 558
+          }
+        }
+      },
+      "minimum_coverage": [
+        "restoration",
+        "submission",
+        "post-attachment",
+        "draw-omission"
+      ]
+    },
+    "m6-frame": {
+      "kind": "m6-frame",
+      "category": "exact",
+      "reference": {
+        "manifest_sha256": "c935b3c3391d92b048b8a3a58efaeda0d5e4f9a3e11715e9251ddcdcbd0f2da3",
+        "event_stream_sha256": "47bda04c18194365d9cce66f3ffbe0901f40d0e1e2c81839e387cee016618b30",
+        "image_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+        "event_count": 326,
+        "archive_path": "m6/frames/menu-occ300/frame"
+      },
+      "minimum_coverage": [
+        "all-events-encoded",
+        "exact-bgra"
+      ]
+    },
+    "m5-sprite": {
+      "kind": "m5-sprite",
+      "category": "exact",
+      "reference": {
+        "manifest_sha256": "dd06ffbd28c2d5a6ff498f476fd60713a902945633773f2ad89ac790ce6ade57",
+        "archive_path": "m5/experiments/sprite-gl-ref-09"
+      },
+      "minimum_coverage": [
+        "sprite-logical-bgra"
+      ]
+    },
+    "nov14-dual-run": {
+      "kind": "dual-run-reference",
+      "category": "diagnostic",
+      "reference": {
+        "manifest_sha256": "5a361b47f66113b14aab7d6d9ce3bd9014cc6c02a162f02efb4755e8938e72f2",
+        "reference_sha256": "a500e41692191451e1b1d33ac6eab07d672d433892fd11a25f78050ec5122444",
+        "candidate_sha256": "90f0f9bd684a792c87ba59ce4f02226a678d185f631f615eada4a7a30f1ddccc",
+        "archive_path": "m7/session-20261114T181230Z-d28f6fee/case"
+      },
+      "minimum_coverage": [
+        "nov14-raw-comparison"
+      ]
+    }
+  }
+}

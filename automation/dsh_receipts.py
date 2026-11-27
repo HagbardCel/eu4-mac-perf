@@ -138,32 +138,78 @@ def authentic_receipt(receipt: dict, public_key: bytes) -> bool:
     return gfx_ed25519.verify(public_key, canonical_json(body).encode(), signature)
 
 
+def _artifact(root: Path, name: str) -> dict:
+    relative = Path(name)
+    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"invalid artifact path: {name}")
+    path = root / relative
+    if (any((root / part).is_symlink() for part in (relative, *relative.parents))
+            or not path.is_file() or path.stat().st_nlink != 1):
+        raise ValueError(f"artifact is not a private regular file: {name}")
+    return {"file": name, "bytes": path.stat().st_size, "sha256": digest_file(path)}
+
+
+def artifact_records(root: Path, names) -> list[dict]:
+    return [_artifact(root, name) for name in sorted(set(names))]
+
+
+def _verified_receipt(path: Path, public_key: bytes) -> dict:
+    _artifact(path.parent, path.name)
+    receipt = read_json(path)
+    if (not isinstance(receipt, dict) or receipt.get("schema") != REVISION_SCHEMA
+            or not authentic_receipt(receipt, public_key)):
+        raise ValueError(f"invalid signed qualification receipt: {path}")
+    return receipt
+
+
 def applicable_execution(receipt_path: Path, binding: dict, public_key: bytes) -> dict | None:
     """Verify a protected receipt and its outputs without relabeling it."""
     try:
-        if (receipt_path.is_symlink() or not receipt_path.is_file()
-                or receipt_path.stat().st_nlink != 1):
-            return None
-        previous = read_json(receipt_path)
-        if (not isinstance(previous, dict) or previous.get("schema") != REVISION_SCHEMA
-                or previous.get("execution") != "completed"
-                or not authentic_receipt(previous, public_key)
-                or any(previous.get(key) != value for key, value in binding.items())):
-            return None
-        outputs = previous.get("outputs")
-        if not isinstance(outputs, list) or not outputs:
-            return None
-        for item in outputs:
-            name = item["file"]
-            if not name or Path(name).name != name or name in (".", ".."):
-                return None
-            path = receipt_path.parent / name
-            if (path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1
-                    or path.stat().st_size != item["bytes"] or digest_file(path) != item["sha256"]):
-                return None
-        return previous
+        previous = _verified_receipt(receipt_path, public_key)
+        if (previous.get("execution") == "completed"
+                and previous.get("outputs")
+                and all(previous.get(key) == value for key, value in binding.items())
+                and all(item == _artifact(receipt_path.parent, item["file"])
+                        for item in previous["outputs"])):
+            return previous
     except (KeyError, TypeError, ValueError, OSError):
-        return None
+        pass
+    return None
+
+
+def verify_revision(path: Path, public_key: bytes, *, revision: str, policy_sha256: str,
+                    policy_contract_sha256: str, required_cases: list[str], run_root: Path) -> dict:
+    """Verify a mandatory decision, every case binding, and the exact artifact bytes."""
+    path = Path(path).absolute()
+    run_root = Path(run_root).resolve(strict=True)
+    _artifact(run_root, path.relative_to(run_root).as_posix())
+    decision = _verified_receipt(path, public_key)
+    if any(decision.get(key) != value for key, value in {
+        "mode": "mandatory", "revision": revision, "policy_sha256": policy_sha256,
+        "policy_contract_sha256": policy_contract_sha256, "required_cases": required_cases,
+    }.items()) or [row["case_id"] for row in decision["cases"]] != required_cases:
+        raise ValueError("mandatory decision does not bind the requested policy and revision")
+    for row in decision["cases"]:
+        receipt_path = Path(row["receipt"]).absolute()
+        _artifact(run_root, receipt_path.relative_to(run_root).as_posix())
+        receipt = _verified_receipt(receipt_path, public_key)
+        if receipt["receipt_digest"] != row["receipt_digest"] or receipt.get("case_id") != row["case_id"]:
+            raise ValueError(f"substituted case receipt: {row['case_id']}")
+        if row.get("execution_reused"):
+            binding = {key: row[key] for key in ("candidate", "recipe", "environment", "reference",
+                                                 "validation_contract", "execution_revision")}
+            if applicable_execution(receipt_path, binding, public_key) is None:
+                raise ValueError(f"inapplicable case receipt: {row['case_id']}")
+        elif (not receipt_path.is_relative_to(path.parent)
+              or receipt.get("nonce") != path.parent.name
+              or receipt.get("tree") != decision["tree"]
+              or receipt.get("execution_revision") != revision
+              or receipt.get("policy_sha256") != policy_sha256):
+            raise ValueError(f"case receipt does not belong to this decision: {row['case_id']}")
+        if any(item != _artifact(receipt_path.parent, item["file"])
+               for item in receipt.get("outputs", [])):
+            raise ValueError(f"case output changed: {row['case_id']}")
+    return decision
 
 
 def load_current_receipt(run_root: Path) -> dict | None:

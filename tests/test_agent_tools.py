@@ -85,7 +85,7 @@ class ToolTests(unittest.TestCase):
     def test_mandatory_qualification_summary_fits_governed_dsh_output(self):
         from automation import gfx_revision
 
-        case_ids = [*gfx_revision.PROTECTED_CASES, "offscreen-273"]
+        case_ids = list(json.loads(gfx_revision.POLICY_CONTRACT.read_text())["cases"])
         artifact = "candidate-output/" + "a" * 130
         rows = [{
             "case_id": case, "category": "diagnostic", "verdict": "different",

@@ -238,6 +238,22 @@ def qualification_toolchain(driver: str) -> tuple[Path, Path]:
     return compiler, Path(xcrun("--sdk", "macosx", "--show-sdk-path")).resolve(strict=True)
 
 
+def qualification_compile(compiler: Path, sdk: Path, arguments, *, build: Path,
+                          readable=(), timeout: float = 300):
+    from automation import qualification_sandbox
+
+    return qualification_sandbox.run(
+        [compiler, "-isysroot", sdk, *arguments], writable=build,
+        readable=(*readable, sdk, compiler.parent.parent),
+        tools=(compiler.parent / "ld",), timeout=timeout)
+
+
+def qualification_recipe(compiler: Path, sdk: Path, flags) -> dict:
+    return {"compiler_sha256": sha256_file(compiler), "sdk": str(sdk),
+            "sdk_settings_sha256": sha256_file(sdk / "SDKSettings.json"),
+            "flags": list(map(str, flags))}
+
+
 def _gl_control_paths(directory: Path) -> dict[str, str]:
     driver = directory / _GL_DRIVER
     executable = directory / _GL_EXECUTABLE

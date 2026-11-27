@@ -696,12 +696,10 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, reference_identi
     executable = build / "function-oracle"
     flags = ("-std=c++20", "-O0", "-Wall", "-Wextra", "-Werror",
              "-fsanitize=undefined", "-fno-sanitize-recover=all")
-    command = [compiler, *flags, "-isysroot", sdk, "-I", (candidate / sources[0]).parent,
-               candidate / sources[0], *(harness_inputs / item.name for item in harness_sources),
-               "-o", executable]
-    linked = qualification_sandbox.run(
-        command, writable=build, readable=(candidate, harness_inputs, sdk, compiler.parent.parent),
-        tools=(compiler.parent / "ld",), timeout=300)
+    linked = native_build.qualification_compile(
+        compiler, sdk, [*flags, "-I", (candidate / sources[0]).parent, candidate / sources[0],
+                        *(harness_inputs / item.name for item in harness_sources), "-o", executable],
+        build=build, readable=(candidate, harness_inputs))
     if linked.returncode:
         return {"verdict": "execution_failure",
                 "problems": [f"function compiler exit {linked.returncode}: "
@@ -729,7 +727,7 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, reference_identi
     binding = {
         "candidate": {"source_digests": closure, "executable_sha256": executable_digest,
                       "architecture": platform.machine()},
-        "recipe": {"compiler_sha256": sha256_file(compiler), "sdk": str(sdk), "flags": list(flags),
+        "recipe": {**native_build.qualification_recipe(compiler, sdk, flags),
                    "sanitizer_sha256": sha256_file(runtime)},
         "environment": {"macos": platform.mac_ver()[0], "os_build": platform.version()},
         "reference": references,

@@ -99,8 +99,42 @@ static int blob_equals(const char *directory, const char *name,
     return got == bytes && memcmp(buffer, expected, bytes) == 0;
 }
 
+static int selected_fixture(const char *directory) {
+    GLuint fbo = 0, texture = make_texture(GL_TEXTURE_2D);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 864, 558, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glViewport(0, 0, 864, 558);
+    glDisable(GL_DITHER);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    char record[8192];
+    if (eu4_gfx_frame_trace_test_observe(
+            directory, 0, "selected_pre_draw", "draw", -1, record, sizeof(record)) != 0)
+        return 1;
+    puts(record);
+    const GLshort vertices[] = {-1,-1,0,1, 1,-1,0,1, -1,1,0,1, 1,1,0,1};
+    glColor4ub(61, 97, 163, 255);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glVertexPointer(4, GL_SHORT, 0, vertices);
+    fputs("{", stdout);
+    if (!eu4_gfx_frame_trace_test_capture_arrays(stdout, GL_TRIANGLE_STRIP, 0, 4)) return 1;
+    puts("}");
+    if (eu4_gfx_frame_trace_test_observe(
+            directory, 0, "post_event", "draw", -1, record, sizeof(record)) != 0)
+        return 1;
+    puts(record);
+    printf("{\"vendor\":\"%s\",\"renderer\":\"%s\",\"version\":\"%s\","
+           "\"cgl\":{\"profile\":\"legacy\"}}\n",
+           glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    if (argc != 2) {
+    if (argc != 2 && argc != 3) {
         fprintf(stderr, "usage: %s <dir>\n", argv[0]);
         return 2;
     }
@@ -144,6 +178,7 @@ int main(int argc, char **argv) {
     [context setView:view];
     [context update];
     [context makeCurrentContext];
+    if (argc == 3 && strcmp(argv[2], "selected") == 0) return selected_fixture(argv[1]);
 
     GLuint a = make_texture(GL_TEXTURE_2D);
     GLuint b = make_texture(GL_TEXTURE_2D);

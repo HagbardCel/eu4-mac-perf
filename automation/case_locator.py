@@ -1141,6 +1141,33 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _reference_roots(roots: list | None, workspace: Path):
+    from automation.state import outside_workspace
+
+    for root in roots or []:
+        root = {"path": root, "required": True} if isinstance(root, str) else root
+        path = outside_workspace(Path(root["path"]), workspace)
+        if path.is_dir():
+            yield path
+        elif root["required"]:
+            raise CaseLocatorError("missing_required_evidence_root", str(path))
+
+
+def resolve_legacy_reference(roots, reference: dict, workspace: Path) -> Path:
+    """Resolve a fixed archive member. Its format owner verifies committed digests."""
+    from automation.state import outside_workspace
+
+    if path := reference.get("path"):
+        return outside_workspace(Path(path), workspace)
+    paths = [outside_workspace(root / reference["archive_path"], workspace)
+             for root in _reference_roots(roots, workspace)]
+    matches = [path for path in paths if path.is_dir()]
+    if len(matches) != 1:
+        raise CaseLocatorError("invalid_provenance" if matches else "missing_original_payload",
+                               "historical case has no unique archive location")
+    return matches[0]
+
+
 def resolve_sealed_reference(roots: list | None, reference: dict, workspace: Path):
     from automation import gfx_prefix_check, m6_frame
     from automation.state import outside_workspace
@@ -1149,10 +1176,13 @@ def resolve_sealed_reference(roots: list | None, reference: dict, workspace: Pat
     if not isinstance(roots, list) or not roots:
         return None, {"verdict": "missing_original_observation",
                       "problems": ["operator evidence roots are unconfigured"]}
-    for root in roots:
-        root_path = outside_workspace(Path(root), workspace)
+    try:
+        roots = list(_reference_roots(roots, workspace))
+    except CaseLocatorError as exc:
+        return None, {"verdict": exc.kind, "problems": [str(exc)]}
+    for root_path in roots:
         located = locate(root_path, key=reference["key"])
-        if located["state"] in ("root_unavailable", "unknown"):
+        if located["state"] == "unknown":
             continue
         if located["state"] == "missing_payload":
             return None, {"verdict": "missing_original_payload",

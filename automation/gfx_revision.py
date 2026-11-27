@@ -21,16 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = dsh_receipts.REVISION_SCHEMA
 POLICY = "EU4_QUALIFICATION_POLICY"
 POLICY_DIGEST = "EU4_QUALIFICATION_POLICY_SHA256"
-PROTECTED_CASES = {
-    "m5-sprite": ("m5-sprite", "exact", ["sprite-logical-bgra"]),
-    "m6-frame": ("m6-frame", "exact", ["all-events-encoded", "exact-bgra"]),
-    "m7-metal": ("metal-prefix", "diagnostic", [*range(11), *range(12, 21)]),
-    "m7-gl-event1": ("gl", "diagnostic", []),
-    "m7-window": ("gl", "diagnostic", []),
-    "nov14-dual-run": ("dual-run-reference", "diagnostic", ["nov14-raw-comparison"]),
-    "r2b-synthetic-gl": ("synthetic-gl", "exact", ["restoration", "submission", "post-attachment", "draw-omission"]),
-    "constant-buffer": ("constant-buffer", "exact", []),
-}
+POLICY_SCHEMA = "eu4-operator-qualification/v1"
+POLICY_CONTRACT = Path(__file__).with_name("qualification-policy-v1.json")
 
 
 class QualificationError(RuntimeError):
@@ -47,7 +39,7 @@ def _policy(workspace: Path, commit: str) -> tuple[dict, str]:
     if digest != os.environ.get(POLICY_DIGEST):
         raise QualificationError("operator qualification policy digest differs")
     policy = json.loads(raw)
-    if not isinstance(policy, dict) or policy.get("schema") != SCHEMA:
+    if not isinstance(policy, dict) or policy.get("schema") != POLICY_SCHEMA:
         raise QualificationError("unsupported qualification policy")
     _outside(ROOT, workspace)
     trusted = state.trusted_git(ROOT, "rev-parse", "HEAD").strip()
@@ -88,27 +80,28 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
     public_key = bytes.fromhex(policy["receipt_public_key"])
     if gfx_ed25519.derive_public_key(seed) != public_key:
         raise QualificationError("receipt signing key does not match the approved public key")
-    cases = policy.get("cases")
-    if not isinstance(cases, dict) or not cases:
-        raise QualificationError("protected case inventory is missing")
-    if any(not isinstance(row, dict) or row.get("category") not in
-           ("exact", "diagnostic", "optional") for row in cases.values()):
-        raise QualificationError("protected case category is invalid")
-    missing_cases = []
-    cases = {key: dict(row) for key, row in cases.items()}
-    for name, (kind, category, coverage) in PROTECTED_CASES.items():
-        case = cases.get(name)
-        if not case or (case.get("kind"), case.get("category")) != (kind, category):
-            missing_cases.append(name)
-            continue
-        case["minimum_coverage"] = list(dict.fromkeys([*case.get("minimum_coverage", []), *coverage]))
-        if name == "m7-metal":
-            scope = [0, 10, 12, 13, 14, 15, 16, 17]
-            case["preserve_exact"] = sorted(set(case.get("preserve_exact", [])) | set(scope))
-            case["require_end"] = max(case.get("require_end", 1), 1)
-    required = [key for key, row in cases.items() if row["category"] != "optional"]
+    contract = json.loads(POLICY_CONTRACT.read_text())
+    if contract["schema"] != POLICY_SCHEMA:
+        raise QualificationError("operator policy contract version differs")
+    required = list(contract["cases"])
+    authentic = contract["authentic_case"]
+    evidence = policy.get("evidence", {})
+    if set(evidence) - set(required) or {"cases", "authentic_case"}.intersection(policy):
+        raise QualificationError("deployment cannot change protected case definitions")
+    cases = {}
+    for name, rule in contract["cases"].items():
+        deployment = evidence.get(name, {})
+        committed = rule.get("reference", {})
+        if any(key in deployment and deployment[key] != value for key, value in committed.items()):
+            raise QualificationError(f"committed reference identity differs for {name}")
+        allowed = {"path", "package", "expected", "architecture", "gl", "reuse_receipt"}
+        if name == authentic:
+            allowed |= {"key", "manifest_sha256", "seal_sha256"}
+        if set(deployment) - allowed - committed.keys():
+            raise QualificationError(f"unexpected deployment settings for {name}")
+        cases[name] = {**rule, "reference": {**committed, **deployment}}
     if case_id is not None and case_id not in cases:
-        raise QualificationError("case id is absent from the operator policy")
+        raise QualificationError("case id is absent from the protected policy")
     selected = [case_id] if case_id is not None else required
     run_root = _outside(Path(policy["run_root"]), workspace)
     run_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -122,8 +115,8 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
         try:
             if case["kind"] == "constant-buffer":
                 previous = None
-                if case.get("reuse_receipt"):
-                    previous = run_root / case["reuse_receipt"]
+                if case["reference"].get("reuse_receipt"):
+                    previous = run_root / case["reference"]["reuse_receipt"]
                     if not previous.resolve().is_relative_to(run_root):
                         raise QualificationError("execution receipt escapes the protected run root")
                 row = reconstruction_diff.qualify_candidate(
@@ -144,7 +137,8 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
                         ROOT, policy["trusted_revision"], commit, job, frame, trusted, case)
             elif case["kind"] in ("m5-sprite", "m6-frame", "dual-run-reference"):
                 reference = case["reference"]
-                original = _outside(Path(reference["path"]), workspace)
+                original = case_locator.resolve_legacy_reference(
+                    policy.get("evidence_roots"), reference, workspace)
                 if case["kind"] == "m5-sprite":
                     row = m5_replay.qualify_candidate(commit, job, original, reference)
                 elif case["kind"] == "m6-frame":
@@ -156,6 +150,8 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
                         original, reference, json.loads(scenario.read_text())["comparison"])
             else:
                 row = {"verdict": "unsupported", "problems": ["case executor is unavailable"]}
+        except case_locator.CaseLocatorError as exc:
+            row = {"verdict": exc.kind, "problems": [str(exc)]}
         except (KeyError, OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
             row = {"verdict": "execution_failure", "problems": [str(exc)]}
         receipt = row.pop("reused_execution_receipt", None)
@@ -172,23 +168,25 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
         results.append({"case_id": key, "category": case["category"],
                         "receipt": str(receipt), "receipt_digest": receipt_digest,
                         "requirement_satisfied": _passes(case, row), **row})
-    authentic = policy.get("authentic_case")
-    selection = json.loads((ROOT / "plans/repository-refactor/r3-offscreen-selection.json").read_text())
     authentic_pass = any(
         row["case_id"] == authentic and row["category"] == "exact"
         and cases[authentic]["kind"] == "gl"
-        and cases[authentic].get("selection") == selection
         and row.get("evidence_tier") == "original-eu4" and row["verdict"] == "exact"
         and row["requirement_satisfied"] and not row.get("execution_reused")
         for row in results)
-    qualified = case_id is None and not missing_cases and authentic_pass and all(
+    qualified = case_id is None and authentic_pass and all(
         row["requirement_satisfied"] for row in results)
     result = {
         "schema": SCHEMA, "revision": commit, "tree": tree, "policy_sha256": policy_digest,
         "mode": "focused" if case_id is not None else "mandatory",
         "required_cases": required, "executed_cases": [row["case_id"] for row in results
                            if row.get("execution") == "completed" and not row.get("execution_reused")],
-        "cases": results, "missing_protected_cases": missing_cases, "qualified": qualified,
+        "cases": results, "qualified": qualified,
+        "policy_contract_sha256": sha256_bytes(POLICY_CONTRACT.read_bytes()),
     }
     path, _ = dsh_receipts.write_receipt(directory, result, seed=seed)
+    if case_id is None:
+        dsh_receipts.verify_revision(path, public_key, revision=commit, policy_sha256=policy_digest,
+                                     policy_contract_sha256=result["policy_contract_sha256"],
+                                     required_cases=required, run_root=run_root)
     return {**result, "receipt": str(path)}

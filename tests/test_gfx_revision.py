@@ -57,20 +57,29 @@ class ProtectedDiagnosticTests(unittest.TestCase):
                 "receipt_public_key": gfx_ed25519.derive_public_key(seed).hex(),
                 "trusted_revision": "trusted",
                 "run_root": str(root / "runs"),
-                "authentic_case": "original-draw",
-                "cases": {
-                    "original-draw": {"kind": "gl", "category": "exact", "reference": {}},
-                    "metal-prefix": {"kind": "metal-prefix", "category": "diagnostic",
-                                     "minimum_coverage": [0, 1], "reference": {}},
-                    "optional-draw": {"kind": "gl", "category": "optional"},
-                },
             }
+            contract = root / "contract.json"
+            contract.write_text(json.dumps({
+                "schema": gfx_revision.POLICY_SCHEMA, "authentic_case": "original-draw",
+                "cases": {
+                    "original-draw": {"kind": "gl", "category": "exact"},
+                    "metal-prefix": {"kind": "metal-prefix", "category": "diagnostic",
+                                     "minimum_coverage": [0, 1]},
+                },
+            }))
             authentic = {"verdict": "exact", "execution": "completed",
                          "evidence_tier": "original-eu4", "independently_verified": True}
             incomplete = {"verdict": "different", "execution": "completed", "coverage": [0]}
+
+            def execute(_root, _commit, job, _source, _case):
+                (job / "draw").mkdir()
+                (job / "draw" / "attachment").write_bytes(b"pixels")
+                return dict(authentic, outputs=dsh_receipts.artifact_records(job, ["draw/attachment"]))
+
             with (mock.patch.object(gfx_revision, "_policy", return_value=(policy, "digest")),
+                  mock.patch.object(gfx_revision, "POLICY_CONTRACT", contract),
                   mock.patch.object(state, "trusted_git", return_value="tree"),
-                  mock.patch.object(gfx_gl_control_qualification, "qualify_published_candidate", return_value=authentic) as gl,
+                  mock.patch.object(gfx_gl_control_qualification, "qualify_published_candidate", side_effect=execute) as gl,
                   mock.patch.object(case_locator, "resolve_sealed_reference", return_value=((None, None, None, {}), None)),
                   mock.patch.object(gfx_prefix_check, "qualify_candidate", return_value=incomplete)):
                 report = gfx_revision.qualify(workspace, "revision")
@@ -82,6 +91,50 @@ class ProtectedDiagnosticTests(unittest.TestCase):
                 self.assertFalse(focused["qualified"])
                 self.assertEqual(focused["executed_cases"], ["original-draw"])
 
+                path = Path(report["receipt"])
+                kwargs = {
+                    "revision": "revision", "policy_sha256": "digest",
+                    "policy_contract_sha256": sha256_file(contract),
+                    "required_cases": report["required_cases"], "run_root": root / "runs",
+                }
+                key = gfx_ed25519.derive_public_key(seed)
+                verified = dsh_receipts.verify_revision(path, key, **kwargs)
+                self.assertFalse(verified["qualified"])
+                receipt = Path(report["cases"][0]["receipt"])
+                original = dsh_receipts.read_json(receipt)
+                output = receipt.parent / "draw" / "attachment"
+                output.write_bytes(b"spoofs")
+                with self.assertRaisesRegex(ValueError, "case output changed"):
+                    dsh_receipts.verify_revision(path, key, **kwargs)
+                output.write_bytes(b"pixels")
+                dsh_receipts.write_receipt(receipt.parent, dict(original, verdict="different"), seed=seed)
+                with self.assertRaisesRegex(ValueError, "substituted case receipt"):
+                    dsh_receipts.verify_revision(path, key, **kwargs)
+
+                policy["cases"] = {}
+                with self.assertRaisesRegex(gfx_revision.QualificationError, "cannot change"):
+                    gfx_revision.qualify(workspace, "revision")
+
+
+    def test_required_evidence_root_and_optional_archive_are_distinguished(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "candidate"
+            workspace.mkdir()
+            missing = root / "archive"
+            resolved = root / "primary" / "m7" / "case"
+            resolved.mkdir(parents=True)
+            roots = [{"path": str(missing), "required": False},
+                     {"path": str(root / "primary"), "required": True}]
+            reference = {"archive_path": "m7/case", "key": "retained"}
+            self.assertEqual(case_locator.resolve_legacy_reference(roots, reference, workspace),
+                             resolved.resolve())
+            roots[0]["required"] = True
+            with self.assertRaisesRegex(case_locator.CaseLocatorError, "missing_required_evidence_root"):
+                case_locator.resolve_legacy_reference(roots, reference, workspace)
+            source, refusal = case_locator.resolve_sealed_reference(roots, reference, workspace)
+            self.assertIsNone(source)
+            self.assertEqual(refusal["verdict"], "missing_required_evidence_root")
 
     def test_reused_execution_keeps_its_revision_and_rechecks_its_observations(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -188,7 +241,62 @@ int main(int argc, char **argv) {
             else:
                 self.fail("build descendant survived the worker deadline")
 
-    def test_offscreen_shape_runs_with_verified_clear_and_sampled_texture(self):
+    @staticmethod
+    def _native_capture(repo: Path, stage: Path, frame: Path) -> tuple[dict, ...]:
+        from automation import native_build
+
+        compiler, sdk = native_build.qualification_toolchain("clang")
+        host = stage / "capture-host"
+        subprocess.run([
+            compiler, "-arch", "x86_64", "-isysroot", sdk, "-O1", "-fobjc-arc",
+            "-DGL_SILENCE_DEPRECATION", "-Wno-deprecated-declarations",
+            "-I", repo / "benchmark", "-o", host, repo / "tests/gfx_trace_state_host.m",
+            repo / "benchmark/eu4_gfx_frame_trace.c", repo / "benchmark/eu4_gfx_frame_observe.c",
+            "-framework", "OpenGL", "-framework", "AppKit",
+        ], check=True, timeout=90)
+        return tuple(json.loads(line) for line in subprocess.check_output(
+            [host, frame, "selected"], text=True, timeout=30).splitlines())
+
+    @staticmethod
+    def _seal_native_fixture(frame: Path, draw: dict, post: dict, gl: dict):
+        from automation import m6_frame
+
+        stream = frame / "frame-events.jsonl"
+        stream.write_text(json.dumps(draw) + "\n")
+        observations = frame / "prefix-observations.jsonl"
+        observations.write_text(json.dumps(post) + "\n")
+        reference = frame / "frame-reference.bgra"
+        reference.write_bytes(bytes(4))
+        manifest = frame / "frame-trace.json"
+        manifest.write_text(json.dumps({
+            "schema": m6_frame.TRACE_SCHEMA, "complete": True, "events": 1, "test_only": True,
+            "process_architecture": "x86_64", "gl": gl,
+            "frame": {"reference": reference.name, "reference_bytes": 4,
+                      "reference_sha256": sha256_file(reference)},
+            "prefix": {"schema": "gfx-observations/v1", "mode": "selected",
+                       "status": "complete", "authority": "synthetic", "events": [0],
+                       "count": 1, "post_event_count": 1,
+                       "observation_file": observations.name,
+                       "observation_sha256": sha256_file(observations),
+                       "observation_bytes": observations.stat().st_size},
+        }))
+        (frame / "frame-seal.json").write_text(json.dumps({
+            "schema": m6_frame.SEAL_SCHEMA, "sealed": True, "complete": True,
+            "struct_size": 2256, "abi_version": m6_frame.SEAL_ABI_VERSION,
+            "capture_frame_id": 1, "session_id": "synthetic-rgba8", "pid": 1234,
+            "operation_count": 1, "draw_count": 1, "clear_count": 0, "copy_count": 0,
+            "capture_dir": str(frame), "width": 1, "height": 1, "pixel_format": "BGRA8",
+            "trace_complete": True, "trace_integrity": True, "readback_ok": True,
+            "event_stream_file": stream.name, "event_stream_bytes": stream.stat().st_size,
+            "event_stream_sha256": sha256_file(stream), "event_stream_verified": True,
+            "manifest_file": manifest.name, "manifest_sha256": sha256_file(manifest),
+            "reference_file": reference.name, "reference_bytes": 4,
+            "reference_sha256": sha256_file(reference), "test_only": True,
+        }))
+        trace = m6_frame.load_trace(frame)
+        return frame, trace, m6_frame.load_seal(frame, trace=trace), {}
+
+    def test_offscreen_shape_runs_with_native_observations_and_sampled_texture(self):
         repo = gfx_revision.ROOT
         fixture = state.git_common_dir(repo).parent / ".local/r2b-authority/07453ebc/review"
         if not fixture.is_dir():
@@ -207,7 +315,7 @@ int main(int argc, char **argv) {
             w, h = 864, 558
             tw, th = 1728, 1117
             sample = bytes((61, 97, 163, 255))
-            expected = blob("expected", bytes((163, 97, 61, 255)) * (w * h))
+            pre, submission, post, gl = self._native_capture(repo, stage, frame)
             tex = blob("sample", sample * (tw * th))
             vertex = blob("vertices", struct.pack("<16h", -1, -1, 0, 1, 1, -1, 0, 1,
                                                    -1, 1, 0, 1, 1, 1, 0, 1))
@@ -224,8 +332,9 @@ int main(int argc, char **argv) {
             state_record["scissor"] = {"enabled": False, "box": [0, 0, w, h]}
             draw = {
                 "kind": "draw", "index": 0, "state": state_record,
-                "draw": {"count": 4, "mode": 5, "first": 0, "indexed": False, "instance_count": 1},
-                "target": {"color_attachment": {"width": w, "height": h}, "framebuffer": 9},
+                "draw": {"count": 4, "mode": 5, "first": 0, "indexed": False,
+                         "base_vertex": 0, "instance_count": 1, "caller_rva": "0x1"},
+                "target": post["target"], **pre, **submission,
                 "program": {"name": 1, "shaders": shader,
                             "uniforms": [{"name": "tex0", "type": "sampler", "unit": 0},
                                          {"name": "UNIFORM1[0]", "type": "float",
@@ -244,19 +353,38 @@ int main(int argc, char **argv) {
                                           "min_lod": -1000, "max_lod": 1000, "lod_bias": 0,
                                           "anisotropy": 1}}],
             }
-            trace = {"_events": [draw]}
-            facts = {"scope": {"draw": 0, "resource": "tex:8"},
-                     "initial_color": {"bgra": [0, 0, 0, 0]}, "post_color": expected}
-            restricted = gfx_gl_control_qualification._offscreen_package(frame, trace, {}, facts, stage)
-            result = gfx_gl_control_qualification.qualify_candidate(
-                repo, state.trusted_git(repo, "rev-parse", "HEAD").strip(), stage,
-                Path(restricted["path"]), blobs / "expected",
-                {"architecture": "x86_64", "package_sha256": restricted["package_sha256"],
-                 "expected_sha256": expected["sha256"], "gl": {}})
+            source = self._seal_native_fixture(frame, draw, post, gl)
+            selection = {"workload": {
+                "caller_rva": "0x1", "shader_sha256": {row["stage"]: row["sha256"] for row in shader},
+                "color_attachment": {key: post["target"]["color_attachment"][key]
+                                     for key in ("type", "level", "internal_format", "width", "height")},
+            }}
+            case = {"selection": selection, "reference": {"key": "native-synthetic-fixture"}}
+            head = state.trusted_git(repo, "rev-parse", "HEAD").strip()
+            result = gfx_gl_control_qualification.qualify_published_candidate(
+                repo, head, stage, source, case)
             self.assertEqual(result["verdict"], "exact", {
                 key: result.get(key) for key in ("problems", "earliest_observed_divergence")})
             self.assertEqual(result["evidence_tier"], "synthetic")
             self.assertFalse(result["controls"]["omit"]["post"]["exact"])
+            expected = stage / "trusted-post.bgra"
+            restricted = Path(stage / "inputs")
+            package_sha = json.loads((restricted / "replay-input.json").read_text())["package_sha256"]
+            self.assertNotIn(sha256_file(expected), {sha256_file(path)
+                             for path in (restricted / "blobs").iterdir()})
+            incomplete = dict(draw)
+            del incomplete["submission"]
+            refused = self._seal_native_fixture(frame, incomplete, post, gl)
+            checked = gfx_gl_control_qualification.qualify_published_candidate(
+                repo, head, stage / "refused", refused, case)
+            self.assertEqual(checked["verdict"], "missing_original_observation", checked)
+            self.assertEqual(checked["execution"], "not_started")
+            wrong_driver = self._seal_native_fixture(frame, draw, post, dict(gl, vendor="Different vendor"))
+            wrong_driver_stage = stage / "wrong-driver"
+            wrong_driver_stage.mkdir()
+            rejected_driver = gfx_gl_control_qualification.qualify_published_candidate(
+                repo, head, wrong_driver_stage, wrong_driver, case)
+            self.assertEqual(rejected_driver["verdict"], "candidate_environment_mismatch")
 
             populate = candidate_snapshot.materialize_commit
 
@@ -278,9 +406,9 @@ int main(int argc, char **argv) {
             with mock.patch.object(candidate_snapshot, "materialize_commit", side_effect=two_draws):
                 result = gfx_gl_control_qualification.qualify_candidate(
                     repo, state.trusted_git(repo, "rev-parse", "HEAD").strip(), sequence,
-                    Path(restricted["path"]), blobs / "expected",
-                    {"architecture": "x86_64", "package_sha256": restricted["package_sha256"],
-                     "expected_sha256": expected["sha256"], "gl": {}, "repeat_count": 2})
+                    restricted, expected,
+                    {"architecture": "x86_64", "package_sha256": package_sha,
+                     "expected_sha256": sha256_file(expected), "gl": {}, "repeat_count": 2})
             self.assertEqual(result["verdict"], "different", result.get("problems"))
             self.assertEqual(result["scope"]["transitions"], 2)
             self.assertEqual(result["earliest_observed_divergence"], {

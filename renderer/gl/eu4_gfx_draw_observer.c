@@ -27,6 +27,31 @@ static void digest(const void *bytes, size_t length) {
     putchar('"');
 }
 
+static void observe_shaders(GLuint program) {
+    GLuint shaders[2] = {0};
+    GLint attached = 0;
+    glGetProgramiv(program, GL_ATTACHED_SHADERS, &attached);
+    if (attached != 2) exit(7);
+    glGetAttachedShaders(program, 2, NULL, shaders);
+    printf(",\"shader_sha256\":{");
+    for (size_t i = 0; i < 2; i++) {
+        GLint type = 0, size = 0;
+        GLsizei length = 0;
+        glGetShaderiv(shaders[i], GL_SHADER_TYPE, &type);
+        glGetShaderiv(shaders[i], GL_SHADER_SOURCE_LENGTH, &size);
+        if ((type != GL_VERTEX_SHADER && type != GL_FRAGMENT_SHADER) || size <= 1 ||
+            size > 4 * 1024 * 1024) exit(7);
+        char *source = malloc((size_t)size);
+        if (!source) exit(7);
+        glGetShaderSource(shaders[i], size, &length, source);
+        if (length != size - 1 || glGetError() != GL_NO_ERROR) exit(7);
+        printf("%s\"%s\":", i ? "," : "", type == GL_VERTEX_SHADER ? "vertex" : "pixel");
+        digest(source, (size_t)length);
+        free(source);
+    }
+    putchar('}');
+}
+
 static void observe_texture(GLint unit) {
     GLint previous = 0, binding = 0;
     glGetIntegerv(GL_ACTIVE_TEXTURE, &previous);
@@ -164,14 +189,14 @@ static void observe(const char *phase, GLenum mode, GLint first, GLsizei count,
     glGetProgramiv((GLuint)program, GL_LINK_STATUS, &link);
     printf("{\"phase\":\"%s\",\"transition\":%u,\"mode\":%u,\"first\":%d,\"count\":%d,"
            "\"index_type\":%u,\"submitted\":%d,\"gl_error\":%u,"
-           "\"framebuffer_status\":%u,\"draw_buffer\":%d,"
+           "\"framebuffer_status\":%u,\"draw_buffer\":%d,\"read_buffer\":%d,"
            "\"viewport\":[%d,%d,%d,%d],\"scissor\":[%d,%d,%d,%d],"
            "\"scissor_enabled\":%d,\"blend\":%d,\"depth_test\":%d,"
            "\"stencil_test\":%d,\"cull\":%d,\"dither\":%d,"
            "\"color_mask\":[%d,%d,%d,%d],\"linked\":%d,"
            "\"active_attributes\":%d,\"active_uniforms\":%d",
            phase, transition, mode, first, count, indexed_type, submitted, error,
-           glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER), buffer,
+           glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER), buffer, read_buffer,
            viewport[0], viewport[1], viewport[2], viewport[3],
            scissor[0], scissor[1], scissor[2], scissor[3],
            glIsEnabled(GL_SCISSOR_TEST), glIsEnabled(GL_BLEND),
@@ -179,6 +204,7 @@ static void observe(const char *phase, GLenum mode, GLint first, GLsizei count,
            glIsEnabled(GL_CULL_FACE), glIsEnabled(GL_DITHER),
            color_mask[0], color_mask[1], color_mask[2], color_mask[3],
            link, active_attributes, active_uniforms);
+    observe_shaders((GLuint)program);
     GLint cull_mode = 0, front_face = 0, polygon[2] = {0}, logic = 0;
     glGetIntegerv(GL_CULL_FACE_MODE, &cull_mode);
     glGetIntegerv(GL_FRONT_FACE, &front_face);

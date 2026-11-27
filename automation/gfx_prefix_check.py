@@ -1229,7 +1229,7 @@ def _build_fenced_candidate(repo: Path, trusted_revision: str, commit: str,
     """Build the Metal core from the candidate and the CLI from the trusted checkout."""
     import platform
 
-    from automation import candidate_snapshot, native_build, qualification_sandbox
+    from automation import candidate_snapshot, native_build
 
     host = replay_host_dependencies
     sources = host.candidate_sources(repo, trusted_revision)
@@ -1248,22 +1248,25 @@ def _build_fenced_candidate(repo: Path, trusted_revision: str, commit: str,
     build.mkdir()
     executable = build / "metal-replay"
     flags = host.BUILD_FLAGS
-    linked = qualification_sandbox.run(
-        [clang, *flags, "-isysroot", sdk, "-o", executable,
-         *(snapshot / path for path in sources)],
-        writable=build, readable=(snapshot, sdk, clang.parent.parent),
-        tools=(clang.parent / "ld",), timeout=300)
+    linked = native_build.qualification_compile(
+        clang, sdk, [*flags, "-o", executable, *(snapshot / path for path in sources)],
+        build=build, readable=(snapshot,))
     if linked.returncode:
         raise PrefixCheckError(f"Metal compiler exit {linked.returncode}: "
                                + (linked.stderr or linked.stdout)[-2500:])
     producer = {"revision": commit, "source_digests": digests,
                 "build": {"host_sha256": _sha256(executable)},
+                "recipe": native_build.qualification_recipe(clang, sdk, flags),
+                "environment": {"macos": platform.mac_ver()[0], "os_build": platform.version()},
                 "architecture": platform.machine()}
     return executable, producer
 
 
 def qualify_candidate(repo: Path, trusted_revision: str, commit: str, directory: Path,
                       frame: Path, trusted: dict, case: dict) -> dict:
+    from automation import dsh_receipts
+
+    directory = directory.resolve()
     executable, producer = _build_fenced_candidate(repo, trusted_revision, commit, directory)
     result = evaluate(
         frame, trusted_root=trusted["_root"], trusted_execution=True,
@@ -1288,8 +1291,15 @@ def qualify_candidate(repo: Path, trusted_revision: str, commit: str, directory:
     execution_dir = result.get("execution_dir")
     evidence = (Path(execution_dir) / "metal" / "trusted-execution.json"
                 if execution_dir else None)
+    outputs = []
+    if evidence is not None:
+        execution_record = _read_json(evidence)
+        names = [item["file"] for item in execution_record["outputs"]]
+        outputs = dsh_receipts.artifact_records(directory, (
+            (evidence.parent / name).relative_to(directory).as_posix()
+            for name in [*names, evidence.name, "replay.json", "shader-receipt.json", "checkpoint-request.json"]))
     return {
-        "verdict": verdict, "evidence_tier": "original-eu4",
+        "verdict": verdict, "evidence_tier": "original-eu4", "outputs": outputs,
         "execution": "completed" if result.get("independent_equality") else "failed",
         "independently_verified": bool(result.get("independent_equality")),
         "execution_receipt_sha256": _sha256(evidence) if evidence is not None else None,

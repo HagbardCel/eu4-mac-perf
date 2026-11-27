@@ -1060,6 +1060,42 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
     return accepted;
 }
 
+/* Checked at engine entry, the effective submission, and engine exit.
+ * Readback may temporarily bind a different framebuffer, so observe first. */
+typedef struct {
+    GLint framebuffer, read_framebuffer, draw_buffer, read_buffer;
+    GLint attachment, level, samples, depth, stencil;
+} selected_draw_target;
+
+static int selected_target(selected_draw_target *target) {
+    GLint type = 0, buffers = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target->framebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &target->read_framebuffer);
+    glGetIntegerv(GL_DRAW_BUFFER, &target->draw_buffer);
+    glGetIntegerv(GL_READ_BUFFER, &target->read_buffer);
+    if (target->framebuffer <= 0 || target->read_framebuffer != target->framebuffer ||
+        target->draw_buffer != GL_COLOR_ATTACHMENT0 || target->read_buffer != GL_COLOR_ATTACHMENT0 ||
+        glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return 0;
+#define ATTACHMENT(slot, field, value) glGetFramebufferAttachmentParameteriv( \
+    GL_DRAW_FRAMEBUFFER, (slot), GL_FRAMEBUFFER_ATTACHMENT_##field, &(value))
+    ATTACHMENT(GL_COLOR_ATTACHMENT0, OBJECT_TYPE, type);
+    if (type != GL_TEXTURE) return 0;
+    ATTACHMENT(GL_COLOR_ATTACHMENT0, OBJECT_NAME, target->attachment);
+    ATTACHMENT(GL_COLOR_ATTACHMENT0, TEXTURE_LEVEL, target->level);
+    ATTACHMENT(GL_DEPTH_ATTACHMENT, OBJECT_TYPE, target->depth);
+    ATTACHMENT(GL_STENCIL_ATTACHMENT, OBJECT_TYPE, target->stencil);
+#undef ATTACHMENT
+    glGetIntegerv(GL_SAMPLES, &target->samples);
+    glGetIntegerv(GL_MAX_DRAW_BUFFERS, &buffers);
+    for (GLint i = 1; i < buffers; i++) {
+        GLint other = 0;
+        glGetIntegerv(GL_DRAW_BUFFER0 + i, &other);
+        if (other != GL_NONE) return 0;
+    }
+    return target->attachment > 0 && target->level == 0 && !target->samples &&
+           !target->depth && !target->stencil && glGetError() == GL_NO_ERROR;
+}
+
 /* Entry-side draw arguments. The gateway's exit frame holds post-call
  * registers, so every engine argument the packet needs is captured here. */
 typedef struct {
@@ -1076,6 +1112,21 @@ typedef struct {
 } pending_draw;
 
 static _Thread_local pending_draw g_pending;
+static _Thread_local struct {
+    selected_draw_target entry, submission;
+    uint64_t call_id;
+    unsigned count;
+    int valid;
+} g_selected;
+
+void eu4_gfx_frame_trace_submit_arrays(unsigned mode, int first, int count) {
+    if (!g_selected.call_id) return;
+    if (++g_selected.count != 1 || mode != (unsigned)g_pending.mode ||
+        first != g_pending.first || count != g_pending.count ||
+        !selected_target(&g_selected.submission)) {
+        g_selected.valid = 0;
+    }
+}
 
 static void sha256_hex(const void *data, size_t size, char out[65]) {
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
@@ -6662,6 +6713,40 @@ int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
     return 0;
 }
 
+static int capture_selected_submission(json_out *out, uint64_t call_id,
+                                       int mode, int first, int count) {
+    selected_draw_target exit_target = {0};
+    if (!call_id || g_selected.call_id != call_id || !g_selected.valid ||
+        g_selected.count != 1 || !selected_target(&exit_target) ||
+        memcmp(&g_selected.entry, &g_selected.submission, sizeof(exit_target)) ||
+        memcmp(&g_selected.entry, &exit_target, sizeof(exit_target))) return 0;
+    jprintf(out, "\"submission\":{\"api\":\"glDrawArrays\",\"mode\":%d,"
+            "\"first\":%d,\"count\":%d,\"call_id\":%llu,\"framebuffer\":%d,"
+            "\"read_framebuffer\":%d,\"attachment\":%d,\"level\":%d,"
+            "\"draw_buffer\":%d,\"read_buffer\":%d,\"samples\":%d,"
+            "\"depth_present\":false,\"stencil_present\":false,"
+            "\"target_continuity\":\"entry_submission_exit\"}",
+            mode, first, count, (unsigned long long)call_id, exit_target.framebuffer,
+            exit_target.read_framebuffer, exit_target.attachment, exit_target.level,
+            exit_target.draw_buffer, exit_target.read_buffer, exit_target.samples);
+    return !out->failed;
+}
+
+int eu4_gfx_frame_trace_test_capture_arrays(FILE *output, unsigned mode, int first, int count) {
+    memset(&g_selected, 0, sizeof(g_selected));
+    g_selected.call_id = 1;
+    g_selected.valid = selected_target(&g_selected.entry);
+    g_pending.mode = (int)mode;
+    g_pending.first = first;
+    g_pending.count = count;
+    eu4_gfx_frame_trace_submit_arrays(mode, first, count);
+    glDrawArrays(mode, first, count);
+    json_out out = {output, 0};
+    int ok = capture_selected_submission(&out, 1, mode, first, count);
+    g_selected.call_id = 0;
+    return ok;
+}
+
 /* Host-test only: run one real observation (shared readback and writer) and
    return its record.  Used by the synthetic GL-context state host. */
 int eu4_gfx_frame_trace_test_observe(const char *directory, int event,
@@ -9442,6 +9527,11 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
     if (g.armed && g.events != NULL) {
         int selected_pre = !g.test_only && g.prefix_caller != 0 &&
                            g.prefix_caller == call->caller_rva;
+        if (selected_pre) {
+            memset(&g_selected, 0, sizeof(g_selected));
+            g_selected.call_id = call->call_id;
+            g_selected.valid = !indexed && !instanced && selected_target(&g_selected.entry);
+        }
         int observe_pre = selected_pre;
         for (int i = 0; i < g.pre_post_count && !observe_pre; i++) {
             observe_pre = g.pre_post_callers[i] == call->caller_rva;
@@ -9597,6 +9687,13 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 g.seed_emitted = 1;
             }
             int selected_pre = g.prefix_caller != 0 && g.prefix_caller == call->caller_rva;
+            if (selected_pre) {
+                jprintf(&out, ",");
+                if (!capture_selected_submission(&out, call->call_id, mode, first, count)) {
+                    fail_capture_locked("selected_submission_or_target_unverified");
+                }
+                g_selected.call_id = 0;
+            }
             if (selected_pre && (!g.pre_image_valid || g.pre_image_call_id != call->call_id)) {
                 fail_capture_locked("selected_pre_image_unattached");
             }

@@ -440,8 +440,11 @@ The revision qualifier uses an operator-supplied policy from outside the
 candidate worktree. Set `EU4_QUALIFICATION_POLICY` to that document and
 `EU4_QUALIFICATION_POLICY_SHA256` to its approved SHA-256 in the trusted
 launcher environment. The policy names the approved validator revision,
-protected output root, evidence roots, and per-case exact, diagnostic or
-optional requirements. It binds `receipt_public_key` to the 32-byte Ed25519
+protected output root, evidence roots and locations for the
+[versioned protected policy](../automation/qualification-policy-v1.json).
+The reviewed policy pins case requirements and stable evidence identities.
+Deployment supplies paths and the newly sealed authentic reference. An evidence
+root can be marked optional for an archive that may be disconnected. It binds `receipt_public_key` to the 32-byte Ed25519
 seed in the operator-owned file named by `receipt_signing_key`. The seed file
 must grant access to its owner only. The DSH adapter takes the workspace from
 the session and imports the Python core from the configured trusted checkout.
@@ -456,9 +459,11 @@ report. Focused runs never qualify a revision. The validator writes execution
 receipts at their actual revisions. A function case can name a protected
 earlier receipt through `reuse_receipt`; the validator verifies applicability
 and referenced output bytes before the qualification record can link to it.
-The signed decision carries the digests of the case receipts. Missing named
-protected cases appear in `missing_protected_cases` and block mandatory
-qualification.
+The signed decision carries the digests of the case receipts. The
+`dsh_receipts.verify_revision` operation verifies the revision, policy
+identities, mandatory case receipts and the exact artifact bytes. Ed25519
+authenticates the trusted validator's issuance. The operator controls the
+key file and deployment identity, and only the verifier receives the seed.
 
 The selected-draw path accepts the reviewed synthetic fixture and verified
 original color-only RGBA8 texture attachments through the same candidate

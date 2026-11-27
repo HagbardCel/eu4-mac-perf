@@ -633,3 +633,17 @@ static void *interpose_tex_image_replacee(void) {
 static void *interpose_tex_sub_image_replacee(void) {
     return (void *)eu4_gfx_tex_sub_image_interpose.replacee;
 }
+
+
+// Darwin binds this image's direct import to the unwrapped GL implementation.
+static void observe_draw_arrays(GLenum mode, GLint first, GLsizei count) {
+    eu4_gfx_frame_trace_submit_arrays(mode, first, count);
+    glDrawArrays(mode, first, count);
+}
+
+__attribute__((used)) static struct {
+    const void *replacement;
+    const void *replacee;
+} eu4_gfx_arrays_interpose __attribute__((section("__DATA,__interpose"))) = {
+    (const void *)observe_draw_arrays, (const void *)glDrawArrays,
+};

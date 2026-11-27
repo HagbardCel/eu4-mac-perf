@@ -4,7 +4,7 @@ The selected workload is the color-only offscreen draw reached from
 `_GfxDraw` caller `0xed7ba9` in the retained M7 event 273 seal. The
 selection document pins the caller, both shader digests and the attachment
 format and extent. Event and object numbers are local to each seal.
-[Protected workload identity](r3-offscreen-selection.json)
+[Protected qualification policy](../../automation/qualification-policy-v1.json)
 
 ## Retained evidence
 
@@ -31,15 +31,25 @@ refuses a GL error. The capture pins the process architecture and GL
 implementation, driver and context. Candidate execution uses that
 architecture and verifies the observed GL identity.
 
-The engine uploads dirty uniforms and prepares vertex attributes before its
-final `glDrawArrays` call. The existing state recorder queries effective
-linked resources at the draw boundary. The evaluator compares the actual
-candidate's uniform values, vertex range, required sampled texture level,
-sampler parameters, framebuffer, applicable raster state and attachment
-effects. The pre/post observer keeps reference bytes on the verifier side
-and restores temporary bindings and pixel-pack state. The verifier requires
-exact equality and a separate correctly initialized omission with a
-different attachment. [Original draw dossier](../../analysis/reconstruction/gfx-semantic/v1/draw/_GfxDraw.md)
+The archived instruction listing for `_GfxDraw` at RVA `0x15ea789`
+shows the dirty-uniform indirect call at `0x15ea806` and vertex attribute
+setup at `0x15ea91a`. Those operations can change the effective uniforms
+and geometry relative to entry. The last path loads mode, first and count
+and tail-jumps to `glDrawArrays` at `0x15ea944`. There are no engine
+instructions between the GL return and the draw exit observer on this path.
+The exit state therefore describes the effective linked resources, uniform
+values, geometry and raster state after a successful submission. The
+missing-shader branch can return without submitting a draw.
+
+The recorder measures the actual `glDrawArrays` arguments and verifies one
+submission for the selected engine call. It checks the same framebuffer and
+level-0 attachment at entry, submission and exit, along with the matching
+read binding, single-sample draw buffer and depth/stencil absence. The
+pre-state image comes from entry and the post-state from exit. The sealed
+submission record links those boundaries. The candidate observer queries
+shader source digests, effective GL state and attachment bytes. The verifier
+requires exact equality and a correctly initialized omission with a different
+attachment. Readback preserves bindings and pixel-pack state. [Original draw dossier](../../analysis/reconstruction/gfx-semantic/v1/draw/_GfxDraw.md)
 
 Operator authorization is separate from this contract. Before requesting one
 launch, verify the matching offline fixture and the governed execution path.
