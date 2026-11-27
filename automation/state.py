@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import fcntl
 import hashlib
 import json
 import os
 import shutil
 import subprocess
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -242,3 +244,42 @@ def initialize_launch_counter(
         + "\n",
     )
     return path
+
+
+def claim_capture_budget(run_root: Path, output: Path, targets: list[str], *,
+                         timeout: float) -> str:
+    """Charge a capture against the existing OpenCode workflow counter."""
+    from automation.launch_ledger import validate_timeout
+
+    validate_timeout(timeout, field="requested_timeout")
+    path = launch_counter_path(run_root)
+    with campaign_lock(run_root / "live-launch.lock"):
+        budget = json.loads(path.read_text())
+        if not isinstance(budget, dict):
+            raise ValueError("invalid workflow capture budget")
+        limit, used = budget.get("limit"), budget.get("used")
+        launches = budget.get("launches")
+        if (budget.get("schema") != LAUNCH_SCHEMA or type(limit) is not int
+                or type(used) is not int or not 0 <= used <= limit
+                or not isinstance(launches, list)):
+            raise ValueError("invalid workflow capture budget")
+        if used == limit:
+            raise ValueError("workflow capture budget is exhausted")
+        deadline = budget.get("deadline_seconds")
+        if deadline is not None and timeout > validate_timeout(deadline, field="deadline_seconds"):
+            raise ValueError("capture timeout exceeds the workflow limit")
+        token = uuid.uuid4().hex
+        launches.append({"token": token, "at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                         "output": str(output), "targets": targets, "status": "claimed"})
+        budget["used"] += 1
+        atomic_write(path, json.dumps(budget, indent=2) + "\n")
+        return token
+
+
+def finish_capture_budget(run_root: Path, token: str, *, pid: int | None, status: str) -> None:
+    path = launch_counter_path(run_root)
+    with campaign_lock(run_root / "live-launch.lock"):
+        budget = json.loads(path.read_text())
+        receipt = next(record for record in budget["launches"] if record.get("token") == token)
+        receipt.update(pid=pid, status=status)
+        atomic_write(path, json.dumps(budget, indent=2) + "\n")

@@ -55,3 +55,26 @@ attachment. Readback preserves bindings and pixel-pack state. [Original draw dos
 For live development, use the reviewed scene selection and a fresh output
 directory on a host with a free EU4 lease. A capture-health failure or
 incomplete seal ends the attempt. Verify workload identity before publishing.
+
+## Live attempt on the credential-free path
+
+Implementation revision `06da3df4` launched the pinned x86-64 original on
+macOS 27.0.1 build `26A434`. BetterDisplay first timed out during setup before
+EU4 spawned. After the background display was restored, one EU4 process
+reached present 72 with 283 operations. Session
+`530e3df2-f0f9-4fd4-8581-e03f680e869b`, manifest
+`f09ed78a54be8f31c29cbd2e45151f5ab30124f891cd2eb12dae5797a5c0c125`.
+The frame records event 273 on `tex:447`. The selected event has no
+submission record and its JSONL row is malformed. The manifest and seal
+are both incomplete with the trace reason
+`selected_submission_or_target_unverified`. This reason covers missing
+submission and failed target continuity checks. The retained data does
+not identify which subcheck failed.
+
+Artifacts remain in `.local/r3-authentic-capture-live/`. The earlier failed
+display setup remains in `.local/r3-authentic-capture/`. The launcher
+terminated the owned EU4 process after the incomplete seal was observed,
+restored game settings and released the host lease. No active campaign
+state or game process remained. The incomplete capture was not published or
+frozen. Authentic positive and omission qualification require a complete
+original observation before candidate execution.

@@ -585,5 +585,23 @@ class RegistryTests(unittest.TestCase):
             )
 
 
+class WorkflowCaptureBudgetTests(unittest.TestCase):
+    def test_existing_runner_counter_records_failed_capture_and_exhaustion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            counter = state.initialize_launch_counter(root, "workflow", 1, 30)
+            arguments = ["capture", "--target", "_GfxSetViewPort", "--timeout", "20",
+                         "--campaign-run-root", str(root), "--output", str(root / "capture")]
+            with (patch.object(startup, "preflight_ops", return_value={}),
+                  patch.object(startup, "run_ops", side_effect=startup.StartupError("startup failed")) as run):
+                self.assertEqual(live_gfx.main(arguments), live_gfx.EXIT_UNAVAILABLE)
+                state.initialize_launch_counter(root, "workflow", 1, 30)
+                self.assertEqual(live_gfx.main(arguments), live_gfx.EXIT_LIMIT)
+                run.assert_called_once()
+            record = json.loads(counter.read_text())
+            self.assertEqual(record["used"], 1)
+            self.assertEqual(record["launches"][0]["status"], "failed: startup failed")
+
+
 if __name__ == "__main__":
     unittest.main()

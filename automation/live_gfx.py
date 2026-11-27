@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "benchmark"))
 
 import eu4_gfx_op_capture as capture_reader  # noqa: E402
 import eu4_gfx_startup_trace as startup  # noqa: E402
-from automation import launch_ledger  # noqa: E402
+from automation import launch_ledger, state  # noqa: E402
 
 EXIT_COMPLETE = 0
 EXIT_INCOMPLETE = 2
@@ -350,6 +350,11 @@ def capture(args: argparse.Namespace) -> int:
     if output.exists():
         print(f"capture output already exists: {output}", file=sys.stderr)
         return EXIT_INCOMPLETE
+    try:
+        launch_ledger.validate_timeout(args.timeout, field="--timeout")
+    except launch_ledger.LedgerError as exc:
+        print(f"capture refused: {exc}", file=sys.stderr)
+        return EXIT_INCOMPLETE
     until_target_draw = bool(args.until_target_draw)
     if args.gl_reference and not until_target_draw:
         print("--gl-reference requires --until-target-draw", file=sys.stderr)
@@ -386,20 +391,33 @@ def capture(args: argparse.Namespace) -> int:
         return EXIT_UNAVAILABLE
 
     ledger_path = None
-    if args.campaign_run_root:
-        root = Path(args.campaign_run_root).resolve()
+    root = Path(args.campaign_run_root).resolve() if args.campaign_run_root else None
+    if root is not None:
         try:
             pointer = launch_ledger.read_pointer(root)
             if pointer is None:
-                raise launch_ledger.LedgerError("missing", "workflow ledger is missing")
-            ledger_path = Path(pointer["ledger"])
-            token = launch_ledger.claim(
-                ledger_path, campaign_id=root.name, run_root=root, output=output,
-                targets=args.target, requested_timeout=args.timeout,
-                executable_sha256=evidence.get("executable_sha256"))
-        except launch_ledger.LedgerError as exc:
+                token = state.claim_capture_budget(root, output, args.target, timeout=args.timeout)
+            else:
+                ledger_path = Path(pointer["ledger"])
+                token = launch_ledger.claim(
+                    ledger_path, campaign_id=root.name, run_root=root, output=output,
+                    targets=args.target, requested_timeout=args.timeout,
+                    executable_sha256=evidence.get("executable_sha256"))
+        except (OSError, ValueError, RuntimeError) as exc:
             print(f"workflow launch refused: {exc}", file=sys.stderr)
             return EXIT_LIMIT
+
+    def finish_budget(pid, status):
+        if root is None:
+            return
+        try:
+            if ledger_path is not None:
+                launch_ledger.finish(ledger_path, token, pid=pid,
+                                     status="failed" if status.startswith("failed") else "completed")
+            else:
+                state.finish_capture_budget(root, token, pid=pid, status=status)
+        except (OSError, RuntimeError, ValueError, StopIteration) as exc:
+            print(f"workflow capture receipt could not be finalized: {exc}", file=sys.stderr)
 
     try:
         report = startup.run_ops(
@@ -415,8 +433,7 @@ def capture(args: argparse.Namespace) -> int:
             gl_reference=bool(args.gl_reference),
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
-        if ledger_path is not None:
-            launch_ledger.finish(ledger_path, token, pid=None, status="failed")
+        finish_budget(None, f"failed: {exc}")
         cleanup_errors = list(getattr(exc, "cleanup_errors", None) or [])
         if cleanup_errors:
             print("capture cleanup failed: " + "; ".join(cleanup_errors),
@@ -475,9 +492,7 @@ def capture(args: argparse.Namespace) -> int:
     (output / "capture-report.json").write_text(
         json.dumps(result, indent=2) + "\n"
     )
-    if ledger_path is not None:
-        launch_ledger.finish(ledger_path, token, pid=report.get("pid"),
-                             status="completed" if status == "complete" else "failed")
+    finish_budget(report.get("pid"), status)
     print(json.dumps(result, indent=2))
     if status == "complete":
         return EXIT_COMPLETE
