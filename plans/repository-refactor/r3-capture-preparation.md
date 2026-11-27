@@ -162,3 +162,36 @@ parameter. The injected x86-64 legacy-context fixture reproduced
 fixture also checks that the forwarded copy writes the expected texel.
 The selected-entry GL-error gate is unchanged. Live submission was
 observed, so a binding debugger session was unnecessary.
+
+### Clean capture after the resolve correction
+
+Recorder checkpoint `627dcf1da4b169351e6701ef616745449e529ab0` built startup
+library SHA-256 `1e14015025a2aae5cd1c477749149052bc9824fbfb418b8f5657726740ff781b`.
+The launch request records the same digest and the pinned original x86-64
+executable digest. The machine was on macOS build `26A434`, using Apple M5
+Max `2.1 Metal - 91.7` in a legacy CGL context. The `EU4 Test` display was
+1920×1200 with the reviewed 1728×1117 background window.
+
+The clean run `.local/r3-authentic-capture-corrected` produced session
+`3eaba3ef-e98f-4c3c-944a-ebf1f7554b03` with manifest SHA-256
+`e92e1451f1a5954d823f9b3eafa859c122b38408377c1ccd7c41b8b41f9a830d` and
+incomplete seal SHA-256
+`8185f7b113dee8ae2f2519867b143d3e5006a3e04c50822f4ea48a215d24955f`.
+Event 273 again observed one submission with arguments `(5, 0, 4)`. Context
+checks matched and the available target fields agreed at all three boundaries.
+They described framebuffer 9, color attachment texture 447, level 0, zero
+samples and absent depth/stencil. The same entry `GL_INVALID_ENUM` still
+prevents admission. The two resolve observer defects were real, but their
+correction was insufficient to clear the live error. The selected original
+scope remains incomplete. The launcher verified game exit, settings
+restoration and lease release after both authoritative attempts.
+
+One targeted diagnostic attached x86-64 LLDB and installed phase breakpoints
+for the interval around the resolve, clear and selected draw. The first
+continue stopped on startup trace traps in the pthread and dyld runtime and
+the diagnostic ended without reaching the selected interval. Its logs are
+retained under `/private/tmp/eu4-r3-error-diagnostic/`. The launcher report
+and host inspection verified cleanup, settings restoration and a free lease.
+The error could still originate before the selected entry probes or within
+them. The diagnostic supplies no further original observation. There was
+no automatic retry, alternate workload, evidence publication or policy change.

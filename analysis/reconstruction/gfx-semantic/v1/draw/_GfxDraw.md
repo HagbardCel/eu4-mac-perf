@@ -46,3 +46,8 @@ Indirect call instructions in the body: 2. An indirect site is not a resolved ca
 - Submission and target continuity in the original incomplete capture remain
   unverified. Its lossless pre/post images differ at all 482,112 pixels after
   normalization. [Capture evidence and investigation](../../../../../plans/repository-refactor/r3-capture-preparation.md#offline-submission-investigation)
+- Two subsequent original runs observed exactly one `(5, 0, 4)` submission
+  with matching contexts and recorded target fields. The selected entry
+  check returned `GL_INVALID_ENUM` in both runs. The qualifying continuity
+  witness remains incomplete, including after correction of two invalid
+  resolve-observer queries. [Original run identities and limits](../../../../../plans/repository-refactor/r3-capture-preparation.md#authoritative-capture-with-submission-diagnostics)

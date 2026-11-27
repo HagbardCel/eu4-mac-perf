@@ -10,9 +10,10 @@ Operational commands live in [profiler and benchmark operations](reference/profi
   DSH, worker isolation and protected Metal scopes. All nine signed case
   receipts and artifact inventories verified. Eight requirements met policy.
   [R3 draft and verification](https://github.com/HagbardCel/eu4-mac-perf/pull/305)
-- The credential-free native capture reached the selected scene, but the
-  recorder could not verify submission and attachment continuity. The
-  incomplete seal is excluded from qualification. [Prepared capture and scope](../plans/repository-refactor/r3-capture-preparation.md)
+- Native original capture observed one selected `glDrawArrays(5, 0, 4)`
+  with matching contexts and attachment fields. An entry `GL_INVALID_ENUM`
+  persisted after the two resolve-observer fixes and prevents admitting the
+  seal. Authentic exact and omission qualification remain open. [Capture outcomes and scope](../plans/repository-refactor/r3-capture-preparation.md#authoritative-capture-with-submission-diagnostics)
 - November 14 passes as a retained raw-pair diagnostic. The original
   complete-manifest bytes remain unavailable and the digest remains
   recorded. [Approved retention disposition](../plans/repository-refactor/r3-consolidation.md#november-14-approved-retention-disposition)

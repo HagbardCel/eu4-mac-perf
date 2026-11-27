@@ -147,3 +147,34 @@ digest and its BGRA conversion before candidate execution. The legacy
 replay outcome remains a projection for verified standalone and portable
 case CLI consumers. Frame loading now verifies the digest of the exact
 bytes it decodes. [Remaining ownership](approved-plan.md#r5--test-optimization-and-legacy-reduction)
+
+## Development capture and native recorder
+
+The credential-free development capture moved routine launches to the
+existing lease and capture owners. It removed **900 net enabling lines**,
+**616 test lines**, and **90 documentation lines** between `d7086fb2` and
+`9cbdf238`. It removed token provisioning, the launch authorization ledger and
+operator delegation. Host-wide exclusion, process ownership, timeouts, cleanup,
+no-overwrite output and evidence integrity remain with the existing launch,
+capture and evidence owners. Configured autonomous workflow budgets remain at
+the campaign boundary.
+
+The native full gate moved from 4,440 to 4,393 executed tests, with the same
+69 skips. The test diff removed 52 method definitions and added five. The
+removed cases exercised token validation, authorization issuance/consumption,
+reservations and obsolete initial-state or bridge requirements. The surviving
+launch lease, capture, campaign and bridge checks cover exclusion, cleanup,
+settings restoration, output protection and configured workflow limits.
+
+From `9cbdf238` to recorder checkpoint `627dcf1d`, the native recorder adds
+114 net scientific observation lines and the existing harness adds 123 net
+test lines. These changes cover submission and target evidence, failure JSON,
+and correction of the resolve query shared by the recorder and interposer.
+The slice changes no enabling or protected policy source. Against R2b
+`f43cb4d5`, cumulative net changes at `627dcf1d` are **+69 enabling**,
+**+668 scientific**, **+296 protected policy**, **+294 tests**, and
+**−168 documentation** before this closure reporting. These buckets use the
+existing enabling ledger and assign recorder/comparison behavior separately,
+with moved source counted once. This reporting leaves documentation at −98 LOC.
+The R3 enabling deviation is **269 lines above the −200 target** and remains
+pending explicit review. The cumulative repository target remains in force.
