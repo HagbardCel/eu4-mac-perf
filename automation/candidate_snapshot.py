@@ -268,6 +268,19 @@ def materialize_commit(repo: Path, revision: str, destination: Path,
     return result
 
 
+def stage_trusted_sources(repo: Path, destination: Path, names, closure: dict) -> None:
+    """Stage reviewed harness sources beside an immutable candidate closure."""
+    for name in names:
+        source = repo / name
+        if source.is_symlink() or name in closure:
+            raise SnapshotError(f"ineligible reviewed source: {name}")
+        content = source.read_bytes()
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        closure[name] = hashlib.sha256(content).hexdigest()
+
+
 def raw_diff(repo: Path, base: str, candidate: str) -> list[dict]:
     """Paths, modes and status letters between two commits (rename-aware)."""
     raw = subprocess.run(

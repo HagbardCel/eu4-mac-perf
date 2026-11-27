@@ -1114,6 +1114,7 @@ typedef struct {
 static _Thread_local pending_draw g_pending;
 static _Thread_local struct {
     selected_draw_target entry, submission;
+    CGLContextObj context;
     uint64_t call_id;
     unsigned count;
     int valid;
@@ -1121,7 +1122,8 @@ static _Thread_local struct {
 
 void eu4_gfx_frame_trace_submit_arrays(unsigned mode, int first, int count) {
     if (!g_selected.call_id) return;
-    if (++g_selected.count != 1 || mode != (unsigned)g_pending.mode ||
+    if (++g_selected.count != 1 || g_selected.context != CGLGetCurrentContext() ||
+        mode != (unsigned)g_pending.mode ||
         first != g_pending.first || count != g_pending.count ||
         !selected_target(&g_selected.submission)) {
         g_selected.valid = 0;
@@ -6717,6 +6719,7 @@ static int capture_selected_submission(json_out *out, uint64_t call_id,
                                        int mode, int first, int count) {
     selected_draw_target exit_target = {0};
     if (!call_id || g_selected.call_id != call_id || !g_selected.valid ||
+        g_selected.context != CGLGetCurrentContext() ||
         g_selected.count != 1 || !selected_target(&exit_target) ||
         memcmp(&g_selected.entry, &g_selected.submission, sizeof(exit_target)) ||
         memcmp(&g_selected.entry, &exit_target, sizeof(exit_target))) return 0;
@@ -6735,6 +6738,7 @@ static int capture_selected_submission(json_out *out, uint64_t call_id,
 int eu4_gfx_frame_trace_test_capture_arrays(FILE *output, unsigned mode, int first, int count) {
     memset(&g_selected, 0, sizeof(g_selected));
     g_selected.call_id = 1;
+    g_selected.context = CGLGetCurrentContext();
     g_selected.valid = selected_target(&g_selected.entry);
     g_pending.mode = (int)mode;
     g_pending.first = first;
@@ -6744,7 +6748,11 @@ int eu4_gfx_frame_trace_test_capture_arrays(FILE *output, unsigned mode, int fir
     json_out out = {output, 0};
     int ok = capture_selected_submission(&out, 1, mode, first, count);
     g_selected.call_id = 0;
-    return ok;
+    if (!ok) return 0;
+    eu4_gfx_observe_call call = {.caller_rva = 1, .call_id = 1};
+    jprintf(&out, ",");
+    capture_draw_state(&out, 0, mode, first, count, 1, 0, 0, &call);
+    return !out.failed;
 }
 
 /* Host-test only: run one real observation (shared readback and writer) and
@@ -9530,6 +9538,7 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         if (selected_pre) {
             memset(&g_selected, 0, sizeof(g_selected));
             g_selected.call_id = call->call_id;
+            g_selected.context = CGLGetCurrentContext();
             g_selected.valid = !indexed && !instanced && selected_target(&g_selected.entry);
         }
         int observe_pre = selected_pre;

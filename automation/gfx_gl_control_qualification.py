@@ -1535,6 +1535,7 @@ def preflight_reference(frame_dir: Path, trace: dict, seal: dict, trusted: dict,
         submission = draw.get("submission") or {}
         required_submission = {
             "api": "glDrawArrays", "target_continuity": "entry_submission_exit",
+            "call_id": semantics.get("call_id"),
             "framebuffer": target["framebuffer"], "read_framebuffer": target["framebuffer"],
             "attachment": attachment["name"], "level": 0, "samples": 0,
             "draw_buffer": 0x8ce0, "read_buffer": 0x8ce0,
@@ -1550,6 +1551,16 @@ def preflight_reference(frame_dir: Path, trace: dict, seal: dict, trusted: dict,
         if (type(submission.get("call_id")) is not int or submission["call_id"] <= 0
                 or any(submission.get(key) != value for key, value in required_submission.items())):
             missing.append("effective GL submission and entry-to-exit attachment continuity")
+        program = draw.get("program") or {}
+        linkage = draw.get("program_diagnostics") or {}
+        shaders = program.get("shaders") or []
+        if (linkage.get("link") is not True
+                or len(shaders) != 2
+                or {shader.get("stage") for shader in shaders} != {"vertex", "pixel"}
+                or any(shader.get("compile") is not True for shader in shaders)
+                or linkage.get("active_attributes") != len(draw.get("attributes") or [])
+                or linkage.get("active_uniforms") != len(program.get("uniforms") or [])):
+            missing.append("effective linked shader and complete active program inputs")
         observed_target = direct.get("target") or {}
         observed_attachment = observed_target.get("color_attachment") or {}
         if (observed_target.get("framebuffer") != target.get("framebuffer")
@@ -1768,8 +1779,6 @@ def _required_observations(manifest: dict) -> dict:
         "stencil_test": int(state["stencil"]["test"]), "cull": int(state["cull"]["enabled"]),
         "dither": int(state["dither"]), "color_mask": state["color_mask"],
         "active_uniforms": len(uniforms), "active_attributes": len(attributes),
-        "shader_sha256": {shader["stage"]: shader["sha256"]
-                          for shader in manifest["program"]["shaders"]},
         "uniforms": uniforms,
         "attributes": {
             item["name"]: {"location": item["index"], "components": item["components"],
@@ -1823,6 +1832,15 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, package: Path, e
         observed_state = _required_observations(manifest)
     except (KeyError, IndexError, TypeError, ValueError, QualificationError) as exc:
         return {"verdict": "missing_required_expectation", "problems": [str(exc)]}
+    # Apple GL reports a trailing newline for shader strings lacking one.
+    shaders = {}
+    for shader in manifest["program"]["shaders"]:
+        body = (package / shader["path"]).read_bytes()
+        if not body.endswith(b"\n"):
+            body += b"\n"
+        shaders[shader["stage"]] = replay_input.sha256_bytes(body)
+    for phase in observed_state.values():
+        phase["shader_sha256"] = shaders
     if any(item["sha256"] == reference_sha for item in manifest["files"]):
         return {"verdict": "invalid_provenance", "problems": ["GL reference bytes overlap input"]}
     width, height = (manifest["identity"][name] for name in ("width", "height"))

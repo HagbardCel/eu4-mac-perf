@@ -1,9 +1,7 @@
 from pathlib import Path
-import copy
 import json
 import os
 import socket
-import struct
 import sys
 import subprocess
 import tempfile
@@ -298,61 +296,12 @@ int main(int argc, char **argv) {
 
     def test_offscreen_shape_runs_with_native_observations_and_sampled_texture(self):
         repo = gfx_revision.ROOT
-        fixture = state.git_common_dir(repo).parent / ".local/r2b-authority/07453ebc/review"
-        if not fixture.is_dir():
-            self.skipTest("retained GL state fixture is unavailable")
-        package = json.loads((fixture / "package" / "replay-input.json").read_text())
         with tempfile.TemporaryDirectory() as scratch:
             stage = Path(scratch)
             frame = stage / "frame"
-            blobs = frame / "blobs"
-            blobs.mkdir(parents=True)
-
-            def blob(name, value):
-                (blobs / name).write_bytes(value)
-                return {"file": name, "sha256": sha256_bytes(value), "bytes": len(value)}
-
-            w, h = 864, 558
-            tw, th = 1728, 1117
-            sample = bytes((61, 97, 163, 255))
-            pre, submission, post, gl = self._native_capture(repo, stage, frame)
-            tex = blob("sample", sample * (tw * th))
-            vertex = blob("vertices", struct.pack("<16h", -1, -1, 0, 1, 1, -1, 0, 1,
-                                                   -1, 1, 0, 1, 1, 1, 0, 1))
-            shader = [
-                {"stage": "vertex", **blob("vertex", b"#version 120\nattribute vec4 in_POSITION;"
-                  b"uniform vec4 UNIFORM1[9]; varying vec2 uv;"
-                  b"void main(){ gl_Position=in_POSITION+UNIFORM1[8]; uv=in_POSITION.xy*.5+.5; }")},
-                {"stage": "pixel", **blob("pixel", b"#version 120\nvarying vec2 uv;"
-                  b"uniform sampler2D tex0; void main(){ gl_FragColor=texture2D(tex0,uv); }")},
-            ]
-            tint = blob("uniform", bytes(9 * 16))
-            state_record = copy.deepcopy(package["state"])
-            state_record["viewport"] = [0, 0, w, h]
-            state_record["scissor"] = {"enabled": False, "box": [0, 0, w, h]}
-            draw = {
-                "kind": "draw", "index": 0, "state": state_record,
-                "draw": {"count": 4, "mode": 5, "first": 0, "indexed": False,
-                         "base_vertex": 0, "instance_count": 1, "caller_rva": "0x1"},
-                "target": post["target"], **pre, **submission,
-                "program": {"name": 1, "shaders": shader,
-                            "uniforms": [{"name": "tex0", "type": "sampler", "unit": 0},
-                                         {"name": "UNIFORM1[0]", "type": "float",
-                                          "components": 4, "elements": 9, **tint}]},
-                "attributes": [{**package["attributes"][0], "data": vertex["file"],
-                                "sha256": vertex["sha256"], "components": 4,
-                                "gl_type": "0x1402", "range_bytes": 32}],
-                "textures": [{"target": "2D", "name": 7, "sampler_name": "tex0", "unit": 0,
-                              "width": tw, "height": th, "internal_format": "RGBA8",
-                              "levels": [{"level": 0, "width": tw, "height": th,
-                                          "internal_format": "RGBA8", "pixel_format": "RGBA8",
-                                          "pixel_type": "unsigned_byte", **tex}],
-                              "sampler": {"min": "0x2600", "mag": "0x2600", "wrap_s": "0x812f",
-                                          "wrap_t": "0x812f", "base_level": 0, "max_level": 1000,
-                                          "compare_mode": "0x0", "compare_func": "0x203",
-                                          "min_lod": -1000, "max_lod": 1000, "lod_bias": 0,
-                                          "anisotropy": 1}}],
-            }
+            pre, native_draw, post, gl = self._native_capture(repo, stage, frame)
+            draw = {"kind": "draw", "index": 0, **pre, **native_draw}
+            shader = draw["program"]["shaders"]
             source = self._seal_native_fixture(frame, draw, post, gl)
             selection = {"workload": {
                 "caller_rva": "0x1", "shader_sha256": {row["stage"]: row["sha256"] for row in shader},

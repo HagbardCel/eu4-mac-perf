@@ -1238,10 +1238,7 @@ def _build_fenced_candidate(repo: Path, trusted_revision: str, commit: str,
     snapshot = directory / "sources"
     digests = candidate_snapshot.materialize_commit(
         repo, commit, snapshot, tuple(path for path in closure if path != entry_point))
-    entry = snapshot / entry_point
-    entry.parent.mkdir(parents=True, exist_ok=True)
-    entry.write_bytes((repo / entry_point).read_bytes())
-    digests[entry_point] = _sha256(entry)
+    candidate_snapshot.stage_trusted_sources(repo, snapshot, (entry_point,), digests)
 
     clang, sdk = native_build.qualification_toolchain("clang")
     build = directory / "build"

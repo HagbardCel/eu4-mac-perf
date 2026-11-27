@@ -99,6 +99,15 @@ static int blob_equals(const char *directory, const char *name,
     return got == bytes && memcmp(buffer, expected, bytes) == 0;
 }
 
+static GLuint fixture_shader(GLenum type, const char *source) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+    GLint compiled = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    return compiled ? shader : 0;
+}
+
 static int selected_fixture(const char *directory) {
     GLuint fbo = 0, texture = make_texture(GL_TEXTURE_2D);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 864, 558, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
@@ -116,10 +125,36 @@ static int selected_fixture(const char *directory) {
             directory, 0, "selected_pre_draw", "draw", -1, record, sizeof(record)) != 0)
         return 1;
     puts(record);
+    GLuint vertex = fixture_shader(GL_VERTEX_SHADER,
+        "#version 120\nattribute vec4 in_POSITION; uniform vec4 UNIFORM1[9]; varying vec2 uv; "
+        "void main(){ gl_Position=in_POSITION+UNIFORM1[8]; uv=in_POSITION.xy*.5+.5; }\n");
+    GLuint fragment = fixture_shader(GL_FRAGMENT_SHADER,
+        "#version 120\nvarying vec2 uv; uniform sampler2D tex0; "
+        "void main(){ gl_FragColor=texture2D(tex0,uv); }\n");
+    if (!vertex || !fragment) return 1;
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+    glBindAttribLocation(program, 0, "in_POSITION");
+    glLinkProgram(program);
+    glUseProgram(program);
     const GLshort vertices[] = {-1,-1,0,1, 1,-1,0,1, -1,1,0,1, 1,1,0,1};
-    glColor4ub(61, 97, 163, 255);
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glVertexPointer(4, GL_SHORT, 0, vertices);
+    GLuint buffer = 0;
+    glGenBuffers(1, &buffer);
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 4, GL_SHORT, GL_FALSE, 8, 0);
+    glEnableVertexAttribArray(0);
+    make_texture(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    uint8_t *pixels = malloc(1728 * 1117 * 4);
+    if (!pixels) return 1;
+    for (size_t i = 0; i < 1728 * 1117 * 4; i += 4) {
+        memcpy(pixels + i, (const uint8_t[]){61, 97, 163, 255}, 4);
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1728, 1117, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    free(pixels);
     fputs("{", stdout);
     if (!eu4_gfx_frame_trace_test_capture_arrays(stdout, GL_TRIANGLE_STRIP, 0, 4)) return 1;
     puts("}");
