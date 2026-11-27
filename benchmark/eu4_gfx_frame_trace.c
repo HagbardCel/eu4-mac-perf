@@ -4223,6 +4223,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
                                int count, int instance_count, int base_vertex,
                                uintptr_t master,
                                const eu4_gfx_observe_call *call) {
+    const int selected = g.prefix_caller != 0 && g.prefix_caller == call->caller_rva;
     char *target_json = NULL;
     size_t target_size = 0;
     FILE *target_stream = open_memstream(&target_json, &target_size);
@@ -4358,7 +4359,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
     jprintf(out, ",\"program\":{\"name\":%d", program);
     json_out sub = *out;
     jprintf(&sub, ",");
-    const char *cached_shaders = shader_cache_get((uint64_t)program);
+    const char *cached_shaders = selected ? NULL : shader_cache_get((uint64_t)program);
     if (cached_shaders != NULL) {
         jprintf(&sub, "%s", cached_shaders);
     } else {
@@ -4370,7 +4371,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
             capture_shaders((GLuint)program, &shader_out);
             fclose(shader_stream);
             if (!shader_out.failed && shader_json != NULL) {
-                shader_cache_put((uint64_t)program, shader_json);
+                if (!selected) shader_cache_put((uint64_t)program, shader_json);
                 jprintf(&sub, "%s", shader_json);
             }
             free(shader_json);
@@ -4508,7 +4509,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
         char texture_name[64];
         snprintf(texture_name, sizeof(texture_name), "%d", binding);
         const char *cached_levels =
-            render_target_known(texture_name)
+            selected || render_target_known(texture_name)
                 ? NULL
                 : texture_cache_get(target, (unsigned)binding);
         if (cached_levels != NULL) {
@@ -4522,7 +4523,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
                 (void)read_texture(target, (GLuint)binding, &levels_out);
                 fclose(levels_stream);
                 if (!levels_out.failed && levels_json != NULL) {
-                    if (!render_target_known(texture_name)) {
+                    if (!selected && !render_target_known(texture_name)) {
                         texture_cache_put(target, (unsigned)binding,
                                           levels_json);
                     }
@@ -4556,7 +4557,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
     json_out attr = *out;
     jprintf(&attr, ",");
     if (capture_attributes((GLuint)program, indexed, first, count,
-                           instance_count, base_vertex, master, 0, &attr) != 0) {
+                           instance_count, base_vertex, selected ? 0 : master, 0, &attr) != 0) {
         attr.failed = 1;
     }
     if (attr.failed) {
@@ -6751,7 +6752,10 @@ int eu4_gfx_frame_trace_test_capture_arrays(FILE *output, unsigned mode, int fir
     if (!ok) return 0;
     eu4_gfx_observe_call call = {.caller_rva = 1, .call_id = 1};
     jprintf(&out, ",");
+    uint64_t saved_caller = g.prefix_caller;
+    g.prefix_caller = call.caller_rva;
     capture_draw_state(&out, 0, mode, first, count, 1, 0, 0, &call);
+    g.prefix_caller = saved_caller;
     return !out.failed;
 }
 
