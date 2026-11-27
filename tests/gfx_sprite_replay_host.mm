@@ -8,7 +8,7 @@
  * boundary around eu4_gfx_draw_encode_into.
  *
  * Usage:
- *   gfx_m5_replay_host --reference <gl-ref-dir> --out <dir> [--constant-words <n>]
+ *   gfx_sprite_replay_host --reference <gl-ref-dir> --out <dir> [--constant-words <n>]
  */
 
 #import "../renderer/metal/eu4_gfx_buffers.h"

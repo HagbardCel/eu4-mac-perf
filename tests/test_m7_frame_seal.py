@@ -19,7 +19,7 @@ import sys
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import m6_frame  # noqa: E402
+from automation import gfx_frame  # noqa: E402
 
 
 def _sha(data: bytes) -> str:
@@ -156,9 +156,9 @@ class FrameSealValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             frame = Path(temporary) / "frame"
             seal = _write_frame(frame)
-            loaded = m6_frame.load_seal(frame)
+            loaded = gfx_frame.load_seal(frame)
             self.assertEqual(loaded["capture_frame_id"], seal["capture_frame_id"])
-            trace = m6_frame.load_trace(frame)
+            trace = gfx_frame.load_trace(frame)
             self.assertEqual(len(trace["_events"]), 4)
 
     def test_legacy_m6_frame_without_a_seal_still_loads(self):
@@ -169,7 +169,7 @@ class FrameSealValidationTests(unittest.TestCase):
         fixture = next((path for path in candidates if (path / "frame-trace.json").is_file()), None)
         if fixture is None:
             self.skipTest("canonical M6 frame is absent in this worktree")
-        trace = m6_frame.load_trace(fixture)
+        trace = gfx_frame.load_trace(fixture)
         self.assertGreater(len(trace["_events"]), 0)
         self.assertFalse((fixture / "frame-seal.json").exists())
 
@@ -177,8 +177,8 @@ class FrameSealValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             frame = Path(temporary) / "frame"
             _write_frame(frame, sealed=False)
-            with self.assertRaisesRegex(m6_frame.FrameError, "not sealed"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "not sealed"):
+                gfx_frame.load_seal(frame)
 
     def test_manifest_or_reference_tamper_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -186,13 +186,13 @@ class FrameSealValidationTests(unittest.TestCase):
             _write_frame(frame)
             with (frame / "frame-trace.json").open("a") as handle:
                 handle.write(" ")
-            with self.assertRaisesRegex(m6_frame.FrameError, "manifest digest"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "manifest digest"):
+                gfx_frame.load_seal(frame)
             _write_frame(frame)
             (frame / "frame-reference.bgra").write_bytes(b"\0" * 64)
-            with self.assertRaisesRegex(m6_frame.FrameError,
+            with self.assertRaisesRegex(gfx_frame.FrameError,
                                         "reference digest"):
-                m6_frame.load_seal(frame)
+                gfx_frame.load_seal(frame)
 
     def test_capture_directory_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -201,8 +201,8 @@ class FrameSealValidationTests(unittest.TestCase):
             seal = json.loads((frame / "frame-seal.json").read_text())
             seal["capture_dir"] = str(Path(temporary) / "elsewhere")
             (frame / "frame-seal.json").write_text(json.dumps(seal))
-            with self.assertRaisesRegex(m6_frame.FrameError, "capture directory"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "capture directory"):
+                gfx_frame.load_seal(frame)
 
     def test_invalid_abi_or_escaping_member_path_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -211,14 +211,14 @@ class FrameSealValidationTests(unittest.TestCase):
             seal = json.loads((frame / "frame-seal.json").read_text())
             seal["abi_version"] = 3
             (frame / "frame-seal.json").write_text(json.dumps(seal))
-            with self.assertRaisesRegex(m6_frame.FrameError, "ABI"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "ABI"):
+                gfx_frame.load_seal(frame)
             _write_frame(frame)
             seal = json.loads((frame / "frame-seal.json").read_text())
             seal["reference_file"] = "../outside.bgra"
             (frame / "frame-seal.json").write_text(json.dumps(seal))
-            with self.assertRaisesRegex(m6_frame.FrameError, "path is invalid"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "path is invalid"):
+                gfx_frame.load_seal(frame)
 
     def test_operation_accounting_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -227,21 +227,21 @@ class FrameSealValidationTests(unittest.TestCase):
             seal = json.loads((frame / "frame-seal.json").read_text())
             seal["draw_count"] = 99
             (frame / "frame-seal.json").write_text(json.dumps(seal))
-            with self.assertRaisesRegex(m6_frame.FrameError, "draw_count"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "draw_count"):
+                gfx_frame.load_seal(frame)
 
     def test_missing_manifest_or_reference_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             frame = Path(temporary) / "frame"
             _write_frame(frame)
             (frame / "frame-trace.json").unlink()
-            with self.assertRaisesRegex(m6_frame.FrameError, "manifest is absent"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "manifest is absent"):
+                gfx_frame.load_seal(frame)
             _write_frame(frame)
             (frame / "frame-reference.bgra").unlink()
-            with self.assertRaisesRegex(m6_frame.FrameError,
+            with self.assertRaisesRegex(gfx_frame.FrameError,
                                         "reference pixels are absent"):
-                m6_frame.load_seal(frame)
+                gfx_frame.load_seal(frame)
 
     def test_seal_rejects_incomplete_trace_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -254,8 +254,8 @@ class FrameSealValidationTests(unittest.TestCase):
             seal = json.loads((frame / "frame-seal.json").read_text())
             seal["manifest_sha256"] = _sha(data)
             (frame / "frame-seal.json").write_text(json.dumps(seal))
-            with self.assertRaisesRegex(m6_frame.FrameError, "incomplete"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "incomplete"):
+                gfx_frame.load_seal(frame)
 
     def test_event_field_change_invalidates_the_seal(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -265,8 +265,8 @@ class FrameSealValidationTests(unittest.TestCase):
             data = events_path.read_bytes()
             self.assertIn(b'"0x1000"', data)
             events_path.write_bytes(data.replace(b'"0x1000"', b'"0x1001"', 1))
-            with self.assertRaisesRegex(m6_frame.FrameError, "event stream"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "event stream"):
+                gfx_frame.load_seal(frame)
 
     def test_truncated_or_appended_event_stream_invalidates_the_seal(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -275,28 +275,28 @@ class FrameSealValidationTests(unittest.TestCase):
             events_path = frame / "frame-events.jsonl"
             original = events_path.read_bytes()
             events_path.write_bytes(original[:-1])
-            with self.assertRaisesRegex(m6_frame.FrameError, "event stream"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "event stream"):
+                gfx_frame.load_seal(frame)
             _write_frame(frame)
             (frame / "frame-events.jsonl").write_bytes(original + b"\n")
-            with self.assertRaisesRegex(m6_frame.FrameError, "event stream"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "event stream"):
+                gfx_frame.load_seal(frame)
 
     def test_missing_event_stream_invalidates_the_seal(self):
         with tempfile.TemporaryDirectory() as temporary:
             frame = Path(temporary) / "frame"
             _write_frame(frame)
             (frame / "frame-events.jsonl").unlink()
-            with self.assertRaisesRegex(m6_frame.FrameError, "event stream"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "event stream"):
+                gfx_frame.load_seal(frame)
 
     def test_modified_referenced_blob_is_rejected_before_qualification(self):
         with tempfile.TemporaryDirectory() as temporary:
             frame = Path(temporary) / "frame"
             _write_frame(frame)
             (frame / "blobs" / "attr.bin").write_bytes(b"tampered")
-            with self.assertRaisesRegex(m6_frame.FrameError, "blob"):
-                m6_frame.load_seal(frame)
+            with self.assertRaisesRegex(gfx_frame.FrameError, "blob"):
+                gfx_frame.load_seal(frame)
 
     def test_notification_must_be_single_and_verified(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -305,21 +305,21 @@ class FrameSealValidationTests(unittest.TestCase):
             seal = _write_frame(frame)
             _write_notification(output, seal)
             self.assertEqual(
-                m6_frame.load_notification(output)["notification_index"], 1
+                gfx_frame.load_notification(output)["notification_index"], 1
             )
             _write_notification(output, seal, notification_index=2)
-            with self.assertRaisesRegex(m6_frame.FrameError,
+            with self.assertRaisesRegex(gfx_frame.FrameError,
                                         "more than one"):
-                m6_frame.load_notification(output)
+                gfx_frame.load_notification(output)
             _write_notification(output, seal, verified_reference=False)
-            with self.assertRaisesRegex(m6_frame.FrameError,
+            with self.assertRaisesRegex(gfx_frame.FrameError,
                                         "verify the sealed reference"):
-                m6_frame.load_notification(output)
+                gfx_frame.load_notification(output)
 
 
 class CaptureSealWiringTests(unittest.TestCase):
     def _args(self, output: Path, *extra: str):
-        return m6_frame._parser().parse_args(
+        return gfx_frame._parser().parse_args(
             ["capture", "--output", str(output), *extra]
         )
 
@@ -345,9 +345,9 @@ class CaptureSealWiringTests(unittest.TestCase):
                 "run_ops",
                 side_effect=fake_run_ops,
             ), mock.patch.object(
-                m6_frame, "coverage_report", return_value={"ok": True}
+                gfx_frame, "coverage_report", return_value={"ok": True}
             ):
-                self.assertEqual(m6_frame.capture(args), 0)
+                self.assertEqual(gfx_frame.capture(args), 0)
             self.assertNotIn("EU4_GFX_FRAME_SEAL", captured)
             self.assertFalse((output / "frame" / "frame-seal.json").exists())
 
@@ -376,9 +376,9 @@ class CaptureSealWiringTests(unittest.TestCase):
                 "run_ops",
                 side_effect=fake_run_ops,
             ), mock.patch.object(
-                m6_frame, "coverage_report", return_value={"ok": True}
+                gfx_frame, "coverage_report", return_value={"ok": True}
             ):
-                self.assertEqual(m6_frame.capture(args), 0)
+                self.assertEqual(gfx_frame.capture(args), 0)
             self.assertEqual(captured["EU4_GFX_FRAME_SEAL"], "1")
             self.assertEqual(captured["EU4_GFX_FRAME_SEAL_LOG"], "1")
             self.assertEqual(captured["EU4_GFX_FRAME_TRACE_TIMEOUT_MS"], "1234")
@@ -395,7 +395,7 @@ class CaptureSealWiringTests(unittest.TestCase):
                 "preflight_ops",
                 return_value={},
             ):
-                self.assertEqual(m6_frame.capture(args), 2)
+                self.assertEqual(gfx_frame.capture(args), 2)
             self.assertFalse(output.exists())
 
     def test_missing_notification_fails_the_capture(self):
@@ -416,9 +416,9 @@ class CaptureSealWiringTests(unittest.TestCase):
                 "run_ops",
                 side_effect=fake_run_ops,
             ), mock.patch.object(
-                m6_frame, "coverage_report", return_value={"ok": True}
+                gfx_frame, "coverage_report", return_value={"ok": True}
             ):
-                self.assertEqual(m6_frame.capture(args), 6)
+                self.assertEqual(gfx_frame.capture(args), 6)
             report = json.loads((output / "capture-report.json").read_text())
             self.assertIn("seal_error", report)
 

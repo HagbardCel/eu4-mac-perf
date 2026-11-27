@@ -27,9 +27,10 @@ Capture a unique call with the pinned shader and resource identity. Require
 the same complete single-sample texture attachment at entry and exit,
 COLOR_ATTACHMENT0 draw and read bindings, direct lossless pre/post color,
 and checked depth and stencil absence. The selected original observation
-refuses a GL error. The capture pins the process architecture and GL
-implementation, driver and context. Candidate execution uses that
-architecture and verifies the observed GL identity.
+refuses a GL error. The sealed capture records the pinned executable digest, process
+architecture, macOS build, Apple GL implementation and context profile.
+Candidate execution uses the recorded process architecture and checks macOS
+build and the observed GL identity before qualification.
 
 The archived instruction listing for `_GfxDraw` at RVA `0x15ea789`
 shows the dirty-uniform indirect call at `0x15ea806` and vertex attribute

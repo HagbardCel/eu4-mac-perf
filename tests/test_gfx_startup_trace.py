@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "benchmark"))
 
 import eu4_gfx_startup_trace as startup  # noqa: E402
-from automation import live_gfx, m6_frame  # noqa: E402
+from automation import live_gfx, gfx_frame  # noqa: E402
 
 
 @unittest.skipUnless(sys.platform == "darwin", "startup trace host is macOS x86_64")
@@ -346,7 +346,7 @@ class ShadowTerminalRecordTests(unittest.TestCase):
         else:
             path.write_text(
                 document if isinstance(document, str) else json.dumps(document))
-        return m6_frame._shadow_terminal(
+        return gfx_frame._shadow_terminal(
             self.shadow,
             capture_id=(capture_id or self.capture_id),
             run=(run or self.run),
@@ -444,20 +444,20 @@ class ShadowTerminalRecordTests(unittest.TestCase):
             max_frames=1))
 
     def test_coordinator_failure_record_carries_the_capture_identity(self):
-        args = m6_frame._parser().parse_args([
+        args = gfx_frame._parser().parse_args([
             "shadow-coordinator", "--run", str(self.run),
             "--capture-id", self.capture_id, "--timeout", "0"])
-        status = m6_frame.shadow_coordinator(args)
+        status = gfx_frame.shadow_coordinator(args)
         record = json.loads(
             (self.shadow / "coordinator.json").read_text())
         self.assertEqual(status, 1)
         self.assertEqual(record["status"], "failed")
         self.assertEqual(record["capture_id"], self.capture_id)
         self.assertEqual(record["run"], str(self.run.resolve()))
-        self.assertTrue(m6_frame._shadow_terminal(
+        self.assertTrue(gfx_frame._shadow_terminal(
             self.shadow, capture_id=self.capture_id, run=self.run,
             continuous=False, max_frames=None))
-        self.assertFalse(m6_frame._shadow_terminal(
+        self.assertFalse(gfx_frame._shadow_terminal(
             self.shadow, capture_id=self.other_id, run=self.run,
             continuous=False, max_frames=None))
 
@@ -768,24 +768,24 @@ class CaptureCleanupOutcomeTests(unittest.TestCase):
             def poll(self):
                 return 0
 
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", str(output)]
             + (["--shadow"] if shadow_record is not None else []))
         patches = [
             mock.patch.object(startup, "preflight_ops", return_value={}),
             mock.patch.object(startup, "run_ops", side_effect=fake_run_ops),
-            mock.patch.object(m6_frame, "load_trace", return_value={}),
-            mock.patch.object(m6_frame, "coverage_report",
+            mock.patch.object(gfx_frame, "load_trace", return_value={}),
+            mock.patch.object(gfx_frame, "coverage_report",
                               return_value={"ok": True}),
-            mock.patch.object(m6_frame, "load_seal", return_value={
+            mock.patch.object(gfx_frame, "load_seal", return_value={
                 "capture_frame_id": 1, "session_id": "s", "pid": 4242}),
-            mock.patch.object(m6_frame.subprocess, "Popen",
+            mock.patch.object(gfx_frame.subprocess, "Popen",
                               return_value=Coordinator()),
         ]
         for patcher in patches:
             patcher.start()
         try:
-            return m6_frame.capture(args)
+            return gfx_frame.capture(args)
         finally:
             for patcher in reversed(patches):
                 patcher.stop()
@@ -861,16 +861,16 @@ class CaptureCleanupOutcomeTests(unittest.TestCase):
                 mock.patch.object(startup, "preflight_ops", return_value={}),
                 mock.patch.object(startup, "run_ops",
                                   side_effect=fake_run_ops),
-                mock.patch.object(m6_frame, "load_trace", return_value={}),
-                mock.patch.object(m6_frame, "coverage_report",
+                mock.patch.object(gfx_frame, "load_trace", return_value={}),
+                mock.patch.object(gfx_frame, "coverage_report",
                                   return_value={"ok": False}),
             ]
             for patcher in patches:
                 patcher.start()
             try:
-                args = m6_frame._parser().parse_args(
+                args = gfx_frame._parser().parse_args(
                     ["capture", "--output", str(output)])
-                status = m6_frame.capture(args)
+                status = gfx_frame.capture(args)
             finally:
                 for patcher in reversed(patches):
                     patcher.stop()
@@ -934,20 +934,20 @@ class CaptureCleanupOutcomeTests(unittest.TestCase):
                 mock.patch.object(startup, "preflight_ops", return_value={}),
                 mock.patch.object(startup, "run_ops",
                                   side_effect=fake_run_ops),
-                mock.patch.object(m6_frame, "load_trace", return_value={}),
-                mock.patch.object(m6_frame, "coverage_report",
+                mock.patch.object(gfx_frame, "load_trace", return_value={}),
+                mock.patch.object(gfx_frame, "coverage_report",
                                   return_value={"ok": True}),
-                mock.patch.object(m6_frame, "load_seal", return_value={
+                mock.patch.object(gfx_frame, "load_seal", return_value={
                     "capture_frame_id": 1, "session_id": "s", "pid": 4242}),
-                mock.patch.object(m6_frame.subprocess, "Popen",
+                mock.patch.object(gfx_frame.subprocess, "Popen",
                                   side_effect=fake_popen),
             ]
             for patcher in patches:
                 patcher.start()
             try:
-                args = m6_frame._parser().parse_args(
+                args = gfx_frame._parser().parse_args(
                     ["capture", "--output", str(output), "--shadow"])
-                status = m6_frame.capture(args)
+                status = gfx_frame.capture(args)
             finally:
                 for patcher in reversed(patches):
                     patcher.stop()

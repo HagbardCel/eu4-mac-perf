@@ -45,7 +45,7 @@ engine clear flags and the shared UV2 diagnostic format.
   though the transport is BGRA8. Depth and stencil snapshots are separate
   diagnostics. A float32 depth readback does not establish storage equality.
   Policy thresholds have their own verdict. See the
-  [M6 comparator](../../automation/m6_compare.py) and the
+  [frame pixel comparator](../../automation/gfx_frame_pixels.py) and the
   [M7 exactness contract](../../analysis/m7/m7-exact-prefix-report.md#exactness-contract).
 - **Checkpoints.** Request and result are reconciled one-to-one; missing,
   duplicate, substituted or cross-capture evidence fails closed. Writers are
@@ -78,7 +78,7 @@ See [render state](../renderer-reconstruction-and-differential-validation.md) an
 the [review matrix](../../plans/closed/harness-review-20261120/implementation.md).
 
 The direct, independent and trusted single-frame tools share Metal host
-invocation and shader translation in [m6_frame](../../automation/m6_frame.py).
+invocation and shader translation in [frame execution](../../automation/gfx_frame.py).
 The ordered replay supervisor uses the same host with its sequence inputs.
 [Portable case tools](../../automation/gfx_replay_case.py) verify Strategy B
 v1/v2 and compare legacy dual-run packages through `eu4_replay case`.

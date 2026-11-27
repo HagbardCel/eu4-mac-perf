@@ -2548,7 +2548,7 @@ class SubprocessDiagnosticTests(unittest.TestCase):
         self.assertEqual(value["outcome"]["diagnostic"], "complete")
         self.assertEqual(value["outcome"]["verdict"], "different")
         command = run.call_args.args[0]
-        self.assertEqual(command[1:4], ["-m", "automation.m6_frame", "replay"])
+        self.assertEqual(command[1:4], ["-m", "automation.gfx_frame", "replay"])
         self.assertEqual(value["result"]["subprocess"]["exit_code"], 2)
 
     def test_frame_replay_without_explicit_shaders_omits_the_argument(self):
@@ -2566,7 +2566,7 @@ class SubprocessDiagnosticTests(unittest.TestCase):
         self.assertEqual(code_value, 0)
         self.assertTrue(value["ok"], value.get("reason"))
         command = run.call_args.args[0]
-        self.assertEqual(command[1:4], ["-m", "automation.m6_frame", "replay"])
+        self.assertEqual(command[1:4], ["-m", "automation.gfx_frame", "replay"])
         self.assertNotIn("--shaders", command)
         self.assertIn(str(root / "frame"), command)
 

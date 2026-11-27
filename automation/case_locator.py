@@ -313,14 +313,14 @@ def _verification_summary(verification: dict) -> dict:
 def _verify(case_dir: Path) -> dict:
     try:
         if _trusted_reference(case_dir):
-            from automation import gfx_prefix_check, m6_frame
+            from automation import gfx_prefix_check, gfx_frame
 
             problem = _symlink_problem(case_dir)
             if problem:
                 return {"ok": False, "problems": [problem]}
             frame, _ = gfx_prefix_check.trusted_frame_path(case_dir, portable=True)
             trusted = gfx_prefix_check.verify_trusted_evidence(case_dir, frame)
-            m6_frame.load_seal(frame, trusted_evidence=trusted)
+            gfx_frame.load_seal(frame, trusted_evidence=trusted)
             return {"ok": True, "files": len(trusted["files"]) + 1}
         return gfx_replay_case.verify(case_dir)
     except Exception as exc:  # noqa: BLE001 - every verifier failure is closed
@@ -1169,7 +1169,7 @@ def resolve_legacy_reference(roots, reference: dict, workspace: Path) -> Path:
 
 
 def resolve_sealed_reference(roots: list | None, reference: dict, workspace: Path):
-    from automation import gfx_prefix_check, m6_frame
+    from automation import gfx_prefix_check, gfx_frame
     from automation.state import outside_workspace
 
     matches = []
@@ -1202,9 +1202,9 @@ def resolve_sealed_reference(roots: list | None, reference: dict, workspace: Pat
     try:
         frame, _ = gfx_prefix_check.trusted_frame_path(root, portable=True)
         trusted = gfx_prefix_check.verify_trusted_evidence(root, frame)
-        trace = m6_frame.load_trace(frame)
-        seal = m6_frame.load_seal(frame, trace=trace, trusted_evidence=trusted)
-    except (OSError, ValueError, gfx_prefix_check.PrefixCheckError, m6_frame.FrameError) as exc:
+        trace = gfx_frame.load_trace(frame)
+        seal = gfx_frame.load_seal(frame, trace=trace, trusted_evidence=trusted)
+    except (OSError, ValueError, gfx_prefix_check.PrefixCheckError, gfx_frame.FrameError) as exc:
         return None, {"verdict": "invalid_provenance", "problems": [str(exc)]}
     return (frame, trace, seal, trusted), None
 

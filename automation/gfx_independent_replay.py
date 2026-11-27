@@ -25,12 +25,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from automation import gfx_frame_graph, m6_compare, m6_frame
+from automation import gfx_frame_graph, gfx_frame_pixels, gfx_frame
 from automation.gfx_artifacts import sha256_file as _sha
+from automation.gfx_frame_pixels import exact_comparison_statistics
 
 SCHEMA = "gfx-independent-replay/v1"
 DIAGNOSIS_SCHEMA = "gfx-frame-diagnosis/v1"
-DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "analysis" / "m6" / "comparison-policy.json"
+DEFAULT_POLICY = Path(__file__).with_name("frame-pixel-policy.json")
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_MARKER = ".gfx-replay-output.json"
 
@@ -786,7 +787,7 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             if not alpha_applicable:
                 reference = _opaque_alpha(reference)
                 candidate = _opaque_alpha(candidate)
-            statistics = m6_compare.compare_images(
+            statistics = gfx_frame_pixels.compare_images(
                 reference, candidate, width, height)
         entry = {
             "event": event,
@@ -987,49 +988,6 @@ _FINAL_STATISTICS = (
 )
 
 
-def exact_comparison_statistics(statistics: dict, width: int,
-                                height: int) -> tuple[bool | None, str]:
-    """Return raw four-channel exactness for a comparison statistics block.
-
-    A policy pass is not exactness.  Exact equality requires a complete,
-    dimensionally consistent BGRA8 measurement with zero mismatched pixels,
-    zero alpha differences and zero maximum channel error on all four
-    channels.  Missing or inconsistent statistics return ``(None, reason)`` so
-    callers fail closed instead of advertising a match.
-
-    The function deliberately consumes the raw statistics rather than the
-    policy verdict: a caller-supplied threshold must never be able to promote
-    a one-byte difference into an exact match.
-    """
-    if not isinstance(statistics, dict):
-        return None, "comparison statistics are absent"
-    try:
-        pixels = int(statistics["pixels"])
-        mismatched = int(statistics["mismatched_pixels"])
-        max_error = int(statistics["max_channel_error"])
-        alpha = int(statistics["alpha_different_pixels"])
-    except (KeyError, TypeError, ValueError) as exc:
-        return None, f"comparison statistics are incomplete: {exc}"
-    mean_abs = statistics.get("mean_abs_error")
-    if not isinstance(mean_abs, (list, tuple)) or len(mean_abs) != 4:
-        return None, "comparison did not measure all four BGRA channels"
-    if pixels <= 0 or width <= 0 or height <= 0:
-        return None, "comparison extent is missing or empty"
-    if pixels != width * height:
-        return None, (f"comparison pixel count {pixels} disagrees with "
-                      f"{width}x{height}")
-    if mismatched < 0 or mismatched > pixels:
-        return None, f"comparison mismatch count is out of range: {mismatched}"
-    if alpha < 0 or alpha > mismatched:
-        return None, f"comparison alpha count is out of range: {alpha}"
-    if max_error < 0 or max_error > 255:
-        return None, f"comparison maximum error is out of range: {max_error}"
-    if (mismatched == 0 and max_error == 0
-            and alpha == 0 and all(float(value) == 0.0 for value in mean_abs)):
-        return True, ""
-    return False, ""
-
-
 def _exact_report_status(report: dict) -> tuple[str, bool | None, str]:
     """Status for a full comparison report, ignoring policy tolerances."""
     reference = report.get("reference") or {}
@@ -1048,7 +1006,7 @@ def final_comparison_report(frame_dir: Path, out_dir: Path,
                             policy_path: Path | str | None = None) -> dict:
     """Full-frame differential through the shared comparison engine.
 
-    The complete ``m6_compare`` report (statistics, worst region and draw
+    The complete ``gfx_frame_pixels`` report (statistics, worst region and draw
     attribution) is retained under ``detail`` so the diagnostic does not
     duplicate the comparison engine or discard region evidence.
 
@@ -1063,8 +1021,8 @@ def final_comparison_report(frame_dir: Path, out_dir: Path,
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         return {"status": "invalid", "reason": f"comparison policy: {exc}"}
     try:
-        report = m6_compare.compare(Path(frame_dir), Path(out_dir), policy)
-    except (m6_compare.CompareError, OSError, ValueError) as exc:
+        report = gfx_frame_pixels.compare(Path(frame_dir), Path(out_dir), policy)
+    except (gfx_frame_pixels.CompareError, OSError, ValueError) as exc:
         return {"status": "invalid", "reason": str(exc)}
     statistics = report.get("statistics") or {}
     status, exact, exact_reason = _exact_report_status(report)
@@ -1090,56 +1048,6 @@ def final_comparison_report(frame_dir: Path, out_dir: Path,
         "detail": report,
     }
     return value
-
-
-def final_comparison(frame_dir: Path, out_dir: Path,
-                     policy_path: Path | str | None = None) -> dict:
-    """Backward-compatible exact final comparison.
-
-    The shared engine is used when the replay result is available; the direct
-    BGRA path remains as the offline fallback for synthetic result directories
-    that do not contain ``replay.json``.
-    """
-    report = final_comparison_report(frame_dir, out_dir, policy_path)
-    if report.get("status") in ("match", "divergent"):
-        return report
-    manifest = json.loads((frame_dir / "frame-trace.json").read_text())
-    frame = manifest.get("frame") or {}
-    width = int(frame.get("width") or 0)
-    height = int(frame.get("height") or 0)
-    reference = frame_dir / str(frame.get("reference") or "")
-    candidate = out_dir / "metal-frame.bgra"
-    if not candidate.is_file():
-        return {"status": "invalid", "reason": "Metal final readback is absent"}
-    statistics = m6_compare.compare_images(
-        reference.read_bytes(), candidate.read_bytes(), width, height)
-    exact, exact_reason = exact_comparison_statistics(statistics, width, height)
-    if exact is None:
-        return {"status": "invalid", "reason": exact_reason}
-    policy = json.loads(Path(policy_path or DEFAULT_POLICY).read_text())
-    thresholds = policy.get("thresholds") or {}
-    max_channel = int(thresholds.get("max_channel_error", 0))
-    max_fraction = float(thresholds.get("mismatched_fraction", 0.0))
-    max_mean = float(thresholds.get("mean_abs_error", 0.0))
-    mean_total = sum(float(value) for value in statistics["mean_abs_error"])
-    policy_pass = (
-        statistics["max_channel_error"] <= max_channel
-        and statistics["mismatched_fraction"] <= max_fraction
-        and mean_total <= max_mean
-    )
-    return {
-        "status": "match" if exact else "divergent",
-        "exact": exact,
-        "policy_status": "pass" if policy_pass else "fail",
-        "policy_pass": policy_pass,
-        "width": width,
-        "height": height,
-        "reference_sha256": _sha(reference),
-        "candidate_sha256": _sha(candidate),
-        "statistics": {key: statistics[key] for key in _FINAL_STATISTICS},
-        "worst_regions": statistics["regions"][:4],
-        "policy": str(policy_path or DEFAULT_POLICY),
-    }
 
 
 def _event_index(row: dict) -> int:
@@ -1926,8 +1834,8 @@ def state_coverage(frame_dir: Path, *, trace: dict | None = None,
     """
     try:
         if trace is None:
-            trace = m6_frame.load_trace(Path(frame_dir))
-    except m6_frame.FrameError as exc:
+            trace = gfx_frame.load_trace(Path(frame_dir))
+    except gfx_frame.FrameError as exc:
         return {
             "schema": "gfx-state-coverage/v1",
             "status": "invalid",
@@ -2813,8 +2721,8 @@ def _load_reference(frame_dir: Path, trace: dict | None = None
         raise ReplayError("invalid_provenance", str(exc)) from exc
     if trace is None:
         try:
-            trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
-        except m6_frame.FrameError as exc:
+            trace = gfx_frame.load_trace(frame_dir, verify_blobs=True)
+        except gfx_frame.FrameError as exc:
             kind = ("invalid_provenance" if trusted is not None
                     or _capture_error_class(str(exc)) == "invalid"
                     else "incomplete_capture")
@@ -2823,9 +2731,9 @@ def _load_reference(frame_dir: Path, trace: dict | None = None
     seal_path = frame_dir / "frame-seal.json"
     if trusted is not None or seal_path.exists() or seal_path.is_symlink():
         try:
-            seal = m6_frame.load_seal(frame_dir, trace=trace,
+            seal = gfx_frame.load_seal(frame_dir, trace=trace,
                                       trusted_evidence=trusted)
-        except m6_frame.FrameError as exc:
+        except gfx_frame.FrameError as exc:
             raise ReplayError("invalid_provenance", f"frame seal: {exc}") from exc
     return trace, seal, trusted
 
@@ -4125,9 +4033,9 @@ def replay_recipe(*, env: dict | None = None,
                        "artifact_count": 0}
     if shaders is not None:
         try:
-            shader_identity = m6_frame.shader_receipt_identity(
+            shader_identity = gfx_frame.shader_receipt_identity(
                 Path(shaders), required=False)
-        except (OSError, m6_frame.FrameError):
+        except (OSError, gfx_frame.FrameError):
             shader_identity = {"shaders_json_sha256": "", "artifacts_sha256": "",
                                "artifact_count": 0}
     # ``analyse_frame`` consumes DEFAULT_POLICY when no explicit policy is
@@ -4303,19 +4211,16 @@ def _replay_locked(
     check is repeated after the host-wide GPU lock is acquired: a stop or an
     expired deadline while this execution waited must not start a replay.
     """
-    from automation import campaign_guard, launch_lease
+    from automation import campaign_guard
 
     frame_dir = Path(frame_dir).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
-    with launch_lease.gpu_execution():
-        try:
-            campaign_guard.require_active_from_env()
-        except campaign_guard.CampaignRefusal as exc:
-            raise ReplayError("campaign_refused",
-                              f"{exc.kind}: {exc.detail}") from exc
-        return _replay_locked_serialized(
-            frame_dir, out_dir, shaders, faults=faults, policy=policy,
-            timeout=timeout)
+    try:
+        with gfx_frame.frame_execution_lease():
+            return _replay_locked_serialized(
+                frame_dir, out_dir, shaders, faults=faults, policy=policy, timeout=timeout)
+    except campaign_guard.CampaignRefusal as exc:
+        raise ReplayError("campaign_refused", f"{exc.kind}: {exc.detail}") from exc
 
 
 def _replay_locked_serialized(
@@ -4356,17 +4261,15 @@ def _replay_locked_serialized(
     out_dir = prepare_replay_output(out_dir, [frame_dir, shader_dir])
     request = gfx_frame_graph.write_checkpoint_request(
         graph, out_dir / "checkpoint-request.json")
-    host = m6_frame.build_replay_host()
+    host = gfx_frame.build_replay_host()
     result_path = out_dir / "replay.json"
     receipt_error: str | None = None
     try:
-        with m6_frame.replay_host_snapshot(host) as (snapshot, producer):
-            command = m6_frame.replay_host_command(
+        with gfx_frame.replay_host_snapshot(host) as (snapshot, producer):
+            ran, command, _ = gfx_frame.execute_frame(
                 snapshot, frame=frame_dir, shaders=shader_dir, out=out_dir,
-                checkpoints=out_dir / "checkpoint-request.json")
-            ran = subprocess.run(
-                command, capture_output=True, text=True, check=False, env=env,
-                timeout=timeout)
+                checkpoints=out_dir / "checkpoint-request.json", env=env, timeout=timeout,
+                locked=True)
             if result_path.is_file():
                 try:
                     write_producer_receipt(
@@ -4375,7 +4278,7 @@ def _replay_locked_serialized(
                         env=env, ambient=ambient)
                 except ReplayError as exc:
                     receipt_error = f"{exc.kind}: {exc.detail or exc}"
-    except m6_frame.FrameError as exc:
+    except gfx_frame.FrameError as exc:
         raise ReplayError("producer_identity", str(exc)) from exc
     diagnosis = analyse_frame(
         frame_dir, out_dir, policy, trace=trace, seal=seal, graph=graph,

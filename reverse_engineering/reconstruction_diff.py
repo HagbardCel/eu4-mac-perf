@@ -686,14 +686,47 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, reference_identi
     harness_sources = tuple((FUNCTION_DIR / "reconstruction" / name).relative_to(repo).as_posix()
                             for name in ("harness.cpp", "arith_literals.cpp"))
     candidate_snapshot.stage_trusted_sources(repo, candidate, harness_sources, closure)
+    flags = ("-std=c++20", "-O0", "-Wall", "-Wextra", "-Werror",
+             "-fsanitize=undefined", "-fno-sanitize-recover=all")
+    resource_dir = Path(subprocess.check_output(
+        [str(compiler), "-print-resource-dir"], text=True, timeout=30).strip())
+    runtime = (resource_dir / "lib/darwin/libclang_rt.ubsan_osx_dynamic.dylib").resolve(strict=True)
+    binding = {
+        "recipe": {**native_build.qualification_recipe(compiler, sdk, flags),
+                   "sanitizer_sha256": sha256_file(runtime)},
+        "environment": {"macos": platform.mac_ver()[0], "os_build": platform.version()},
+        "reference": references,
+        "validation_contract": {name: sha256_file(repo / name) for name in (
+            "automation/qualification_sandbox.py", "automation/native_build.py",
+            "automation/dsh_receipts.py", "automation/candidate_snapshot.py",
+            "reverse_engineering/reconstruction_diff.py",
+            "reverse_engineering/reconstruction_pilot.py",
+            "reverse_engineering/macho_rva.py", "reverse_engineering/paths.py",
+            "reverse_engineering/target.json")},
+    }
+    architecture = platform.machine()
+    if (previous is not None and public_key is not None
+            and (reused := dsh_receipts.applicable_execution(previous, binding, public_key)) is not None):
+        producer = reused.get("candidate") or {}
+        if (producer.get("source_digests") == closure and producer.get("architecture") == architecture
+                and any(item["file"] == "build/function-oracle"
+                        and item["sha256"] == producer.get("executable_sha256")
+                        for item in reused["outputs"])):
+            return {
+                **{key: reused[key] for key in ("verdict", "evidence_tier", "scope", "coverage",
+                                               "outputs", "candidate", "execution",
+                                               "independently_verified", "execution_revision", "problems")},
+                **binding, "reused_execution_receipt": str(previous),
+                "reused_receipt_digest": reused["receipt_digest"],
+            }
+
     build = directory / "build"
     build.mkdir()
     executable = build / "function-oracle"
-    flags = ("-std=c++20", "-O0", "-Wall", "-Wextra", "-Werror",
-             "-fsanitize=undefined", "-fno-sanitize-recover=all")
+    source_root = Path("..") / candidate.name
+    source_args = [source_root / name for name in (sources[0], *harness_sources)]
     linked = native_build.qualification_compile(
-        compiler, sdk, [*flags, "-I", (candidate / sources[0]).parent, candidate / sources[0],
-                        *(candidate / item for item in harness_sources), "-o", executable],
+        compiler, sdk, [*flags, "-I", source_args[0].parent, *source_args, "-o", executable],
         build=build, readable=(candidate,))
     if linked.returncode:
         return {"verdict": "execution_failure",
@@ -702,9 +735,6 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, reference_identi
 
     execution = directory / "worker"
     execution.mkdir()
-    resource_dir = Path(subprocess.check_output(
-        [str(compiler), "-print-resource-dir"], text=True, timeout=30).strip())
-    runtime = (resource_dir / "lib/darwin/libclang_rt.ubsan_osx_dynamic.dylib").resolve(strict=True)
     run = functools.partial(qualification_sandbox.run, writable=execution, readable=(runtime,))
     observations = directory / "observations.jsonl"
     actual = []
@@ -719,31 +749,6 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, reference_identi
         return completed
 
     executable_digest = sha256_file(executable)
-    binding = {
-        "candidate": {"source_digests": closure, "executable_sha256": executable_digest,
-                      "architecture": platform.machine()},
-        "recipe": {**native_build.qualification_recipe(compiler, sdk, flags),
-                   "sanitizer_sha256": sha256_file(runtime)},
-        "environment": {"macos": platform.mac_ver()[0], "os_build": platform.version()},
-        "reference": references,
-        "validation_contract": {name: sha256_file(repo / name) for name in (
-            "automation/qualification_sandbox.py", "automation/native_build.py",
-            "automation/dsh_receipts.py", "automation/candidate_snapshot.py",
-            "reverse_engineering/reconstruction_diff.py",
-            "reverse_engineering/reconstruction_pilot.py",
-            "reverse_engineering/macho_rva.py", "reverse_engineering/paths.py",
-            "reverse_engineering/target.json")},
-    }
-    if (previous is not None and public_key is not None
-            and (reused := dsh_receipts.applicable_execution(previous, binding, public_key)) is not None):
-        return {
-            **{key: reused[key] for key in ("verdict", "evidence_tier", "scope",
-                                           "coverage", "outputs", "execution",
-                                           "independently_verified", "execution_revision",
-                                           "problems") if key in reused},
-            **binding, "reused_execution_receipt": str(previous),
-            "reused_receipt_digest": reused["receipt_digest"],
-        }
     failures = compare_corpus(executable, corpus, reference, runner=observe)
     observations.write_text("".join(json.dumps(row) + "\n" for row in actual))
     if sha256_file(executable) != executable_digest:
@@ -754,8 +759,9 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, reference_identi
         "execution": "completed",
         "independently_verified": True,
         "coverage": [row["id"] for row in corpus["scenarios"]],
-        "outputs": [{"file": observations.name, "bytes": observations.stat().st_size,
-                     "sha256": sha256_file(observations)}],
+        "candidate": {"source_digests": closure, "executable_sha256": executable_digest,
+                      "architecture": architecture},
+        "outputs": dsh_receipts.artifact_records(directory, ("observations.jsonl", "build/function-oracle")),
         "scope": {"function": "_GfxSetConstantBuffer", "cases": len(corpus["scenarios"]),
                   "memory_window": common_window(corpus), "return_register": "RAX"},
         **binding,

@@ -23,7 +23,7 @@ BENCH = ROOT / "benchmark"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import m6_compare, m6_frame, native_build  # noqa: E402
+from automation import gfx_frame_pixels, gfx_frame, native_build  # noqa: E402
 
 CORE = ROOT / "renderer/metal" / "eu4_gfx_frame_replay.mm"
 CLI = ROOT / "renderer/metal" / "eu4_gfx_frame_replay_cli.mm"
@@ -474,7 +474,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
             run = Path(temporary) / "run"
             missing = subprocess.run(
                 [
-                    sys.executable, "-m", "automation.m6_frame",
+                    sys.executable, "-m", "automation.gfx_frame",
                     "shadow-coordinator", "--run", str(run),
                     "--timeout", "2", "--seal-timeout", "0.5",
                 ],
@@ -488,7 +488,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
             (stale_run / "shadow" / "shaders" / "ready").write_text("stale")
             stale = subprocess.run(
                 [
-                    sys.executable, "-m", "automation.m6_frame",
+                    sys.executable, "-m", "automation.gfx_frame",
                     "shadow-coordinator", "--run", str(stale_run),
                     "--timeout", "5", "--seal-timeout", "2",
                 ],
@@ -859,18 +859,18 @@ class MetalReplayLibraryTests(unittest.TestCase):
         # The same helper feeds capture-report.json, so the final capture
         # summary cannot replace the native failure with a generic one.
         capture_summary: dict = {}
-        detail = m6_frame.apply_shadow_report(capture_summary, report)
+        detail = gfx_frame.apply_shadow_report(capture_summary, report)
         self.assertEqual(detail, native_error)
         self.assertEqual(capture_summary["shadow_stage"], native_stage)
         self.assertEqual(capture_summary["shadow_failure"], native_failure)
         self.assertEqual(capture_summary["diagnostic"]["metal"], "failed")
-        self.assertEqual(m6_frame.shadow_failure_detail(report), native_error)
+        self.assertEqual(gfx_frame.shadow_failure_detail(report), native_error)
         legacy_report = {
             "error": "in-process shadow failed",
             "stage": "metal_replay",
             "metal": {"stage": native_stage, "error": native_error},
         }
-        self.assertEqual(m6_frame.shadow_failure_detail(legacy_report),
+        self.assertEqual(gfx_frame.shadow_failure_detail(legacy_report),
                          native_error)
 
         # Success must not synthesize a failure diagnostic in the summary.
@@ -886,7 +886,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
         }
         success_summary: dict = {}
         self.assertIsNone(
-            m6_frame.apply_shadow_report(success_summary, success_report)
+            gfx_frame.apply_shadow_report(success_summary, success_report)
         )
         self.assertEqual(success_summary["shadow_stage"], "complete")
         self.assertNotIn("shadow_failure", success_summary)
@@ -941,9 +941,9 @@ class MetalReplayLibraryTests(unittest.TestCase):
                     compare_timeout=5.0,
                     policy=None,
                 )
-                with mock.patch.object(m6_frame.subprocess, "run",
+                with mock.patch.object(gfx_frame.subprocess, "run",
                                        side_effect=fake_run):
-                    status = m6_frame.shadow_coordinator(args)
+                    status = gfx_frame.shadow_coordinator(args)
                 coordinator = json.loads(
                     (shadow / "coordinator.json").read_text()
                 )
@@ -1027,7 +1027,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
                 }
 
             timeout_summary: dict = {}
-            timeout_detail = m6_frame.apply_shadow_report(
+            timeout_detail = gfx_frame.apply_shadow_report(
                 timeout_summary, timeout_report_for({
                     "capture_frame_id": 1,
                     "pid": 2,
@@ -1208,8 +1208,8 @@ class MetalReplayLibraryTests(unittest.TestCase):
                 continuous=False,
             )
             with mock.patch.object(
-                    m6_frame.subprocess, "run", side_effect=fake_run):
-                status = m6_frame.shadow_coordinator(args)
+                    gfx_frame.subprocess, "run", side_effect=fake_run):
+                status = gfx_frame.shadow_coordinator(args)
             self.assertEqual(status, 1)
             coordinator = json.loads(
                 (shadow / "coordinator.json").read_text())
@@ -1327,7 +1327,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
             policy = json.loads(
                 (ROOT / "analysis" / "m6" / "comparison-policy.json").read_text()
             )
-            compared = m6_compare.compare(reference, candidate, policy)
+            compared = gfx_frame_pixels.compare(reference, candidate, policy)
             self.assertEqual(compared["status"], "fail")
             self.assertEqual(compared["statistics"]["pixels"], 1930176)
             self.assertEqual(compared["statistics"]["mismatched_pixels"], 1792005)

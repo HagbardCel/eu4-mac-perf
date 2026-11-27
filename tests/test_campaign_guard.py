@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from automation import (campaign_guard, gfx_independent_replay,  # noqa: E402
-                        launch_lease, m6_frame)
+                        launch_lease, gfx_frame)
 
 AUTONOMOUS = campaign_guard.MODE_AUTONOMOUS
 CONTROLLED = campaign_guard.MODE_CONTROLLED
@@ -621,7 +621,7 @@ class ActionSiteTests(GuardTestCase):
         frame = self.root / "frame"
         frame.mkdir()
         out = self.root / "out"
-        args = m6_frame._parser().parse_args([
+        args = gfx_frame._parser().parse_args([
             "replay", "--frame", str(frame), "--out", str(out)])
         guard = self.guard
 
@@ -633,12 +633,12 @@ class ActionSiteTests(GuardTestCase):
 
         with mock.patch.dict(os.environ,
                              {"EU4_CAMPAIGN_STATE": str(self.path)}), \
-             mock.patch.object(m6_frame, "build_replay_host",
+             mock.patch.object(gfx_frame, "build_replay_host",
                                return_value=self.root / "host"), \
              mock.patch.object(launch_lease, "gpu_execution", lock), \
-             mock.patch.object(m6_frame.subprocess, "run",
+             mock.patch.object(gfx_frame.subprocess, "run",
                                side_effect=AssertionError("must not execute")):
-            self.assertEqual(m6_frame._replay_command_body(args), 3)
+            self.assertEqual(gfx_frame._replay_command_body(args), 3)
 
     def test_a_stopped_campaign_refuses_a_replay(self):
         self.init(mode=AUTONOMOUS)
@@ -653,7 +653,7 @@ class ActionSiteTests(GuardTestCase):
 
     def test_autonomous_capture_refuses_before_spawning_any_child(self):
         self.init(mode=AUTONOMOUS)
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", str(self.root / "capture"), "--shadow"])
         fake_startup = types.SimpleNamespace(
             StartupError=RuntimeError,
@@ -665,9 +665,9 @@ class ActionSiteTests(GuardTestCase):
              mock.patch.dict(sys.modules,
                              {"eu4_gfx_startup_trace": fake_startup}), \
              mock.patch.object(
-                 m6_frame.subprocess, "Popen",
+                 gfx_frame.subprocess, "Popen",
                  side_effect=AssertionError("coordinator must not spawn")):
-            status = m6_frame.capture(args)
+            status = gfx_frame.capture(args)
         self.assertEqual(status, 3)
         self.assertFalse((self.root / "capture").exists())
         self.assertEqual(self.guard.state()["launch_authorizations"], {})
@@ -676,7 +676,7 @@ class ActionSiteTests(GuardTestCase):
         self.init(mode=CONTROLLED)
         self.authorize()
         self.guard.stop("operator_stop", "operator cancelled")
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", str(self.root / "capture")])
         fake_startup = types.SimpleNamespace(
             StartupError=RuntimeError,
@@ -688,11 +688,11 @@ class ActionSiteTests(GuardTestCase):
                              {"EU4_CAMPAIGN_STATE": str(self.path)}), \
              mock.patch.dict(sys.modules,
                              {"eu4_gfx_startup_trace": fake_startup}):
-            self.assertEqual(m6_frame.capture(args), 3)
+            self.assertEqual(gfx_frame.capture(args), 3)
 
     def test_controlled_capture_cannot_mint_its_own_authorization(self):
         self.init(mode=CONTROLLED)
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", str(self.root / "capture"), "--shadow"])
         fake_startup = types.SimpleNamespace(
             StartupError=RuntimeError,
@@ -705,16 +705,16 @@ class ActionSiteTests(GuardTestCase):
              mock.patch.dict(sys.modules,
                              {"eu4_gfx_startup_trace": fake_startup}), \
              mock.patch.object(
-                 m6_frame.subprocess, "Popen",
+                 gfx_frame.subprocess, "Popen",
                  side_effect=AssertionError("coordinator must not spawn")):
-            status = m6_frame.capture(args)
+            status = gfx_frame.capture(args)
         self.assertEqual(status, 3)
         self.assertEqual(self.guard.state()["launch_authorizations"], {})
 
     def test_controlled_capture_runs_with_an_operator_authorization(self):
         self.init(mode=CONTROLLED)
         authorization = self.authorize()
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", str(self.root / "capture")])
 
         def no_launch(*_a, **_k):
@@ -728,7 +728,7 @@ class ActionSiteTests(GuardTestCase):
                 "EU4_CAMPAIGN_AUTHORIZATION": authorization}), \
              mock.patch.dict(sys.modules,
                              {"eu4_gfx_startup_trace": fake_startup}):
-            status = m6_frame.capture(args)
+            status = gfx_frame.capture(args)
         self.assertEqual(status, 4)
         record = self.guard.state()["launch_authorizations"][authorization]
         self.assertEqual(record["state"], "failed")
@@ -736,24 +736,24 @@ class ActionSiteTests(GuardTestCase):
     def test_direct_replay_respects_a_campaign_stop(self):
         self.init(mode=AUTONOMOUS)
         self.guard.stop("operator_stop", "operator cancelled")
-        args = m6_frame._parser().parse_args([
+        args = gfx_frame._parser().parse_args([
             "replay", "--frame", str(self.root / "frame"),
             "--out", str(self.root / "out"),
             "--rationale", json.dumps(RATIONALE)])
         with mock.patch.dict(os.environ,
                              {"EU4_CAMPAIGN_STATE": str(self.path)}), \
-             mock.patch.object(m6_frame, "_replay_command_body",
+             mock.patch.object(gfx_frame, "_replay_command_body",
                                side_effect=AssertionError("must not run")):
-            self.assertEqual(m6_frame.replay_command(args), 3)
+            self.assertEqual(gfx_frame.replay_command(args), 3)
 
     def test_direct_replay_requires_a_rationale(self):
         self.markers.mkdir(parents=True, exist_ok=True)
-        args = m6_frame._parser().parse_args([
+        args = gfx_frame._parser().parse_args([
             "replay", "--frame", str(self.root / "frame"),
             "--out", str(self.root / "out")])
-        with mock.patch.object(m6_frame, "_replay_command_body",
+        with mock.patch.object(gfx_frame, "_replay_command_body",
                                side_effect=AssertionError("must not run")):
-            self.assertEqual(m6_frame.replay_command(args), 3)
+            self.assertEqual(gfx_frame.replay_command(args), 3)
 
     def run_ops(self, name: str, popen, *, authorization):
         import eu4_gfx_startup_trace as startup

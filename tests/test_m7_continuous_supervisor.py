@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import (gfx_independent_replay, gfx_replay_case, m6_frame,
+from automation import (gfx_independent_replay, gfx_replay_case, gfx_frame,
                         m7_continuous)  # noqa: E402
 
 
@@ -186,7 +186,7 @@ class SupervisorTests(unittest.TestCase):
             def kill(self):
                 self.returncode = 0
 
-        with mock.patch.object(m7_continuous.m6_frame,
+        with mock.patch.object(m7_continuous.gfx_frame,
                                "build_replay_host",
                                return_value=Path("/bin/true")), \
              mock.patch.object(m7_continuous.subprocess, "Popen",
@@ -238,7 +238,7 @@ class SupervisorTests(unittest.TestCase):
             captured.extend(command)
             return FakeProcess()
 
-        with mock.patch.object(m7_continuous.m6_frame,
+        with mock.patch.object(m7_continuous.gfx_frame,
                                "build_replay_host",
                                return_value=Path("/bin/true")), \
              mock.patch.object(m7_continuous.subprocess, "Popen",
@@ -319,7 +319,7 @@ class SupervisorTests(unittest.TestCase):
              "pixels": {"statistics": {}},
              "checkpoint_validation": {"status": "ok"}},
         ])
-        with mock.patch.object(m7_continuous.m6_frame,
+        with mock.patch.object(m7_continuous.gfx_frame,
                                "build_replay_host",
                                return_value=Path("/bin/true")), \
              mock.patch.object(m7_continuous.subprocess, "Popen",
@@ -560,7 +560,7 @@ class SupervisorTests(unittest.TestCase):
                     "pixels": {"statistics": {}},
                     "checkpoint_validation": {"status": "ok"}}
 
-        with mock.patch.object(m7_continuous.m6_frame, "build_replay_host",
+        with mock.patch.object(m7_continuous.gfx_frame, "build_replay_host",
                                return_value=Path("/bin/true")), \
              mock.patch.object(m7_continuous.subprocess, "Popen",
                                return_value=FakeProcess()), \
@@ -714,7 +714,7 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
         with mock.patch.object(gfx_replay_case,
                                "package_sequence_diagnosis",
                                side_effect=package):
-            value = m6_frame._package_continuous_case(
+            value = gfx_frame._package_continuous_case(
                 self.run, self.shadow, 3, self.args)
         self.assertEqual(value["status"], "complete")
         self.assertEqual(len(captured["frames"]), 3)
@@ -744,7 +744,7 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
         with mock.patch.object(gfx_replay_case,
                                "package_sequence_diagnosis",
                                side_effect=package):
-            value = m6_frame._package_continuous_case(
+            value = gfx_frame._package_continuous_case(
                 self.run, self.shadow, 3, self.args,
                 scope="completed_prefix",
                 terminal_failure={"kind": "gpu_execution_failure",
@@ -758,19 +758,19 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
                          "gpu_execution_failure")
 
     def test_continuation_predicate_excludes_terminal_and_ineligible(self):
-        self.assertFalse(m6_frame._continuous_should_continue(
+        self.assertFalse(gfx_frame._continuous_should_continue(
             "invalid_provenance", 1, True))
-        self.assertFalse(m6_frame._continuous_should_continue(
+        self.assertFalse(gfx_frame._continuous_should_continue(
             "incomplete_diagnostics", 1, True))
-        self.assertFalse(m6_frame._continuous_should_continue(
+        self.assertFalse(gfx_frame._continuous_should_continue(
             "qualified_difference", 0, True))
-        self.assertFalse(m6_frame._continuous_should_continue(
+        self.assertFalse(gfx_frame._continuous_should_continue(
             "unsupported_state", 1, True))
-        self.assertTrue(m6_frame._continuous_should_continue(
+        self.assertTrue(gfx_frame._continuous_should_continue(
             "qualified_difference", 1, True))
-        self.assertFalse(m6_frame._continuous_should_continue(
+        self.assertFalse(gfx_frame._continuous_should_continue(
             "qualified_difference", 1, False))
-        self.assertTrue(m6_frame._continuous_should_continue(
+        self.assertTrue(gfx_frame._continuous_should_continue(
             "qualified_match", 1, False))
 
     def test_complete_v1_single_frame_package_is_not_mislabelled(self):
@@ -788,7 +788,7 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
         with mock.patch.object(gfx_replay_case,
                                "package_sequence_diagnosis",
                                side_effect=package):
-            value = m6_frame._package_continuous_case(
+            value = gfx_frame._package_continuous_case(
                 self.run, self.shadow, 3, self.args,
                 scope="target_frame")
         self.assertEqual(value["status"], "complete")
@@ -806,7 +806,7 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
                         "reason": "artifact_budget",
                     },
                 }):
-            value = m6_frame._package_continuous_case(
+            value = gfx_frame._package_continuous_case(
                 self.run, self.shadow, 3, self.args)
         self.assertEqual(value["status"], "incomplete")
         self.assertFalse(value["reproduction"]["independently_reproducible"])
@@ -816,7 +816,7 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
                 gfx_replay_case, "package_sequence_diagnosis",
                 side_effect=gfx_replay_case.CaseError(
                     "missing_predecessor", "no producer")):
-            value = m6_frame._package_continuous_case(
+            value = gfx_frame._package_continuous_case(
                 self.run, self.shadow, 3, self.args)
         self.assertEqual(value["status"], "failed")
         self.assertIn("missing_predecessor", value["reason"])
@@ -846,11 +846,11 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
             return {"status": "incomplete", "scope": kwargs.get("scope"),
                     "reproduction": {"independently_reproducible": False}}
 
-        with mock.patch.object(m6_frame, "_continuous_frame_coordinator",
+        with mock.patch.object(gfx_frame, "_continuous_frame_coordinator",
                                side_effect=coordinator), \
-             mock.patch.object(m6_frame, "_package_continuous_case",
+             mock.patch.object(gfx_frame, "_package_continuous_case",
                                side_effect=package):
-            code = m6_frame.shadow_coordinator_continuous(args)
+            code = gfx_frame.shadow_coordinator_continuous(args)
         self.assertEqual(code, 1)
         report = json.loads((self.shadow / "coordinator.json").read_text())
         self.assertEqual(report["status"], "failed")
@@ -877,15 +877,15 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
         def coordinator(run, shadow, frame_index, args, deadline):
             return summaries[frame_index - 1], {"classification": "x"}
 
-        with mock.patch.object(m6_frame, "_continuous_frame_coordinator",
+        with mock.patch.object(gfx_frame, "_continuous_frame_coordinator",
                                side_effect=coordinator), \
              mock.patch.object(
-                m6_frame, "_package_continuous_case",
+                gfx_frame, "_package_continuous_case",
                 return_value={"status": "complete",
                               "scope": "completed_sequence",
                               "reproduction": {
                                   "independently_reproducible": True}}):
-            code = m6_frame.shadow_coordinator_continuous(args)
+            code = gfx_frame.shadow_coordinator_continuous(args)
         self.assertEqual(code, 0)
         report = json.loads((self.shadow / "coordinator.json").read_text())
         self.assertEqual(report["status"], "ok")
@@ -904,7 +904,7 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
             }],
         }
         result = {}
-        failure = m6_frame.apply_shadow_report(result, report)
+        failure = gfx_frame.apply_shadow_report(result, report)
         self.assertIn("frame 2 preparation failed", failure)
         self.assertEqual(result["campaign_execution"], "failed")
         self.assertEqual(result["classification"], "tool_failure")
@@ -922,7 +922,7 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
             }],
         }
         result = {}
-        self.assertIsNone(m6_frame.apply_shadow_report(result, report))
+        self.assertIsNone(gfx_frame.apply_shadow_report(result, report))
         self.assertEqual(result["campaign_execution"], "ok")
         self.assertTrue(result["qualified"])
         self.assertTrue(result["diagnostic_complete"])
@@ -948,11 +948,11 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
             return {"status": "complete", "scope": kwargs.get("scope"),
                     "reproduction": {"independently_reproducible": True}}
 
-        with mock.patch.object(m6_frame, "_continuous_frame_coordinator",
+        with mock.patch.object(gfx_frame, "_continuous_frame_coordinator",
                                side_effect=coordinator), \
-             mock.patch.object(m6_frame, "_package_continuous_case",
+             mock.patch.object(gfx_frame, "_package_continuous_case",
                                side_effect=package):
-            code = m6_frame.shadow_coordinator_continuous(args)
+            code = gfx_frame.shadow_coordinator_continuous(args)
         self.assertEqual(code, 0)
         self.assertEqual(packaged, [2])
         report = json.loads(

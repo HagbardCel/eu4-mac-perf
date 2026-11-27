@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 from automation import (
-    gfx_frame_compare, gfx_frame_graph, gfx_independent_replay, m6_compare, m6_frame)
+    gfx_frame_compare, gfx_frame_graph, gfx_independent_replay, gfx_frame_pixels, gfx_frame)
 from automation.gfx_artifacts import sha256_bytes, sha256_file as _sha
 
 SCHEMA = "gfx-strategy-b-case/v1"
@@ -850,11 +850,11 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
                 height = int(final.get("height") or (report.get("frame") or {}).get("height") or 0)
                 if width > 0 and height > 0:
                     (work / "difference").mkdir()
-                    difference = m6_compare.write_difference(
+                    difference = gfx_frame_pixels.write_difference(
                         work / "capture", work / "replay", width, height,
                         work / "difference")
                     difference["sha256"] = _sha(work / "difference" / difference["raw_file"])
-            except (OSError, ValueError, m6_compare.CompareError):
+            except (OSError, ValueError, gfx_frame_pixels.CompareError):
                 difference = None
         manifest = _diagnosis_manifest(SCHEMA, case_id, title, report)
         manifest.update({
@@ -1016,7 +1016,7 @@ def _required_prefix(frames: list[Path]) -> tuple[list[Path], dict]:
             "carried_resources": [],
         }
     for frame in frames:
-        trace = m6_frame.load_trace(frame, verify_blobs=True)
+        trace = gfx_frame.load_trace(frame, verify_blobs=True)
         history = gfx_frame_graph.load_frame_history(frame, trace)
         if history.get("status") != "verified":
             reasons = history.get("reasons") or ["invalid"]
@@ -1188,7 +1188,7 @@ def _receipt_identity_problems(
             "sequence",
             f"receipt sequence {receipt_sequence!r} is not one of "
             f"{sorted(allowed_sequences)}"))
-    for field, value in m6_frame.shader_receipt_identity(shader_dir).items():
+    for field, value in gfx_frame.shader_receipt_identity(shader_dir).items():
         check(field, value)
     return problems
 
@@ -1296,8 +1296,8 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
         seal = None
         if (frame / "frame-seal.json").is_file():
             try:
-                seal = m6_frame.load_seal(frame)
-            except m6_frame.FrameError as exc:
+                seal = gfx_frame.load_seal(frame)
+            except gfx_frame.FrameError as exc:
                 raise CaseError("invalid_seal", f"{frame}: {exc}") from exc
         identity = {
             "capture_frame_id": sequence.get("capture_frame_id"),
@@ -1319,7 +1319,7 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
         receipt = {
             "schema": "m7-shadow-shader-receipt/v1",
             **identity,
-            **m6_frame.shader_receipt_identity(frame / "shaders"),
+            **gfx_frame.shader_receipt_identity(frame / "shaders"),
             "checkpoint_request_file": request_path.name,
             "checkpoint_request_sha256": request_sha,
             "checkpoint_count": len(request.get("checkpoints") or []),
@@ -1808,7 +1808,7 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
                         problems.append(
                             f"frame {index} predecessor {field} is reordered")
         try:
-            trace = m6_frame.load_trace(frame, verify_blobs=True)
+            trace = gfx_frame.load_trace(frame, verify_blobs=True)
             history = gfx_frame_graph.load_frame_history(frame, trace)
         except Exception as exc:  # noqa: BLE001 - explicit verification result
             problems.append(f"frame {index} history is unreadable: {exc}")
@@ -2837,7 +2837,7 @@ def main(argv: list[str] | None = None) -> int:
             }, indent=2))
             return gfx_independent_replay.qualification_exit_code(value)
     except (CaseError, gfx_independent_replay.ReplayError,
-            m6_frame.FrameError) as exc:
+            gfx_frame.FrameError) as exc:
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
     return 64

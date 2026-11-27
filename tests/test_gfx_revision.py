@@ -20,25 +20,25 @@ class ProtectedDiagnosticTests(unittest.TestCase):
     def test_existing_divergence_coverage_cannot_be_dropped(self):
         case = {"category": "diagnostic", "minimum_coverage": ["color/tex:433"],
                 "original_limitations": ["unobserved depth"]}
-        self.assertTrue(gfx_revision._passes(
+        self.assertTrue(dsh_receipts.case_satisfies(
             case, {"verdict": "different", "coverage": ["color/tex:433"],
                    "execution": "completed", "independently_verified": True}))
-        self.assertTrue(gfx_revision._passes(
+        self.assertTrue(dsh_receipts.case_satisfies(
             case, {"verdict": "exact", "coverage": ["color/tex:433"],
                    "execution": "completed", "independently_verified": True}))
         for verdict in ("unsupported", "execution_failure", "missing_original_observation"):
             with self.subTest(verdict=verdict):
-                self.assertFalse(gfx_revision._passes(
+                self.assertFalse(dsh_receipts.case_satisfies(
                     case, {"verdict": verdict, "original_evidence_verified": True,
                            "problems": ["unobserved depth"]}))
 
     def test_only_verified_original_limitations_are_eligible(self):
         case = {"category": "diagnostic", "original_limitations": ["lossy depth"]}
         result = {"verdict": "missing_original_observation", "problems": ["lossy depth"]}
-        self.assertFalse(gfx_revision._passes(case, result))
-        self.assertTrue(gfx_revision._passes(
+        self.assertFalse(dsh_receipts.case_satisfies(case, result))
+        self.assertTrue(dsh_receipts.case_satisfies(
             case, dict(result, original_evidence_verified=True)))
-        self.assertFalse(gfx_revision._passes(
+        self.assertFalse(dsh_receipts.case_satisfies(
             dict(case, category="exact"), dict(result, original_evidence_verified=True)))
 
     def test_mandatory_policy_rejects_lost_coverage_and_ignores_optional_cases(self):
@@ -93,11 +93,15 @@ class ProtectedDiagnosticTests(unittest.TestCase):
                 kwargs = {
                     "revision": "revision", "policy_sha256": "digest",
                     "policy_contract_sha256": sha256_file(contract),
-                    "required_cases": report["required_cases"], "run_root": root / "runs",
+                    "contract": json.loads(contract.read_text()), "run_root": root / "runs",
                 }
                 key = gfx_ed25519.derive_public_key(seed)
                 verified = dsh_receipts.verify_revision(path, key, **kwargs)
                 self.assertFalse(verified["qualified"])
+                dsh_receipts.write_receipt(path.parent, dict(verified, qualified=True), seed=seed)
+                with self.assertRaisesRegex(ValueError, "aggregate verdict"):
+                    dsh_receipts.verify_revision(path, key, **kwargs)
+                dsh_receipts.write_receipt(path.parent, verified, seed=seed)
                 receipt = Path(report["cases"][0]["receipt"])
                 original = dsh_receipts.read_json(receipt)
                 output = receipt.parent / "draw" / "attachment"
@@ -257,7 +261,7 @@ int main(int argc, char **argv) {
 
     @staticmethod
     def _seal_native_fixture(frame: Path, draw: dict, post: dict, gl: dict):
-        from automation import m6_frame
+        from automation import gfx_frame
 
         stream = frame / "frame-events.jsonl"
         stream.write_text(json.dumps(draw) + "\n")
@@ -267,7 +271,7 @@ int main(int argc, char **argv) {
         reference.write_bytes(bytes(4))
         manifest = frame / "frame-trace.json"
         manifest.write_text(json.dumps({
-            "schema": m6_frame.TRACE_SCHEMA, "complete": True, "events": 1, "test_only": True,
+            "schema": gfx_frame.TRACE_SCHEMA, "complete": True, "events": 1, "test_only": True,
             "process_architecture": "x86_64", "gl": gl,
             "frame": {"reference": reference.name, "reference_bytes": 4,
                       "reference_sha256": sha256_file(reference)},
@@ -279,8 +283,8 @@ int main(int argc, char **argv) {
                        "observation_bytes": observations.stat().st_size},
         }))
         (frame / "frame-seal.json").write_text(json.dumps({
-            "schema": m6_frame.SEAL_SCHEMA, "sealed": True, "complete": True,
-            "struct_size": 2256, "abi_version": m6_frame.SEAL_ABI_VERSION,
+            "schema": gfx_frame.SEAL_SCHEMA, "sealed": True, "complete": True,
+            "struct_size": 2256, "abi_version": gfx_frame.SEAL_ABI_VERSION,
             "capture_frame_id": 1, "session_id": "synthetic-rgba8", "pid": 1234,
             "operation_count": 1, "draw_count": 1, "clear_count": 0, "copy_count": 0,
             "capture_dir": str(frame), "width": 1, "height": 1, "pixel_format": "BGRA8",
@@ -291,8 +295,8 @@ int main(int argc, char **argv) {
             "reference_file": reference.name, "reference_bytes": 4,
             "reference_sha256": sha256_file(reference), "test_only": True,
         }))
-        trace = m6_frame.load_trace(frame)
-        return frame, trace, m6_frame.load_seal(frame, trace=trace), {}
+        trace = gfx_frame.load_trace(frame)
+        return frame, trace, gfx_frame.load_seal(frame, trace=trace), {}
 
     def test_offscreen_shape_runs_with_native_observations_and_sampled_texture(self):
         repo = gfx_revision.ROOT
@@ -397,17 +401,29 @@ int main(int argc, char **argv) {
             self.assertIn("Operation not permitted", denied.stderr)
             with self.assertRaises(subprocess.TimeoutExpired):
                 qualification_sandbox.run(["/bin/sleep", "5"], writable=job, timeout=0.01)
-            stage = root / "function"
-            stage.mkdir()
             commit = state.trusted_git(gfx_revision.ROOT, "rev-parse", "HEAD").strip()
-            reference = {
-                "corpus_sha256": reconstruction_diff.corpus_sha256(),
-                "reference_sha256": sha256_file(reconstruction_diff.FUNCTION_DIR /
-                                               "differential/reference.json"),
-            }
-            result = reconstruction_diff.qualify_candidate(gfx_revision.ROOT, commit, stage, reference)
-            self.assertEqual(result["verdict"], "exact", result)
-            self.assertEqual(result["scope"]["cases"], 414)
+            contract = json.loads(gfx_revision.POLICY_CONTRACT.read_text())
+            reference = contract["cases"]["constant-buffer"]["reference"]
+            signing_key = root / "key"
+            seed = bytes(range(32))
+            signing_key.write_text(seed.hex())
+            signing_key.chmod(0o600)
+            policy = {"run_root": str(root / "runs"),
+                      "trusted_revision": commit,
+                      "receipt_signing_key": str(signing_key),
+                      "receipt_public_key": gfx_ed25519.derive_public_key(seed).hex()}
+            workspace = root / "candidate"
+            workspace.mkdir()
+            with mock.patch.object(gfx_revision, "_policy", return_value=(policy, "digest")):
+                first = gfx_revision.qualify(workspace, commit, "constant-buffer")["cases"][0]
+                self.assertEqual(first["verdict"], "exact", first)
+                self.assertEqual(first["scope"]["cases"], 414)
+                relative = Path(first["receipt"]).relative_to(root / "runs").as_posix()
+                policy["evidence"] = {"constant-buffer": {"reuse_receipt": relative}}
+                reused = gfx_revision.qualify(workspace, commit, "constant-buffer")["cases"][0]
+                self.assertTrue(reused.get("execution_reused"), reused)
+                self.assertEqual(reused["receipt"], first["receipt"])
+                self.assertEqual(reused["execution_revision"], commit)
 
             populate = candidate_snapshot.materialize_commit
 
@@ -500,6 +516,6 @@ int main(int argc, char **argv) {
             frame, _, _, trusted = source
             result = gfx_prefix_check.qualify_candidate(
                 gfx_revision.ROOT, candidate, candidate, Path(scratch), frame, trusted, case)
-        self.assertTrue(gfx_revision._passes(case, result), result)
+        self.assertTrue(dsh_receipts.case_satisfies(case, result), result)
         self.assertIn(0, result["preserved_exact"])
         self.assertIn(1, result["coverage"])

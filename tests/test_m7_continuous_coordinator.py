@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_independent_replay, m6_frame  # noqa: E402
+from automation import gfx_independent_replay, gfx_frame  # noqa: E402
 from tests.test_m7_frame_seal import _write_frame  # noqa: E402
 
 
@@ -111,11 +111,11 @@ class ContinuousCoordinatorTests(unittest.TestCase):
 
         thread = threading.Thread(target=self.bridge)
         thread.start()
-        with mock.patch.object(m6_frame.subprocess, "run",
+        with mock.patch.object(gfx_frame.subprocess, "run",
                                side_effect=fake_translate), \
              mock.patch.object(gfx_independent_replay, "diagnose_frame",
                                side_effect=diagnoses) as diagnose:
-            status = m6_frame.shadow_coordinator(args)
+            status = gfx_frame.shadow_coordinator(args)
         thread.join(timeout=10)
         self.assertEqual(status, 0)
         self.assertEqual(diagnose.call_count, 2)
@@ -179,11 +179,11 @@ class ContinuousCoordinatorTests(unittest.TestCase):
 
         thread = threading.Thread(target=bridge_once)
         thread.start()
-        with mock.patch.object(m6_frame.subprocess, "run",
+        with mock.patch.object(gfx_frame.subprocess, "run",
                                side_effect=fake_translate), \
              mock.patch.object(gfx_independent_replay, "diagnose_frame",
                                return_value=diagnosis) as diagnose:
-            status = m6_frame.shadow_coordinator(args)
+            status = gfx_frame.shadow_coordinator(args)
         thread.join(timeout=10)
         self.assertEqual(status, 0)
         self.assertEqual(diagnose.call_count, 1)
@@ -210,10 +210,10 @@ class ContinuousCoordinatorTests(unittest.TestCase):
             replay_timeout=5.0, compare_timeout=5.0, policy=None,
             continuous=True, max_frames=1, continue_on_difference=False,
         )
-        with mock.patch.object(m6_frame.subprocess, "run",
+        with mock.patch.object(gfx_frame.subprocess, "run",
                                side_effect=fake_translate), \
              mock.patch.object(gfx_independent_replay, "diagnose_frame") as diagnose:
-            status = m6_frame.shadow_coordinator(args)
+            status = gfx_frame.shadow_coordinator(args)
         self.assertEqual(status, 1)
         diagnose.assert_not_called()
         report = json.loads((self.shadow / "coordinator.json").read_text())
@@ -275,10 +275,10 @@ class ContinuousCoordinatorTests(unittest.TestCase):
         )
         thread = threading.Thread(target=bridge_failed)
         thread.start()
-        with mock.patch.object(m6_frame.subprocess, "run",
+        with mock.patch.object(gfx_frame.subprocess, "run",
                                side_effect=fake_translate), \
              mock.patch.object(gfx_independent_replay, "diagnose_frame") as diagnose:
-            status = m6_frame.shadow_coordinator(args)
+            status = gfx_frame.shadow_coordinator(args)
         thread.join(timeout=10)
         self.assertEqual(status, 1)
         diagnose.assert_not_called()
@@ -296,10 +296,10 @@ class ContinuousCoordinatorTests(unittest.TestCase):
             replay_timeout=5.0, compare_timeout=5.0, policy=None,
             continuous=True, max_frames=2, continue_on_difference=False,
         )
-        with mock.patch.object(m6_frame.subprocess, "run",
+        with mock.patch.object(gfx_frame.subprocess, "run",
                                return_value=mock.Mock(returncode=1)), \
              mock.patch.object(gfx_independent_replay, "diagnose_frame") as diagnose:
-            status = m6_frame.shadow_coordinator(args)
+            status = gfx_frame.shadow_coordinator(args)
         self.assertEqual(status, 1)
         diagnose.assert_not_called()
         report = json.loads((self.shadow / "coordinator.json").read_text())

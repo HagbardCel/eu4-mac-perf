@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import m6_compare  # noqa: E402
+from automation import gfx_frame_pixels  # noqa: E402
 
 
 class PixelLocationTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class PixelLocationTests(unittest.TestCase):
         for x, y in ((5, 1), (2, 4)):
             offset = (y * width + x) * 4
             candidate[offset:offset + 4] = bytes((10, 20, 30, 255))
-        statistics = m6_compare.compare_images(
+        statistics = gfx_frame_pixels.compare_images(
             reference, bytes(candidate), width, height)
         self.assertEqual(statistics["mismatched_pixels"], 2)
         self.assertEqual(
@@ -33,7 +33,7 @@ class PixelLocationTests(unittest.TestCase):
 
     def test_matching_images_have_no_pixel_location(self):
         body = bytes(4) * 16
-        statistics = m6_compare.compare_images(body, body, 4, 4)
+        statistics = gfx_frame_pixels.compare_images(body, body, 4, 4)
         self.assertEqual(statistics["mismatched_pixels"], 0)
         self.assertIsNone(statistics["first_differing_pixel"])
         self.assertIsNone(statistics["differing_bounds"])
@@ -54,7 +54,7 @@ class PixelLocationTests(unittest.TestCase):
         candidate = bytearray(reference)
         offset = (y * width + x) * 4
         candidate[offset:offset + 4] = bytes((9, 8, 7, 0))
-        statistics = m6_compare.compare_images(
+        statistics = gfx_frame_pixels.compare_images(
             reference, bytes(candidate), width, height)
         # The exact global statistics are independent of localization.
         self.assertEqual(statistics["pixels"], width * height)
@@ -95,7 +95,7 @@ class PixelLocationTests(unittest.TestCase):
         for size in (1, 7, 9, 1117):
             covered = []
             for index in range(8):
-                start, span = m6_compare._grid_span(index, size, 8)
+                start, span = gfx_frame_pixels._grid_span(index, size, 8)
                 covered.extend(range(start, start + span))
             self.assertEqual(covered, list(range(size)),
                              f"size {size} is not partitioned by the grid")
@@ -124,10 +124,10 @@ class PixelLocationTests(unittest.TestCase):
                 self.assertEqual(region["row"], y * 8 // height)
                 self.assertEqual(
                     (region["x"], region["width"]),
-                    m6_compare._grid_span(region["column"], width, 8))
+                    gfx_frame_pixels._grid_span(region["column"], width, 8))
                 self.assertEqual(
                     (region["y"], region["height"]),
-                    m6_compare._grid_span(region["row"], height, 8))
+                    gfx_frame_pixels._grid_span(region["row"], height, 8))
                 # Bin membership is monotonic, so the rectangle's centre also
                 # belongs to it; an off-by-one span would move the centre.
                 centre_x = region["x"] + region["width"] // 2
@@ -138,7 +138,7 @@ class PixelLocationTests(unittest.TestCase):
     def test_one_pixel_frame_has_one_exact_region(self):
         reference = bytes(4)
         candidate = bytes((9, 8, 7, 3))
-        statistics = m6_compare.compare_images(
+        statistics = gfx_frame_pixels.compare_images(
             reference, candidate, 1, 1)
         self.assertEqual(statistics["pixels"], 1)
         self.assertEqual(statistics["mismatched_pixels"], 1)
@@ -155,7 +155,7 @@ class PixelLocationTests(unittest.TestCase):
     def test_zero_differing_pixels_has_no_bounds_or_failing_region(self):
         width, height = 17, 11
         reference = bytes(4) * (width * height)
-        statistics = m6_compare.compare_images(
+        statistics = gfx_frame_pixels.compare_images(
             reference, reference, width, height)
         self.assertEqual(statistics["mismatched_pixels"], 0)
         self.assertEqual(statistics["alpha_different_pixels"], 0)
@@ -164,7 +164,7 @@ class PixelLocationTests(unittest.TestCase):
         self.assertIsNone(statistics["differing_bounds"])
         self.assertTrue(all(region["mean_max_channel_error"] == 0
                             for region in statistics["regions"]))
-        self.assertIsNone(m6_compare._first_differing_region(
+        self.assertIsNone(gfx_frame_pixels._first_differing_region(
             statistics["regions"]))
 
     def test_alpha_only_difference_is_counted_and_localized(self):
@@ -177,7 +177,7 @@ class PixelLocationTests(unittest.TestCase):
         # BGR unchanged; alpha differs by three, exactly like the pilot's
         # RGB-only false negative.
         candidate[offset:offset + 4] = bytes((0, 0, 0, 3))
-        statistics = m6_compare.compare_images(
+        statistics = gfx_frame_pixels.compare_images(
             reference, bytes(candidate), width, height)
         self.assertEqual(statistics["mismatched_pixels"], 1)
         self.assertEqual(statistics["alpha_different_pixels"], 1)
@@ -199,7 +199,7 @@ class PixelLocationTests(unittest.TestCase):
         for width, height in ((1, 1), (7, 3), (9, 9), (17, 11), (64, 64)):
             with self.subTest(width=width, height=height):
                 body = bytes(4) * (width * height)
-                statistics = m6_compare.compare_images(
+                statistics = gfx_frame_pixels.compare_images(
                     body, body, width, height)
                 regions = {
                     (region["row"], region["column"]): region
@@ -213,10 +213,10 @@ class PixelLocationTests(unittest.TestCase):
                 for (row, column), region in regions.items():
                     self.assertEqual(
                         (region["x"], region["width"]),
-                        m6_compare._grid_span(column, width, 8))
+                        gfx_frame_pixels._grid_span(column, width, 8))
                     self.assertEqual(
                         (region["y"], region["height"]),
-                        m6_compare._grid_span(row, height, 8))
+                        gfx_frame_pixels._grid_span(row, height, 8))
                     for x in range(region["x"],
                                    region["x"] + region["width"]):
                         self.assertEqual(x * 8 // width, column)

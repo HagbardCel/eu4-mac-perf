@@ -74,6 +74,18 @@ flowchart TD
 
 The diagram expresses logical responsibilities, not a new mandatory abstraction. Low-level replay feeds the maintained backends without claiming to execute reconstructed engine semantics; function-level reconstruction feeds the same backend where feasible. Runtime dependencies flow from integration and engine code into backend-specific operations, not from production renderer code into diagnostic, orchestration or experiment machinery.
 
+### Milestone independence
+
+Maintained reusable code has functional ownership and naming. This rule
+covers modules, imports, CLI commands, native targets, environment overrides,
+tests and runtime configuration. The permanent qualification path may consume
+protected evidence and policy by their reviewed identities. It must not
+depend on milestone wrappers, experimental acceptance scripts or planning
+documents. Historical milestone identifiers remain valid in evidence, reports,
+protected case IDs and thin reproduction entry points. Consolidate implementations
+before renaming them. Pure moves carry zero LOC credit. R4 owns session
+lifecycle, continuation and checkpoint migration.
+
 ### 3.1 Proposed working-tree structure
 
 ```text

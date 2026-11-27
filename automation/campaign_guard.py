@@ -666,13 +666,13 @@ def refuse_unmanaged_launch(operation: str) -> None:
     The legacy benchmark drivers acquire the host lease themselves and never
     claim a campaign authorization, so they must not act while a campaign is
     active: otherwise a campaign could escape to live capture by invoking a
-    lower-level command instead of ``automation.m6_frame capture``.
+    lower-level command instead of ``automation.gfx_frame capture``.
     """
     if from_env() is not None:
         raise CampaignRefusal(
             "launch_authorization",
             f"{operation} is not the campaign capture path; use "
-            "automation.m6_frame capture so the launch is authorized")
+            "automation.gfx_frame capture so the launch is authorized")
 
 
 def require_active_from_env() -> Guard | None:
@@ -711,7 +711,7 @@ def require_launch_authorization(authorization: str | None = None,
         raise CampaignRefusal(
             "launch_authorization",
             "this campaign requires an open EU4 launch authorization; start the "
-            "capture through automation.m6_frame capture")
+            "capture through automation.gfx_frame capture")
 
 
 def claim_launch_authorization(authorization: str | None = None,

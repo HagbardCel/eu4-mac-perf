@@ -230,9 +230,9 @@ def reference_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[list
 
 
 def _run_replay(workspace: Path, reference_run: Path, output: Path) -> dict:
-    from automation import m5_replay  # type: ignore
+    from automation import gfx_sprite_replay  # type: ignore
 
-    return m5_replay.run_replay(reference_run, output, force_build=False)
+    return gfx_sprite_replay.run_replay(reference_run, output, force_build=False)
 
 
 def comparison_gate(workspace: Path, reference_run: Path, fresh_output: Path,
@@ -311,10 +311,10 @@ def comparison_gate(workspace: Path, reference_run: Path, fresh_output: Path,
 
 
 def unsupported_state_gate(workspace: Path, reference_run: Path) -> dict:
-    from automation import m5_replay  # type: ignore
+    from automation import gfx_sprite_replay  # type: ignore
 
     with tempfile.TemporaryDirectory(prefix="m5-bad-state-") as tmp:
-        host = m5_replay.build_host()
+        host = gfx_sprite_replay.build_host()
         env = __import__("os").environ.copy()
         env["EU4_GFX_EXPECTED_EXE"] = "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4"
         env["EU4_GFX_EXECUTABLE_SHA256"] = (
@@ -334,7 +334,7 @@ def unsupported_state_gate(workspace: Path, reference_run: Path) -> dict:
 
 
 def corrupted_input_gate(workspace: Path, reference_run: Path) -> dict:
-    from automation import gfx_compare, m5_replay  # type: ignore
+    from automation import gfx_compare, gfx_sprite_replay  # type: ignore
 
     with tempfile.TemporaryDirectory(prefix="m5-corrupt-") as tmp:
         root = Path(tmp)
@@ -355,7 +355,7 @@ def corrupted_input_gate(workspace: Path, reference_run: Path) -> dict:
         texture.write_bytes(bytes(data))
         output = root / "candidate"
         try:
-            m5_replay.run_replay(corrupt_reference, output, force_build=False)
+            gfx_sprite_replay.run_replay(corrupt_reference, output, force_build=False)
             policy = json.loads((workspace / POLICY).read_text())
             reference = gfx_compare.load_capture(reference_run, "reference")
             candidate = gfx_compare.load_capture(output, "candidate")

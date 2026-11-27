@@ -26,7 +26,7 @@ BENCH = ROOT / "benchmark"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import m6_frame, native_build  # noqa: E402
+from automation import gfx_frame, native_build  # noqa: E402
 
 VERSION_A = bytes((index * 3) & 0xFF for index in range(64))
 VERSION_B = bytes((255 - index * 3) & 0xFF for index in range(64))
@@ -169,10 +169,10 @@ class MetalTextureVersionTests(unittest.TestCase):
             "programs": [{"program": 1, "status": "ok",
                           "stages": {"vertex": stage, "pixel": pixel}}]}))
         native_build.require_prerequisites(
-            sources=(m6_frame.REPLAY_HOST_SOURCE,
-                     m6_frame.REPLAY_HOST_CLI_SOURCE),
+            sources=(gfx_frame.REPLAY_HOST_SOURCE,
+                     gfx_frame.REPLAY_HOST_CLI_SOURCE),
             frameworks=("Foundation", "Metal"), require_arm64=True)
-        cls.host = m6_frame.build_replay_host()
+        cls.host = gfx_frame.build_replay_host()
 
     @classmethod
     def tearDownClass(cls):

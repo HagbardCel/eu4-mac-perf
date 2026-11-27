@@ -53,6 +53,7 @@ extern int eu4_gfx_frame_observe_emit(const uint8_t *, uint32_t, uint32_t,
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <dlfcn.h>
@@ -4828,6 +4829,16 @@ static int write_frame_manifest(int complete, const char *reason) {
 #elif defined(__aarch64__)
     fputs("\"process_architecture\":\"arm64\",", file);
 #endif
+    const char *executable_sha = getenv("EU4_GFX_EXECUTABLE_SHA256");
+    if (executable_sha && strlen(executable_sha) == 64 &&
+        strspn(executable_sha, "0123456789abcdef") == 64)
+        fprintf(file, "\"executable_sha256\":\"%s\",", executable_sha);
+    char macos_build[64] = {0};
+    size_t build_size = sizeof(macos_build);
+    if (sysctlbyname("kern.osversion", macos_build, &build_size, NULL, 0) == 0 &&
+        build_size > 1 && build_size <= sizeof(macos_build) &&
+        strspn(macos_build, "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") == strlen(macos_build))
+        fprintf(file, "\"macos_build\":\"%s\",", macos_build);
     fprintf(file, "\"complete\":%s,", bool_text(complete));
     fprintf(file, "\"reason\":\"%s\",", reason != NULL ? reason : "");
     fprintf(file, "\"truncated\":%s,", bool_text(g.truncated));

@@ -3684,10 +3684,10 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         rationale, refusal = _replay_rationale(args)
         if refusal is not None:
             return refusal
-        argv = ["automation.m6_frame", "replay", "--frame", args.frame,
+        argv = ["automation.gfx_frame", "replay", "--frame", args.frame,
                 "--out", str(args.replay_out),
                 "--rationale", str(args.rationale)]
-        # ``m6_frame`` resolves ``<frame>/shaders`` when no explicit
+        # ``gfx_frame`` resolves ``<frame>/shaders`` when no explicit
         # translation is supplied.  Passing an empty ``--shaders`` value here
         # would crash argv construction before that fallback can run.
         if args.shaders:
@@ -3695,7 +3695,7 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         if args.only_event is not None:
             argv += ["--only-event", str(args.only_event)]
             argv += ["--capture-pre", "--capture-post"]
-        run = _run_module("automation.m6_frame", argv[1:], timeout=600)
+        run = _run_module("automation.gfx_frame", argv[1:], timeout=600)
         value = run["value"]
         report = _subprocess_report(run)
         if not isinstance(value, dict):

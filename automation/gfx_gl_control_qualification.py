@@ -41,9 +41,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from automation import gfx_ed25519
+from automation import dsh_receipts, gfx_ed25519, state
 from automation import gfx_gl_replay_input as replay_input
-from automation import m6_compare
+from automation import gfx_frame_pixels
 from automation.gfx_artifacts import sha256_file as _sha
 
 SCHEMA = "gfx-gl-control-qualification/v4"
@@ -219,11 +219,8 @@ def compare_payloads(live: bytes, control: bytes, width: int, height: int,
             "invalid_payload",
             f"expected {expected} BGRA bytes, live={len(live)} "
             f"control={len(control)}")
-    statistics = m6_compare.compare_images(live, control, width, height)
-    exact = bool(
-        statistics["mismatched_pixels"] == 0
-        and statistics["max_channel_error"] == 0
-        and statistics["alpha_different_pixels"] == 0)
+    statistics = gfx_frame_pixels.compare_images(live, control, width, height)
+    exact, _ = gfx_frame_pixels.exact_comparison_statistics(statistics, width, height)
     return {
         "schema": COMPARISON_SCHEMA,
         "status": "exact" if exact else "different",
@@ -273,7 +270,7 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
     ``default_checkpoint`` record, not a mutable request sidecar.  The live
     image must be the exact sealed blob at that path and digest.
     """
-    from automation import m6_frame
+    from automation import gfx_frame
 
     frame_dir = Path(frame_dir).expanduser().resolve()
     live_path = Path(live_path).expanduser().resolve()
@@ -289,13 +286,13 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
             reasons.append(reason)
 
     try:
-        trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
+        trace = gfx_frame.load_trace(frame_dir, verify_blobs=True)
     except Exception as exc:  # noqa: BLE001 - explicit unqualified
         fail(f"sealed event stream or referenced blobs are unreadable: {exc}")
         trace = None
     if trace is not None:
         try:
-            seal = m6_frame.load_seal(
+            seal = gfx_frame.load_seal(
                 frame_dir, trace=trace, verify_counts=True, verify_blobs=True)
         except Exception as exc:  # noqa: BLE001 - explicit unqualified
             fail(f"frame seal is not authentic: {exc}")
@@ -341,12 +338,6 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
                 for problem in gfx_frame_graph.default_checkpoint_problems(
                         record, checkpoint_event, frame_dir):
                     fail(f"checkpoint record is invalid: {problem}")
-                if record.get("status") != "captured":
-                    fail("checkpoint record is not a captured observation")
-                if record.get("event") != checkpoint_event:
-                    fail("checkpoint record event does not match the selection")
-                if record.get("timing") != "pre_event":
-                    fail("checkpoint record is not the pre-event observation")
                 if str(record.get("resource") or "") != resource:
                     fail(
                         f"checkpoint record resource {record.get('resource')!r} "
@@ -355,10 +346,6 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
                     fail("checkpoint record target does not match the resource")
                 reference_sha = record.get("sha256")
                 reference_file = record.get("file")
-                if not _is_sha256(reference_sha):
-                    fail("checkpoint record has no valid reference sha256")
-                if not isinstance(reference_file, str) or not reference_file:
-                    fail("checkpoint record has no reference file")
                 if isinstance(reference_file, str) and reference_file:
                     expected_path = (frame_dir / "blobs" / reference_file).resolve()
                     if live_path != expected_path:
@@ -372,11 +359,7 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
                         fail(
                             "live image digest is not the sealed checkpoint "
                             "reference (swapped or different seal)")
-                record_width = _int_or_none(record.get("width"))
-                record_height = _int_or_none(record.get("height"))
-                if record_width is None or record_height is None:
-                    fail("checkpoint record extent is not integral")
-                elif record_width != width or record_height != height:
+                if (record.get("width"), record.get("height")) != (width, height):
                     fail("checkpoint record extent does not match the comparison")
                 if seal is not None:
                     if record.get("session_id") not in (None, seal.get("session_id")):
@@ -518,6 +501,13 @@ def _sanitized_env(repo_root: Path, run_dir: Path) -> dict:
     return env
 
 
+def _verified_input_package(path: Path, expected: str) -> dict:
+    package = replay_input.verify_package(path)
+    if package["package_sha256"] != expected:
+        raise QualificationError("package_identity", "restricted replay inputs changed")
+    return package
+
+
 def _run_renderer(*, renderer: Path, package: dict, identity: dict,
                   evidence: dict, width: int, height: int, draw_event: int,
                   checkpoint_event: int, resource: str, out_dir: Path,
@@ -572,9 +562,7 @@ def _run_renderer(*, renderer: Path, package: dict, identity: dict,
                                 encoding="utf-8")
         result["request_path"] = str(request_path)
         result["request_sha256"] = _sha_or_none(request_path)
-        before = replay_input.verify_package(package["path"])
-        if before["package_sha256"] != package["package_sha256"]:
-            return fail("input package changed before execution")
+        _verified_input_package(Path(package["path"]), package["package_sha256"])
         if renderer.suffix == ".py":
             command = [sys.executable, str(renderer)]
         else:
@@ -585,9 +573,7 @@ def _run_renderer(*, renderer: Path, package: dict, identity: dict,
             command, capture_output=True, text=True, timeout=timeout,
             check=False, cwd=str(run_dir),
             env=_sanitized_env(repo_root, run_dir))
-        after = replay_input.verify_package(package["path"])
-        if after["package_sha256"] != package["package_sha256"]:
-            fail("input package changed during execution")
+        _verified_input_package(Path(package["path"]), package["package_sha256"])
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()
             return fail(
@@ -595,32 +581,14 @@ def _run_renderer(*, renderer: Path, package: dict, identity: dict,
                 + (f": {detail[-500:]}" if detail else ""))
         artifact = run_dir / "result.bgra"
         receipt_path = run_dir / "receipt.json"
-        import os as os_module
-        import stat as stat_module
-        for path, label in ((receipt_path, "receipt"), (artifact, "artifact")):
+        for path in (receipt_path, artifact):
             if path.is_symlink():
-                return fail(f"control {label} is a symlink, not a regular file")
-            if path.exists():
-                try:
-                    info = os_module.lstat(path)
-                except OSError:
-                    return fail(f"control {label} cannot be inspected")
-                if not stat_module.S_ISREG(info.st_mode):
-                    return fail(
-                        f"control {label} is not a regular file")
-                if path.resolve().parent != run_dir.resolve():
-                    return fail(
-                        f"control {label} escaped the renderer run directory")
-        if artifact.exists():
-            try:
-                if os_module.stat(artifact).st_ino == os_module.stat(
-                        live_path).st_ino and os_module.stat(
-                            artifact).st_dev == os_module.stat(
-                                live_path).st_dev:
-                    return fail(
-                        "control artifact is the sealed live image (hardlink)")
-            except OSError:
-                return fail("control artifact or live image cannot be inspected")
+                return fail(f"control output is a symlink: {path.name}")
+        try:
+            dsh_receipts.artifact_records(run_dir, (path.name for path in (receipt_path, artifact)
+                                                    if path.exists()))
+        except ValueError as exc:
+            return fail(str(exc))
         if not receipt_path.is_file():
             return fail("control renderer did not produce receipt.json")
         receipt = _read_json(receipt_path, "control_receipt")
@@ -848,6 +816,12 @@ def _validate_receipt(receipt: dict, *, nonce: str, renderer_sha: str,
     return reasons, unsupported, execution
 
 
+def _evidence_digest(evidence: dict) -> str:
+    return replay_input.sha256_bytes(_canonical({key: evidence.get(key) for key in (
+        "status", "drawable", "drawable_equivalence", "prestate", "missing", "unsupported", "identity",
+    )}))
+
+
 def _assemble(comparison: dict | None, authentication: dict | None, *,
               evidence: dict | None = None, run: dict | None = None,
               live_sha256: str | None = None,
@@ -948,17 +922,7 @@ def _assemble(comparison: dict | None, authentication: dict | None, *,
             "frame_dir": (authentication or {}).get("frame_dir"),
             "seal": (authentication or {}).get("seal_document"),
             "evidence": evidence,
-            "evidence_sha256": replay_input.sha256_bytes(
-                _canonical({
-                    "status": evidence.get("status"),
-                    "drawable": evidence.get("drawable"),
-                    "drawable_equivalence": evidence.get(
-                        "drawable_equivalence"),
-                    "prestate": evidence.get("prestate"),
-                    "missing": evidence.get("missing"),
-                    "unsupported": evidence.get("unsupported"),
-                    "identity": evidence.get("identity"),
-                })),
+            "evidence_sha256": _evidence_digest(evidence),
             "receipt": ({"path": str(receipt_path),
                          "sha256": _sha_or_none(receipt_path)}
                         if receipt_path is not None else None),
@@ -1032,26 +996,15 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
     frame_resolved = frame_dir.expanduser().resolve()
     out_resolved = out_dir.expanduser().resolve()
 
-    def _within(child: Path, parent: Path) -> bool:
-        try:
-            child.relative_to(parent)
-            return True
-        except ValueError:
-            return False
-
-    # The renderer may walk its working directory and the package ancestors.
-    # Keeping the control output outside the sealed capture tree (and outside
-    # every ancestor of it) is what makes reference isolation structural rather
-    # than a promise about the request document.
     capture_root = frame_resolved.parent
-    if _within(out_resolved, capture_root) or _within(
-            capture_root, out_resolved):
+    try:
+        state.outside_workspace(out_resolved, capture_root)
+    except RuntimeError:
         return _assemble(
             None, None,
             evidence=_refused_evidence(
                 "unsafe_output_directory",
-                f"control output {out_resolved} overlaps the sealed capture "
-                f"tree {capture_root}; choose a directory outside it"))
+                f"control output {out_resolved} overlaps the sealed capture tree {capture_root}"))
     for sub in ("replay-input", "renderer-run"):
         candidate = out_resolved / sub
         if candidate.is_symlink():
@@ -1060,7 +1013,7 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
                 evidence=_refused_evidence(
                     "unsafe_output_directory",
                     f"control subdirectory {candidate} is a symlink"))
-        if candidate.exists() and _within(candidate.resolve(), capture_root):
+        if candidate.exists() and candidate.resolve().is_relative_to(capture_root):
             return _assemble(
                 None, None,
                 evidence=_refused_evidence(
@@ -1155,18 +1108,10 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
     comparison = None
     if control_path is not None:
         try:
-            control_bytes = control_path.read_bytes()
-        except OSError as exc:
-            run["reasons"].append(f"control artifact is unreadable: {exc}")
-        else:
-            if len(control_bytes) != expected:
-                run["reasons"].append(
-                    f"control artifact has {len(control_bytes)} bytes, "
-                    f"expected {expected}")
-            else:
-                comparison = compare_payloads(
-                    live_bytes, control_bytes, width, height,
-                    live_path=live_path, control_path=control_path)
+            comparison = compare_payloads(live_bytes, control_path.read_bytes(), width, height,
+                                          live_path=live_path, control_path=control_path)
+        except (OSError, QualificationError) as exc:
+            run["reasons"].append(f"control artifact could not be compared: {exc}")
         if _sha_or_none(live_path) != live_sha256:
             run["reasons"].append(
                 "sealed live blob changed during the renderer run")
@@ -1288,28 +1233,8 @@ def _evidence_recheck(qualification: dict) -> bool:
         return False
     if embedded_evidence.get("drawable_equivalence") != "proven":
         return False
-    embedded_digest = replay_input.sha256_bytes(_canonical({
-        "status": embedded_evidence.get("status"),
-        "drawable": embedded_evidence.get("drawable"),
-        "drawable_equivalence": embedded_evidence.get(
-            "drawable_equivalence"),
-        "prestate": embedded_evidence.get("prestate"),
-        "missing": embedded_evidence.get("missing"),
-        "unsupported": embedded_evidence.get("unsupported"),
-        "identity": embedded_evidence.get("identity"),
-    }))
-    if embedded_digest != checked.get("evidence_sha256"):
-        return False
-    derived_digest = replay_input.sha256_bytes(_canonical({
-        "status": evidence.get("status"),
-        "drawable": evidence.get("drawable"),
-        "drawable_equivalence": evidence.get("drawable_equivalence"),
-        "prestate": evidence.get("prestate"),
-        "missing": evidence.get("missing"),
-        "unsupported": evidence.get("unsupported"),
-        "identity": evidence.get("identity"),
-    }))
-    if derived_digest != embedded_digest:
+    if _evidence_digest(embedded_evidence) != checked.get("evidence_sha256") \
+            or _evidence_digest(evidence) != checked.get("evidence_sha256"):
         return False
     package_ref = checked.get("input_package") or {}
     if not isinstance(package_ref, dict):
@@ -1318,10 +1243,8 @@ def _evidence_recheck(qualification: dict) -> bool:
     if not package_path.is_dir():
         return False
     try:
-        package = replay_input.verify_package(package_path)
-    except (OSError, replay_input.ReplayInputError):
-        return False
-    if package["package_sha256"] != package_ref.get("package_sha256"):
+        package = _verified_input_package(package_path, package_ref.get("package_sha256"))
+    except (OSError, replay_input.ReplayInputError, QualificationError):
         return False
     expected = request_document.get("expected") or {}
     if request_document.get("nonce") != checked.get("nonce") \
@@ -1351,13 +1274,6 @@ def _evidence_recheck(qualification: dict) -> bool:
         checkpoint_event=checkpoint_event, resource=resource,
         artifact=control_path, evidence=evidence)
     if reasons or execution != "completed":
-        return False
-    if not (
-            receipt.get("nonce") == checked.get("nonce")
-            and (receipt.get("renderer") or {}).get("sha256")
-            == checked.get("renderer_sha256")
-            and receipt.get("execution") == "completed"
-            and str(receipt.get("api") or "").lower() == ORIGINAL_API):
         return False
     try:
         live_bytes = live_path.read_bytes()
@@ -1484,7 +1400,7 @@ def preflight_reference(frame_dir: Path, trace: dict, seal: dict, trusted: dict,
     attachment = target.get("color_attachment") or {}
     if (resource != f"tex:{attachment.get('name')}" or attachment.get("type") != "texture"
             or attachment.get("level") != 0 or attachment.get("internal_format") != "RGBA8"):
-        return {"verdict": "inapplicable_reference", "scope": scope,
+        return {"verdict": "unsupported_execution_scope", "scope": scope,
                 "problems": ["selected target is outside the color-only RGBA8 level-0 scope"]}
     if graph.get("status") == "invalid":
         return {"verdict": "invalid_provenance", "scope": scope,
@@ -1647,14 +1563,12 @@ def _offscreen_bgra(frame: Path, observation: dict) -> bytes:
         raise replay_input.ReplayInputError("invalid_original_output", observation["file"])
     if observation.get("pixel_format") != "RGBA8":
         return original
-    converted = bytearray(original)
-    converted[0::4], converted[2::4] = original[2::4], original[0::4]
-    return bytes(converted)
+    return gfx_frame_pixels.swap_red_blue(original)
 
 
 def _offscreen_package(frame: Path, trace: dict, seal: dict, facts: dict, directory: Path) -> dict:
     """Adapt the verified selected transaction to the legacy package vocabulary."""
-    from automation import m6_frame
+    from automation import gfx_frame
 
     scope = facts["scope"]
     draw = _event(trace["_events"], scope["draw"])
@@ -1667,7 +1581,7 @@ def _offscreen_package(frame: Path, trace: dict, seal: dict, facts: dict, direct
     view = directory / "selected-input"
     blobs = view / "blobs"
     blobs.mkdir(parents=True)
-    names = m6_frame.event_input_blob_names([draw])
+    names = gfx_frame.event_input_blob_names([draw])
     names.update(item["file"] for item in draw["program"]["shaders"])
     for name in names:
         if Path(name).name != name:
@@ -1702,6 +1616,7 @@ def _offscreen_package(frame: Path, trace: dict, seal: dict, facts: dict, direct
 def qualify_published_candidate(repo: Path, commit: str, directory: Path,
                                 source: tuple, case: dict) -> dict:
     from automation import gfx_observation
+    from automation.verification_manifest import EU4_EXECUTABLE_SHA256
 
     frame, trace, seal, trusted = source
     if seal.get("_verified") is not True:
@@ -1712,6 +1627,16 @@ def qualify_published_candidate(repo: Path, commit: str, directory: Path,
     gl_identity = {key: original.get(key) for key in ("vendor", "renderer", "version")}
     architecture = trace.get("process_architecture")
     context = (original.get("cgl") or {}).get("profile")
+    os_build = trace.get("macos_build")
+    executable_sha = trace.get("executable_sha256")
+    if facts["verdict"] == "eligible" and tier == "authentic":
+        if not (isinstance(os_build, str) and os_build) or not executable_sha:
+            facts["problems"].append("original executable or macOS build is unobserved")
+        elif executable_sha != EU4_EXECUTABLE_SHA256:
+            facts.update(verdict="invalid_provenance", problems=["original executable identity differs"])
+        elif os_build != subprocess.check_output(
+                ["/usr/sbin/sysctl", "-n", "kern.osversion"], text=True, timeout=5).strip():
+            facts.update(verdict="inapplicable_environment", problems=["original macOS build differs"])
     if facts["verdict"] == "eligible":
         if architecture not in ("arm64", "x86_64"):
             facts["problems"].append("original process architecture is unobserved")
@@ -1722,7 +1647,8 @@ def qualify_published_candidate(repo: Path, commit: str, directory: Path,
     provenance = {"reference": case["reference"],
                   "evidence_tier": ({"authentic": "original-eu4", "synthetic": "synthetic"}.get(tier)
                                     if facts["verdict"] != "invalid_provenance" else None),
-                  "original_environment": {"architecture": architecture, **gl_identity, "profile": context},
+                  "original_environment": {"architecture": architecture, **gl_identity, "profile": context,
+                                           "executable_sha256": executable_sha, "macos_build": os_build},
                   "original_evidence_verified": facts["verdict"] != "invalid_provenance"}
     if facts["verdict"] != "eligible":
         return {**facts, **provenance, "execution": "not_started"}
@@ -1822,10 +1748,12 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, package: Path, e
     from automation import gfx_gl_control_renderer as driver
     from automation import candidate_snapshot, dsh_receipts, launch_lease, native_build, qualification_sandbox
 
-    package_record = replay_input.verify_package(package)
     reference_sha = _sha(expected)
-    if (package_record["package_sha256"] != expectation["package_sha256"]
-            or reference_sha != expectation["expected_sha256"]):
+    try:
+        package_record = _verified_input_package(package, expectation["package_sha256"])
+    except QualificationError as exc:
+        return {"verdict": "invalid_provenance", "problems": [str(exc)]}
+    if reference_sha != expectation["expected_sha256"]:
         return {"verdict": "invalid_provenance", "problems": ["GL fixture digest differs"]}
     manifest = package_record["manifest_document"]
     try:

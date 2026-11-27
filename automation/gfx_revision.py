@@ -11,7 +11,7 @@ import tempfile
 
 from automation import (
     case_locator, dsh_receipts, gfx_ed25519, gfx_frame_compare,
-    gfx_gl_control_qualification, gfx_prefix_check, m5_replay, state,
+    gfx_gl_control_qualification, gfx_prefix_check, gfx_sprite_replay, state,
 )
 from automation.state import outside_workspace as _outside
 from automation.gfx_artifacts import sha256_bytes
@@ -50,23 +50,6 @@ def _policy(workspace: Path, commit: str) -> tuple[dict, str]:
     return policy, digest
 
 
-def _passes(case: dict, row: dict) -> bool:
-    required_coverage = set(case.get("minimum_coverage", []))
-    if not required_coverage.issubset(row.get("coverage", [])):
-        return False
-    if row["verdict"] == "exact":
-        return row.get("execution") == "completed" and row.get("independently_verified") is True
-    if case["category"] != "diagnostic":
-        return False
-    if row["verdict"] == "different":
-        return bool(required_coverage and row.get("execution") == "completed"
-                    and row.get("independently_verified") is True)
-    return (row["verdict"] in ("missing_original_observation", "inapplicable_reference")
-            and row.get("original_evidence_verified") is True
-            and bool(row.get("problems"))
-            and set(row["problems"]).issubset(case.get("original_limitations", [])))
-
-
 def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> dict:
     workspace = Path(workspace).expanduser().resolve(strict=True)
     policy, policy_digest = _policy(workspace, commit)
@@ -99,7 +82,9 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
             allowed |= {"key", "manifest_sha256", "seal_sha256"}
         if set(deployment) - allowed - committed.keys():
             raise QualificationError(f"unexpected deployment settings for {name}")
-        cases[name] = {**rule, "reference": {**committed, **deployment}}
+        deployment = dict(deployment)
+        reuse = deployment.pop("reuse_receipt", None)
+        cases[name] = {**rule, "reference": {**committed, **deployment}, "reuse_receipt": reuse}
     if case_id is not None and case_id not in cases:
         raise QualificationError("case id is absent from the protected policy")
     selected = [case_id] if case_id is not None else required
@@ -115,8 +100,8 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
         try:
             if case["kind"] == "constant-buffer":
                 previous = None
-                if case["reference"].get("reuse_receipt"):
-                    previous = run_root / case["reference"]["reuse_receipt"]
+                if case["reuse_receipt"]:
+                    previous = run_root / case["reuse_receipt"]
                     if not previous.resolve().is_relative_to(run_root):
                         raise QualificationError("execution receipt escapes the protected run root")
                 row = reconstruction_diff.qualify_candidate(
@@ -135,19 +120,19 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
                     frame, _, _, trusted = source
                     row = gfx_prefix_check.qualify_candidate(
                         ROOT, policy["trusted_revision"], commit, job, frame, trusted, case)
-            elif case["kind"] in ("m5-sprite", "m6-frame", "dual-run-reference"):
+            elif case["kind"] in ("isolated-sprite", "metal-final-frame", "dual-run-reference"):
                 reference = case["reference"]
                 original = case_locator.resolve_legacy_reference(
                     policy.get("evidence_roots"), reference, workspace)
-                if case["kind"] == "m5-sprite":
-                    row = m5_replay.qualify_candidate(commit, job, original, reference)
-                elif case["kind"] == "m6-frame":
+                if case["kind"] == "isolated-sprite":
+                    row = gfx_sprite_replay.qualify_candidate(commit, job, original, reference, case["configuration"])
+                elif case["kind"] == "metal-final-frame":
                     row = gfx_prefix_check.qualify_full_frame(
-                        ROOT, policy["trusted_revision"], commit, job, original, reference)
+                        ROOT, policy["trusted_revision"], commit, job, original, reference,
+                        case["configuration"]["comparison_policy"])
                 else:
-                    scenario = ROOT / "analysis/infra/scenarios/opengl-save-consistency.json"
                     row = gfx_frame_compare.verify_dual_run_reference(
-                        original, reference, json.loads(scenario.read_text())["comparison"])
+                        original, reference, case["configuration"])
             else:
                 row = {"verdict": "unsupported", "problems": ["case executor is unavailable"]}
         except case_locator.CaseLocatorError as exc:
@@ -167,26 +152,17 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
             receipt_digest = row.pop("reused_receipt_digest")
         results.append({"case_id": key, "category": case["category"],
                         "receipt": str(receipt), "receipt_digest": receipt_digest,
-                        "requirement_satisfied": _passes(case, row), **row})
-    authentic_pass = any(
-        row["case_id"] == authentic and row["category"] == "exact"
-        and cases[authentic]["kind"] == "gl"
-        and row.get("evidence_tier") == "original-eu4" and row["verdict"] == "exact"
-        and row["requirement_satisfied"] and not row.get("execution_reused")
-        for row in results)
-    qualified = case_id is None and authentic_pass and all(
-        row["requirement_satisfied"] for row in results)
+                        "requirement_satisfied": dsh_receipts.case_satisfies(case, row), **row})
+    decision = dsh_receipts.policy_decision(contract, results, focused=case_id is not None)
     result = {
         "schema": SCHEMA, "revision": commit, "tree": tree, "policy_sha256": policy_digest,
         "mode": "focused" if case_id is not None else "mandatory",
-        "required_cases": required, "executed_cases": [row["case_id"] for row in results
-                           if row.get("execution") == "completed" and not row.get("execution_reused")],
-        "cases": results, "qualified": qualified,
+        "required_cases": required, "cases": results, **decision,
         "policy_contract_sha256": sha256_bytes(POLICY_CONTRACT.read_bytes()),
     }
     path, _ = dsh_receipts.write_receipt(directory, result, seed=seed)
     if case_id is None:
         dsh_receipts.verify_revision(path, public_key, revision=commit, policy_sha256=policy_digest,
                                      policy_contract_sha256=result["policy_contract_sha256"],
-                                     required_cases=required, run_root=run_root)
+                                     contract=contract, run_root=run_root)
     return {**result, "receipt": str(path)}

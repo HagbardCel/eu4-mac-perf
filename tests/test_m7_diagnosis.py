@@ -22,8 +22,8 @@ from automation import (  # noqa: E402
     gfx_frame_graph,
     gfx_independent_replay,
     gfx_replay_case,
-    m6_compare,
-    m6_frame,
+    gfx_frame_pixels,
+    gfx_frame,
 )
 
 WIDTH, HEIGHT = 8, 8
@@ -425,7 +425,7 @@ class DiagnosisContractTests(unittest.TestCase):
 
     def test_diagnosis_does_not_execute_a_host(self):
         with mock.patch.object(
-                m6_frame, "build_replay_host",
+                gfx_frame, "build_replay_host",
                 side_effect=AssertionError("host build must not run")), \
              mock.patch.object(
                 gfx_independent_replay.subprocess, "run",
@@ -886,7 +886,7 @@ class DiagnosisContractTests(unittest.TestCase):
 
 
 class DiagnoseCliPackagingTests(unittest.TestCase):
-    """Exercise the real ``m6_frame diagnose --package`` CLI entry point."""
+    """Exercise the real ``gfx_frame diagnose --package`` CLI entry point."""
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -896,7 +896,7 @@ class DiagnoseCliPackagingTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def _run(self):
-        return m6_frame.main([
+        return gfx_frame.main([
             "diagnose",
             "--frame", str(self.fixture.frame),
             "--metal", str(self.fixture.metal),

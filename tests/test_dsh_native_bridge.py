@@ -106,12 +106,12 @@ class NativeBridgeTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "darwin", "Metal replay is macOS")
     def test_native_v2_case_is_inspected_verified_and_replayed(self):
         """The DSH bridge reaches the real v2 packager, verifier and replay."""
-        from automation import gfx_replay_case, m6_frame, m7_continuous
+        from automation import gfx_replay_case, gfx_frame, m7_continuous
         from tests.test_gfx_replay_case_sequence import (
             HeterogeneousShaderFixture)
 
         try:
-            host = m6_frame.build_replay_host()
+            host = gfx_frame.build_replay_host()
         except Exception as exc:  # noqa: BLE001 - explicit skip
             raise unittest.SkipTest(str(exc))
         fixture = HeterogeneousShaderFixture(self.root / "v2", host)

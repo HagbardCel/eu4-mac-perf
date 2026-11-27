@@ -9,10 +9,9 @@ It does not use image similarity to decide alignment.
 
 from __future__ import annotations
 
-import struct
-import zlib
 from pathlib import Path
 
+from automation import gfx_frame_pixels
 from automation.gfx_artifacts import sha256_file as _sha256
 
 try:
@@ -50,14 +49,10 @@ def decode_frame(payload: bytes, width: int, height: int, *, origin: str,
         raise CompareError("extent", "frame extent must be positive")
     if len(payload) != width * height * 4:
         raise CompareError("payload", "frame payload does not match its extent")
-    image = np.frombuffer(payload, dtype=np.uint8).reshape(height, width, 4).copy()
-    if pixel_format == "BGRA8":
-        image = image[:, :, [2, 1, 0, 3]]
-    if origin == "lower_left":
-        image = image[::-1, :, :]
-    elif origin != "top_left":
+    if origin not in ("lower_left", "top_left"):
         raise CompareError("origin", f"unsupported origin: {origin}")
-    return image
+    packed = gfx_frame_pixels.canonical_rgba(payload, width, height, pixel_format, origin)
+    return np.frombuffer(packed, dtype=np.uint8).reshape(height, width, 4).copy()
 
 
 def load_frame(path: Path, width: int, height: int, *, origin: str,
@@ -376,31 +371,16 @@ def difference_image(reference: "np.ndarray", candidate: "np.ndarray",
     _require_numpy()
     if amplification < 1:
         raise CompareError("amplification", "must be >= 1")
-    delta = np.abs(reference.astype(np.int16) - candidate.astype(np.int16)).astype(np.uint16)
-    delta = np.clip(delta * amplification, 0, 255).astype(np.uint8)
-    delta[:, :, 3] = 255
-    return delta
-
-
-def _png_chunk(kind: bytes, payload: bytes) -> bytes:
-    return (struct.pack(">I", len(payload)) + kind + payload
-            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF))
+    raw = gfx_frame_pixels.amplified_difference(
+        reference.tobytes(), candidate.tobytes(), amplification=amplification)
+    return np.frombuffer(raw, dtype=np.uint8).reshape(reference.shape).copy()
 
 
 def write_png(path: Path, rgba: "np.ndarray") -> None:
     """Minimal RGBA PNG writer (no external imaging dependency)."""
     _require_numpy()
     height, width = rgba.shape[:2]
-    raw = b"".join(b"\x00" + rgba[row].tobytes() for row in range(height))
-    value = (
-        b"\x89PNG\r\n\x1a\n"
-        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
-        + _png_chunk(b"IDAT", zlib.compress(raw, 6))
-        + _png_chunk(b"IEND", b"")
-    )
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(value)
+    gfx_frame_pixels.write_png_bytes(path, rgba.tobytes(), width, height)
 
 
 def _apply_normalization_policy(result: dict, normalization: dict,
@@ -464,7 +444,7 @@ def compare_payloads(
     return result
 
 
-def verify_dual_run_reference(case: Path, reference: dict, comparison_policy: dict) -> dict:
+def verify_dual_run_reference(case: Path, reference: dict, configuration: dict) -> dict:
     """Recompare the historic original pair under its protected case identity."""
     import json
     from automation.gfx_artifacts import sha256_file
@@ -473,10 +453,11 @@ def verify_dual_run_reference(case: Path, reference: dict, comparison_policy: di
     if sha256_file(manifest) != reference["manifest_sha256"]:
         return {"verdict": "invalid_provenance",
                 "problems": ["restored November 14 case manifest differs from its protected identity"]}
-    originals = json.loads((case / "difference/statistics.json").read_text())["comparison"]
+    originals = json.loads((case / configuration["recorded_comparison"]).read_text())["comparison"]
+    comparison_policy = configuration["comparison_policy"]
     payloads = []
     for role in ("reference", "candidate"):
-        raw = case / "frames" / f"{role}-frame-74.bgra"
+        raw = case / configuration["frames"][role]
         if sha256_file(raw) != reference[f"{role}_sha256"]:
             return {"verdict": "invalid_provenance", "problems": [f"November 14 {role} digest differs"]}
         payloads.append(raw.read_bytes())

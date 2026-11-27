@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_frame_graph, m6_frame  # noqa: E402
+from automation import gfx_frame_graph, gfx_frame  # noqa: E402
 
 WIDTH = HEIGHT = 4
 
@@ -165,7 +165,7 @@ class FrameFactory:
         return frame
 
     def graph(self, frame: Path) -> dict:
-        trace = m6_frame.load_trace(frame, verify_blobs=True)
+        trace = gfx_frame.load_trace(frame, verify_blobs=True)
         trace["_frame_dir"] = str(frame)
         return gfx_frame_graph.build(frame, trace=trace)
 

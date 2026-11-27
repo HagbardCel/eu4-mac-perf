@@ -25,7 +25,7 @@ BENCH = ROOT / "benchmark"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import (gfx_independent_replay, gfx_uv2_probe, m6_frame,  # noqa: E402
+from automation import (gfx_independent_replay, gfx_uv2_probe, gfx_frame,  # noqa: E402
                         native_build)
 
 WIDTH = HEIGHT = 4
@@ -812,10 +812,10 @@ class Event1ArtifactLocalizationTests(unittest.TestCase):
             gfx_uv2_probe.sparse_replay_inputs(self.frame, "2,1")
 
     def test_sparse_cli_pixels_reject_duplicates_shape_and_range(self):
-        self.assertEqual(m6_frame._uv2_probe_pixels("0,1;7,2"), "0,1;7,2")
+        self.assertEqual(gfx_frame._uv2_probe_pixels("0,1;7,2"), "0,1;7,2")
         for text in ("0,1;0,1", "0,1;", "-1,0", "0,8192", ""):
             with self.subTest(text=text), self.assertRaises(argparse.ArgumentTypeError):
-                m6_frame._uv2_probe_pixels(text)
+                gfx_frame._uv2_probe_pixels(text)
 
     def test_receipt_bound_rgb_and_controls_preserve_lower_left_order(self):
         report = self.localize()

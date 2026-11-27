@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import gfx_compare, m5_replay  # noqa: E402
+from automation import gfx_compare, gfx_sprite_replay  # noqa: E402
 
 REFERENCE = ROOT / ".local" / "m5" / "experiments" / "sprite-gl-ref-09"
 POLICY = ROOT / "analysis" / "m5" / "comparison-policy.json"
@@ -33,11 +33,11 @@ POLICY = ROOT / "analysis" / "m5" / "comparison-policy.json"
 class M5SpriteReplayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.host = m5_replay.build_host(force=True)
+        cls.host = gfx_sprite_replay.build_host(force=True)
         cls.policy = json.loads(POLICY.read_text())
 
     def _replay(self, reference: Path, output: Path) -> dict:
-        return m5_replay.run_replay(reference, output, force_build=False)
+        return gfx_sprite_replay.run_replay(reference, output, force_build=False)
 
     def test_replay_matches_authentic_reference_exactly(self) -> None:
         with tempfile.TemporaryDirectory(prefix="m5-exact-") as tmp:

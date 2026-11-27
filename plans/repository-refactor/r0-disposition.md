@@ -75,6 +75,17 @@ Do not use a missing static edge as a deletion proof. R0 traced Python and DSH r
 - **Early R5 probe.** The four M1 coexistence probe and dedicated test files total **453 LOC and 18,060 bytes**. Preserve its positive evidence in Git and the knowledge index. Retire the probe after checking operator usage and keeping any still-required platform preflight. Similarly review state-cache, sampler, submission and display probes individually because the operations manual and compiled controls still consume some.
 - **Explicit holds.** L3.2b v1 manifests bind the active fixture mirrors and v2 remains a live workflow. M7 campaign/launcher and OpenCode APIs stay while consumers use them. Native DSH durability and checkpoint privilege must be demonstrated before retiring guards. The original M4/M5/M6 raw artifacts, older M7 seals, function-oracle transcripts and active visual fixtures stay protected pending the named restores. The primary worktree's untracked operator files are outside every disposition and budget. [Protected evidence inventory](r0-evidence.md#protected-evidence)
 
+## Permanent qualification ownership
+
+Reusable code is owned by function. Audit imports, CLI commands, native
+targets, environment variables, tests and configuration on the permanent
+qualification path. Keep milestone IDs in evidence and policy, with a thin
+historical reproduction entry point only where it has a consumer. Move
+equivalent execution and comparison responsibilities to their maintained
+owners before renaming. Defer native session continuation, Git checkpointing
+and wider campaign lifecycle migration to R4 and later phases. Record removed
+implementation bodies and migrated consumers separately from pure moves.
+
 ## Post-R7 physical ownership
 
 Keep existing public paths where they already fit. Move the maintained renderer and its ABI seam in R2. The names below are destinations for the audited code. Package renames and extra facade layers are outside the budget.
