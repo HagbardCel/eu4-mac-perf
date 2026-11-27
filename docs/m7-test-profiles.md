@@ -9,7 +9,7 @@ separate, explicit profile.
 ```sh
 python3.14 -m automation.test_profiles verify --profile offline
 python3.14 -m automation.test_runner run --profile offline --label focused \
-  --module tests.test_agent_tools --module tests.test_m7_diagnosis
+  --module tests.test_agent_tools --module tests.test_gfx_diagnosis
 python3.14 -m automation.test_runner run --profile offline --label full
 ```
 

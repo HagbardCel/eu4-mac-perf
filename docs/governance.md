@@ -25,7 +25,7 @@ counters. A campaign may run as many justified experiments as it can explain.
   capture; `controlled_capture` permits the capture workflow. `ensure` refuses
   a mode change.
 - **One-use launch authorization**: each live launch needs an authorization
-  issued by the operator with the campaign token. `m6_frame.capture` never mints
+  issued by the operator with the campaign token. `gfx_frame.capture` never mints
   one and refuses before preflight when the mode or authorization is wrong. The
   claim is atomic immediately before `Popen` and is never refunded.
 - **One operator deadline**: declared in the sidecar
@@ -49,7 +49,7 @@ and seed the deadline:
 ## Evidence-first replays
 
 Agent-facing expensive replay entry points (`eu4_replay` independent/frame/case/
-sequence, the replay CLIs, direct `m6_frame replay`) require `--rationale` with
+sequence, the replay CLIs, direct `gfx_frame replay`) require `--rationale` with
 `question`, `evidence`, `gap`, `hypothesis`, `action`, `expected_information`,
 `cheaper_alternatives_checked`. The harness checks structure and that evidence
 paths resolve, then writes `experiment-rationale.json` beside the output marked

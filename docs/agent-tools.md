@@ -477,7 +477,7 @@ arbitrary hostile native code lies outside the observation trust boundary.
 The retained M7 window draw lacks drawable equivalence and lossless depth.
 The event 273 offscreen draw lacks sealed texture lifetime evidence for its
 later readback. A separately authorized
-`m6_frame capture --seal --observe-caller <rva> --observe-depth-stencil`
+`gfx_frame capture --seal --observe-caller <rva> --observe-depth-stencil`
 records the uniquely selected caller's pre- and post-draw attachment.
 Qualification verifies its shader identities and attachment contract against
 the selected semantic workload. [R3 capture preparation](../plans/repository-refactor/r3-capture-preparation.md)

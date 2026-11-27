@@ -66,7 +66,7 @@ fresh checker pass (and independent review when the sidecar requires it).
 
 ```sh
 python3.14 -m automation.test_runner run --profile offline \
-  --module tests.test_m7_diagnosis --module tests.test_agent_tools
+  --module tests.test_gfx_diagnosis --module tests.test_agent_tools
 python3.14 -m automation.test_runner status --id <id>
 python3.14 -m automation.test_runner run --profile offline --label full
 ```
@@ -127,11 +127,11 @@ env EU4_CAMPAIGN_ADMIN_TOKEN="$TOKEN" python3.14 -m automation.campaign_guard au
 set -lx EU4_CAMPAIGN_STATE "$STATE"
 read --prompt-str 'Paste authorization ID: ' AUTH_ID
 set -lx EU4_CAMPAIGN_AUTHORIZATION "$AUTH_ID"
-python3.14 -m automation.m6_frame capture --output "$OUT" --prefix-end 1 \
+python3.14 -m automation.gfx_frame capture --output "$OUT" --prefix-end 1 \
   --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310 \
   --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --seal
-python3.14 -m automation.m6_frame translate --frame "$OUT/frame" --out "$OUT/translated"
-python3.14 -m automation.m6_frame replay --frame "$OUT/frame" --shaders "$OUT/translated" \
+python3.14 -m automation.gfx_frame translate --frame "$OUT/frame" --out "$OUT/translated"
+python3.14 -m automation.gfx_frame replay --frame "$OUT/frame" --shaders "$OUT/translated" \
   --out "$OUT/metal" --uv2-probe --uv2-probe-event 1 --uv2-probe-program 310 \
   --uv2-probe-framebuffer 6 --uv2-probe-texture 433 --rationale 'event-1 uv2'
 python3.14 -m automation.gfx_uv2_probe compare --gl "$OUT/uv2-probe" \
