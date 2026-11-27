@@ -89,6 +89,7 @@ def _run_legacy(out: Path, repo: Path) -> dict:
     report_path = out / "replay-report.json"
     report_bytes = report_path.stat().st_size if report_path.is_file() else 0
     report = json.loads(report_path.read_text()) if report_path.is_file() else {}
+    report = report.get("diagnosis") or report
     first = (report.get("first_divergence") or {}).get("event")
     stats = _checkpoint_stats(report.get("checkpoints") or [], EXPECTED_EVENT)
     qualification = report.get("qualification") or {}

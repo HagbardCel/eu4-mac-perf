@@ -121,6 +121,35 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(result["cases"][-1]["problems"], rows[-1]["problems"])
         self.assertEqual(full["result"]["cases"], rows)
 
+    def test_qualification_compact_preserves_small_state_values_and_refuses_oversize(self):
+        from automation import gfx_revision
+
+        locator = "runs/case/receipt.json"
+        divergence = {"phase": "restore", "field": "uniforms",
+                      "expected": [0, 1], "actual": ["é" * 200]}
+        report = {
+            "schema": gfx_revision.SCHEMA, "mode": "focused", "qualified": False,
+            "receipt": locator, "cases": [{
+                "case_id": "selected-draw", "verdict": "different", "receipt": locator,
+                "earliest_observed_divergence": divergence,
+            }],
+        }
+        argv = ["eu4_replay", "qualify", "--workspace", str(self.root), "--commit", "a" * 40]
+        with mock.patch.object(gfx_revision, "qualify", side_effect=lambda *args: dict(report)):
+            _, compact = self.call(argv)
+            report["receipt"] = "runs/" + "é" * 9000
+            _, oversized = self.call(argv)
+        row = compact["result"]["cases"][0]
+        self.assertEqual(row["receipt"], locator)
+        self.assertEqual(row["earliest_observed_divergence"], {
+            "phase": "restore", "field": "uniforms", "expected": [0, 1],
+            "actual_in_receipt": True,
+        })
+        self.assertFalse(oversized["ok"])
+        self.assertEqual(oversized["result"]["error"], "essential_fields_exceed_cap")
+        self.assertNotIn("receipt", oversized["result"])
+        self.assertLessEqual(agent_tools._utf8_len(oversized), agent_tools.COMPACT_OUTPUT_CAP)
+
     def test_re_query_decompile_is_dispatched(self):
         code, value = self.call(["eu4_re_query", "decompile", "0x2000",
                                  "--index", str(self.index), "--max-bytes", "32"])
@@ -549,16 +578,13 @@ class ToolTests(unittest.TestCase):
         size = tools._utf8_len(bounded)
         self.assertLessEqual(size, tools.COMPACT_OUTPUT_CAP)
         self.assertEqual(bounded["result"]["output_bytes"], size)
-        self.assertTrue(bounded["result"]["report"].startswith("report/"))
-        first = bounded["result"]["first_divergence"]
-        self.assertEqual(first["event"], 15)
-        self.assertEqual(first["kind"], "pixel")
-        self.assertEqual(first["resource"], "fb:0")
+        self.assertEqual(bounded["result"]["error"], "essential_fields_exceed_cap")
+        self.assertNotIn("report", bounded["result"])
 
     def test_nested_metadata_still_preserves_core_evidence(self):
         # A legal nested outcome value must not force the evidence-free stub.
         from automation import agent_tools as tools
-        huge = "report/" + "z" * 20_000
+        locator = "report/" + "ä" * 1_000
         nested = {
             f"a{index}": {f"b{item}": "value-0123456789" for item in range(64)}
             for index in range(64)
@@ -568,7 +594,7 @@ class ToolTests(unittest.TestCase):
                 "schema": "gfx-independent-replay/v1",
                 "classification": "qualified_difference",
                 "qualified": False,
-                "report": huge,
+                "report": locator,
                 "first_divergence": {
                     "kind": "pixel", "event": 15, "target": "0",
                     "resource": "fb:0", "operation": "draw",
@@ -583,7 +609,7 @@ class ToolTests(unittest.TestCase):
         self.assertLessEqual(size, tools.COMPACT_OUTPUT_CAP)
         self.assertIn("result", bounded)
         self.assertEqual(bounded["result"]["output_bytes"], size)
-        self.assertTrue(bounded["result"]["report"].startswith("report/"))
+        self.assertEqual(bounded["result"]["report"], locator)
         first = bounded["result"]["first_divergence"]
         self.assertEqual(first["event"], 15)
         self.assertIsInstance(first["event"], int)

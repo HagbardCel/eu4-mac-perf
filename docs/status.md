@@ -5,7 +5,7 @@ Operational commands live in [profiler and benchmark operations](reference/profi
 
 ## Current capability and qualification
 
-- Final draft verification at `5ecde67c` covered native synthetic controls,
+- Draft verification at `08d56ed1` covered native synthetic controls,
   ordered transitions, the 414-case emulated-original function, governed DSH,
   worker isolation and protected Metal scopes. The signed mandatory decision
   verified nine case receipts and their artifact inventories. Seven met policy.

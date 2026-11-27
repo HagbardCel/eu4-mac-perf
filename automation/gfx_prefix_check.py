@@ -656,6 +656,14 @@ def _run_trusted_replay(frame_dir: Path, request: dict | None,
         raise PrefixCheckError("candidate replay host changed after execution")
     if not replay or replay.get("status") != "ok" or replay.get("failed") != 0:
         raise PrefixCheckError("trusted Metal replay did not complete cleanly")
+    if fenced_host is not None:
+        from automation import gfx_independent_replay
+
+        try:
+            gfx_independent_replay.recorded_shader_compile_options(replay)
+        except gfx_independent_replay.ReplayError as exc:
+            raise PrefixCheckError(str(exc)) from exc
+        execution["candidate"] = candidate
     if request is None:
         return {"metal_dir": replay_dir, "result": replay, "execution": execution}
     (replay_dir / "checkpoint-request.json").write_text(

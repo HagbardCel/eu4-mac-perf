@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
-from automation.m6_compare import compare_images  # noqa: E402
+from automation.gfx_frame_pixels import compare_images  # noqa: E402
 
 EV = Path(__file__).resolve().parent
 W, H = 1728, 1117
@@ -54,7 +54,7 @@ def run(reference, candidate, label):
 def main():
     out = {
         "schema": "compressed-904/pixel-comparison/v1",
-        "comparator": "automation.m6_compare.compare_images",
+        "comparator": "automation.gfx_frame_pixels.compare_images",
         "width": W, "height": H,
         "produced_digests": {},
         "pairs": [],

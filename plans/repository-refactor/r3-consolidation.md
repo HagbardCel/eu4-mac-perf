@@ -58,6 +58,37 @@ The reductions leave a budget deviation. Larger remaining savings would
 require further consumer migration and verification. The approval and
 independent review requirements remain open.
 
+## Residual consolidation after `08d56ed1`
+
+| Existing responsibility removed | Canonical owner and migrated callers | Preserved behavior | Enabling LOC |
+| --- | --- | --- | ---: |
+| Parallel replay classifier and duplicate scientific fields in current replay reports | The canonical diagnosis drives the standalone CLI, agent projection, portable case packaging and the archived efficiency reader. Only the historical CLI outcome shape is still projected. | Unusable evidence, partial coverage, confirmed differences, fault experiments and exact equivalence keep distinct outcomes. Historical flat replay reports remain readable. | −74 |
+| Separate compact divergence and cap handling | Agent case inspection and replay share their essential divergence projection. Qualification uses the same measured response and cap refusal. | Full report and receipt locators retain their original bytes. Bounded state values point to the full receipt when needed. | −11 |
+| Repeated original GL image admission and signed authority file verification branches | GL qualification shares pinned BGRA reference loading across the selected candidate and historical authority paths. Historical attribution checks file identities together before revalidating evidence. | Original renderer authority, package bindings, exact pixels, default-drawable and depth refusals remain covered. | −27 |
+| Separate shader member and checkpoint filename validation | Portable case verification reuses its contained manifest path and the artifact leaf-name predicate. | Capture and recipe identity, artifact digests, sequence completeness and signed receipt checks retain their existing scope. | −6 |
+| Historical import aliases | Frame and packed-pixel owners serve the remaining reproduction scripts. Historical command names still delegate for documented CLI use. Generic diagnosis tests moved with zero LOC credit. | Published evidence and archived outcomes retain their identifiers. | −8 |
+| Metal execution identity | The shared execution record carries the native shader compile options. Both protected comparisons bind the build recipe and environment through the verified candidate identity. | Fast-default and precise-default executions remain distinguishable. | +9 |
+| **Net enabling source change** | | | **−117** |
+
+This leaves **+941 enabling LOC** relative to R2b and a **1,141-line
+deviation** from the original −200 target. Scientific renderer source is
+unchanged in this slice. Test source changes by a net −52 lines. The
+canonical classifier exercises the retired classifier's unique invariants,
+and the qualification interface gains explicit bounded-value and locator
+checks.
+
+The signed original-API GL command remains an active agent and CLI entry
+point with a reviewed external renderer protocol. Selected candidate execution
+uses trusted in-process observation over its own offscreen contract. The two
+execution bodies still have distinct signature, drawable, and depth
+semantics. Retiring the historical execution body requires verified migration
+of its active default-drawable consumers or a supported pinned reproduction
+deployment. Live DSH campaign preflight still calls the mutable worktree
+verifier. That path accepts uncommitted trials and publishes a diagnostic
+build record with cooperative input separation. Protected revision
+qualification uses the immutable fenced build. Migrate the remaining live
+campaign protections and cached mutable build with R4/R6 replacement proof.
+
 ## November 14 retention disposition for operator review
 
 The committed complete-manifest digest remains

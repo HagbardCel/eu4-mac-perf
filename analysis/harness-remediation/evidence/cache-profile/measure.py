@@ -31,7 +31,7 @@ HOST_STAMP = ROOT / "benchmark/.build/gfx_frame_replay.deps.json"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_shader_translate, m6_frame  # noqa: E402
+from automation import gfx_shader_translate, gfx_frame  # noqa: E402
 
 
 def now_iso() -> str:
@@ -112,10 +112,10 @@ def core_artifact_digest(root: Path) -> str:
 
 def run_translate(out_dir: Path, cache_dir: Path | None,
                   probe: list[dict], *, warm: bool = False) -> dict:
-    """One ``m6_frame translate`` invocation, timed by wall clock."""
+    """One ``gfx_frame translate`` invocation, timed by wall clock."""
     if out_dir.exists():
         raise RuntimeError(f"translate out dir already exists: {out_dir}")
-    command = [sys.executable, "-m", "automation.m6_frame", "translate",
+    command = [sys.executable, "-m", "automation.gfx_frame", "translate",
                "--frame", str(FRAME), "--out", str(out_dir)]
     if cache_dir is not None:
         if warm and not cache_dir.exists():
@@ -228,10 +228,10 @@ def main() -> int:
         shutil.rmtree(WORK)
     WORK.mkdir(parents=True)
 
-    trace = m6_frame.load_trace(FRAME)
+    trace = gfx_frame.load_trace(FRAME)
     events = trace.get("_events") or []
     draws = [event for event in events if event.get("kind") == "draw"]
-    identity = m6_frame._shader_source_identity(trace)
+    identity = gfx_frame._shader_source_identity(trace)
 
     source_records: dict[tuple[str, str], str] = {}
     for event in draws:
@@ -329,7 +329,7 @@ def main() -> int:
         record["kind"] = "cold"
         record["rep"] = rep
         record["cache_dir"] = str(cache_dir)
-        record["cache_valid_after"] = m6_frame._translation_cache_valid(
+        record["cache_valid_after"] = gfx_frame._translation_cache_valid(
             cache_dir / identity["sha256"], identity)
         record["cache_stats"] = cache_stats(cache_dir / identity["sha256"])
         record["cache_key_matches_computed"] = (
@@ -345,13 +345,13 @@ def main() -> int:
         record["kind"] = "warm"
         record["rep"] = rep
         cache_root = last_cache / identity["sha256"]
-        record["cache_valid_after"] = m6_frame._translation_cache_valid(
+        record["cache_valid_after"] = gfx_frame._translation_cache_valid(
             cache_root, identity)
         record["summary_hit"] = record["summary"]["translation_cache"]["hit"]
         record["summary_publish"] = record["summary"]["translation_cache"]["publish"]
         record["cache_key_matches_computed"] = (
             record["summary"]["translation_cache"]["key"] == identity["sha256"])
-        artifact_digest, artifact_count = m6_frame.artifact_digest(out_dir)
+        artifact_digest, artifact_count = gfx_frame.artifact_digest(out_dir)
         record["artifact_digest_excluding_metadata"] = artifact_digest
         record["artifact_count"] = artifact_count
         record["shaders_json_sha256"] = sha256_file(out_dir / "shaders.json")
@@ -435,11 +435,11 @@ def main() -> int:
     def bench_copy() -> None:
         if copy_destination.exists():
             shutil.rmtree(copy_destination)
-        m6_frame._copy_translation_cache(cache_root, copy_destination)
+        gfx_frame._copy_translation_cache(cache_root, copy_destination)
 
     report["hashing"] = {
         "identity_full": {
-            **bench(lambda: m6_frame._shader_source_identity(trace), 7),
+            **bench(lambda: gfx_frame._shader_source_identity(trace), 7),
             "bytes_hashed": translator_bytes + len(canonical),
             "breakdown": {
                 "translator_and_tool_binaries": translator_bytes,
@@ -447,17 +447,17 @@ def main() -> int:
             },
         },
         "translator_identity_only": {
-            **bench(m6_frame._translator_identity, 7),
+            **bench(gfx_frame._translator_identity, 7),
             "bytes_hashed": translator_bytes,
         },
         "warm_cache_validation": {
-            **bench(lambda: m6_frame._translation_cache_valid(
+            **bench(lambda: gfx_frame._translation_cache_valid(
                 cache_root, identity), 7),
             "bytes_hashed": stage_artifact_bytes,
             "files_hashed": len(artifact_files),
         },
         "receipt_artifact_digest": {
-            **bench(lambda: m6_frame.artifact_digest(shaders_dir), 7),
+            **bench(lambda: gfx_frame.artifact_digest(shaders_dir), 7),
             "bytes_hashed": report_hashed_bytes,
             "files_hashed": len(report_hashed_files),
         },
@@ -485,12 +485,12 @@ def main() -> int:
         },
         "interpreter_and_import_baseline": {
             **subprocess_baseline(
-                [sys.executable, "-c", "from automation import m6_frame"],
+                [sys.executable, "-c", "from automation import gfx_frame"],
                 ROOT, 5),
             "note": "empty Python 3.14 process that imports the module only",
         },
         "trace_load": {
-            **bench(lambda: m6_frame.load_trace(FRAME), 5),
+            **bench(lambda: gfx_frame.load_trace(FRAME), 5),
             "bytes_read": (FRAME / "frame-events.jsonl").stat().st_size,
             "files_read": 2,
             "note": "frame-trace.json + frame-events.jsonl parse",
@@ -527,7 +527,7 @@ def main() -> int:
 
     # The supported CLI path (build check + host) for one run.
     supported_out = WORK / "supported-cli"
-    command = [sys.executable, "-m", "automation.m6_frame", "replay",
+    command = [sys.executable, "-m", "automation.gfx_frame", "replay",
                "--frame", str(FRAME), "--shaders", str(shaders),
                "--out", str(supported_out)]
     host_probe.append(system_probe("before supported-cli"))

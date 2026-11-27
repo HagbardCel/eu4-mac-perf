@@ -2222,7 +2222,8 @@ def execute_frame(host: Path, *, frame: Path, shaders: Path, out: Path,
         "replay_input": restricted_inputs,
         "shaders_json_sha256": _sha256(shader_manifest) if shader_manifest.is_file() else None,
         "replay_json_sha256": _sha256(replay_path) if replay_path.is_file() else None,
-        **{key: (result or {}).get(key) for key in ("status", "events", "encoded", "failed")},
+        **{key: (result or {}).get(key) for key in (
+            "status", "events", "encoded", "failed", "shader_compile_options")},
     }
     return ran, result, execution
 

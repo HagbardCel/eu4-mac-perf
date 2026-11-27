@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
 
 from automation import (agent_tools, campaign_guard, gfx_independent_replay,  # noqa: E402
                         gfx_prefix_check)
-from tests.test_m7_diagnosis import DiagnosisFixture  # noqa: E402
+from tests.test_gfx_diagnosis import DiagnosisFixture  # noqa: E402
 
 
 def _recipe(**kwargs):
@@ -331,8 +331,8 @@ class TrustedReferenceTests(unittest.TestCase):
                     replay = gfx_independent_replay.replay(
                         self.frame, self.root / scenario)
                 build_host.assert_not_called()
-                self.assertEqual(replay["classification"], diagnosis["classification"])
-                self.assertFalse(replay["qualification"]["qualified"])
+                self.assertEqual(replay["diagnosis"]["classification"], diagnosis["classification"])
+                self.assertFalse(replay["diagnosis"]["qualification"]["qualified"])
                 self.assertFalse((self.root / scenario / "metal-frame.bgra").exists())
 
     def test_unsealed_fixture_keeps_its_classification(self):

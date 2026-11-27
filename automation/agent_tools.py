@@ -2219,6 +2219,33 @@ def _emit_text(value) -> str:
     return text
 
 
+def _essential_divergence(first: dict) -> dict:
+    result = {key: first[key] for key in (
+        "kind", "event", "target", "resource", "operation", "program",
+        "producer_event", "confidence",
+    ) if key in first}
+    if first.get("root_cause") is not None:
+        result["root_cause"] = _truncate_utf8(first["root_cause"], 120)
+    interval = first.get("unresolved_interval")
+    if isinstance(interval, dict):
+        result["unresolved_interval"] = {key: interval.get(key) for key in (
+            "start_event", "end_event", "lower_bound", "search_start_event",
+        )}
+    for name in ("next_checkpoint", "recommended_checkpoint"):
+        value = first.get(name)
+        if isinstance(value, dict):
+            result[name] = {key: value[key] for key in (
+                "event", "target", "resource", "timing", "requires_capture",
+            ) if key in value}
+            if "reason" in value:
+                result[name]["reason"] = _truncate_utf8(value["reason"], 80)
+        elif isinstance(value, (str, int)) and _utf8_len(value) <= 256:
+            result[name] = value
+    if isinstance(first.get("limitations"), list):
+        result["limitations"] = [_truncate_utf8(item, 80) for item in first["limitations"][:2]]
+    return result
+
+
 def _essential_compact(result: dict, original: int, cap: int) -> dict:
     """Smallest projection that still carries the evidence contract.
 
@@ -2230,9 +2257,6 @@ def _essential_compact(result: dict, original: int, cap: int) -> dict:
         result.get("diagnosis"), dict) else {}
     first = diagnosis.get("first_divergence") if isinstance(
         diagnosis.get("first_divergence"), dict) else {}
-    interval = first.get("unresolved_interval") if isinstance(
-        first.get("unresolved_interval"), dict) else {}
-    next_checkpoint = first.get("next_checkpoint")
     artifacts = result.get("artifacts")
     if isinstance(artifacts, dict):
         artifacts = {
@@ -2242,25 +2266,6 @@ def _essential_compact(result: dict, original: int, cap: int) -> dict:
         }
     verification = result.get("verification") if isinstance(
         result.get("verification"), dict) else {}
-    minimal_first = {
-        "event": first.get("event"),
-        "resource": first.get("resource"),
-        "target": first.get("target"),
-        "operation": first.get("operation"),
-        "program": first.get("program"),
-        "producer_event": first.get("producer_event"),
-        "confidence": first.get("confidence"),
-        "root_cause": first.get("root_cause"),
-        "unresolved_interval": {
-            "start_event": interval.get("start_event"),
-            "end_event": interval.get("end_event"),
-            "lower_bound": interval.get("lower_bound"),
-            "search_start_event": interval.get("search_start_event"),
-        },
-        "next_checkpoint": next_checkpoint,
-    }
-    if isinstance(first.get("limitations"), list):
-        minimal_first["limitations"] = first["limitations"][:2]
     value = {
         "schema": result.get("schema"),
         "case_id": result.get("case_id"),
@@ -2277,7 +2282,7 @@ def _essential_compact(result: dict, original: int, cap: int) -> dict:
             "schema": diagnosis.get("schema"),
             "classification": diagnosis.get("classification"),
             "qualified": diagnosis.get("qualified"),
-            "first_divergence": minimal_first,
+            "first_divergence": _essential_divergence(first),
             "final": diagnosis.get("final"),
             "next_action": diagnosis.get("next_action"),
         },
@@ -2290,7 +2295,7 @@ def _essential_compact(result: dict, original: int, cap: int) -> dict:
     return value
 
 
-def _essential_cap_error(value: dict, cap: int, original: int) -> dict:
+def _essential_cap_error(value: dict, cap: int, original: int, *, required_fields=()) -> dict:
     """A bounded error when essential evidence cannot fit the cap.
 
     Silently dropping identity, provenance or the causal interval would make a
@@ -2302,13 +2307,10 @@ def _essential_cap_error(value: dict, cap: int, original: int) -> dict:
         "output_cap_bytes": cap,
         "output_bytes_before_cap": original,
         "error": "essential_fields_exceed_cap",
-        "required_fields": [
-            "capture_identity", "verification", "first_divergence",
-            "unresolved_interval", "next_checkpoint", "artifact_references",
-        ],
-        "detail": "the essential diagnostic fields exceed the output cap; "
-                  "read the on-disk diagnostic report",
+        "detail": "the essential fields exceed the compact output cap",
     }
+    if required_fields:
+        result["required_fields"] = list(required_fields)
     envelope = _envelope(
         str(value.get("tool") or "eu4_case_inspect"), "failed", result,
         reason="essential diagnostic fields exceed the compact output cap",
@@ -2331,8 +2333,7 @@ def _essential_cap_error(value: dict, cap: int, original: int) -> dict:
     if _utf8_len(envelope) > cap:
         result.pop("required_fields", None)
         result.pop("detail", None)
-    envelope["result"]["output_bytes"] = _utf8_len(envelope)
-    return envelope
+    return _measured_envelope(envelope)
 
 
 def _measured_envelope(value: dict) -> dict:
@@ -2353,13 +2354,6 @@ def _bounded_envelope(value: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
     if diagnosis := result.get("diagnosis"):
         diagnosis.pop("final", None)
         diagnosis["next_action"] = _truncate_utf8(diagnosis.get("next_action"), 160)
-        first = diagnosis["first_divergence"]
-        next_checkpoint = first.get("next_checkpoint")
-        if isinstance(next_checkpoint, dict) and "reason" in next_checkpoint:
-            first["next_checkpoint"] = {**next_checkpoint,
-                                        "reason": _truncate_utf8(next_checkpoint["reason"], 80)}
-        if "limitations" in first:
-            first["limitations"] = [_truncate_utf8(item, 80) for item in first["limitations"]]
     result["verification"]["problems"] = [
         _truncate_utf8(item, 80) for item in result["verification"]["problems"]]
     result.pop("files", None)
@@ -2370,7 +2364,12 @@ def _bounded_envelope(value: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
         "truncated": True, "output_cap_bytes": cap, "output_bytes_before_cap": original,
         "truncated_fields": ["optional_diagnostics"],
     })
-    return projected if _utf8_len(projected) <= cap else _essential_cap_error(value, cap, original)
+    if _utf8_len(projected) <= cap:
+        return projected
+    return _essential_cap_error(value, cap, original, required_fields=(
+        "capture_identity", "verification", "first_divergence",
+        "unresolved_interval", "next_checkpoint", "artifact_references",
+    ))
 
 
 def _diagnosis_outcome(report: dict, *, verification_ok: bool = True,
@@ -2690,26 +2689,16 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
 def _replay_compact_view(report: dict, report_path: str | None = None) -> dict:
     """Compact replay projection for the default agent-facing path.
 
-    ``replay()`` reports carry the full diagnosis under ``diagnosis`` and the
-    comparison under top-level ``final``.  This adapts that shape to the shared
-    compact projection without synthesizing evidence, then appends the
-    on-disk report locator so detail remains reachable.
+    Project the canonical diagnosis and retain its complete report locator.
     """
-    diagnosis = report.get("diagnosis") if isinstance(
-        report.get("diagnosis"), dict) else report
-    projection = dict(diagnosis)
-    pixels = report.get("pixels") or diagnosis.get("pixels")
-    if not isinstance(pixels, dict):
-        pixels = {
-            "status": (report.get("final") or {}).get("status"),
-            "final": report.get("final"),
-        }
-    projection["pixels"] = pixels
-    for key in ("checkpoints", "checkpoint_validation", "qualification",
-                "first_divergence", "execution", "frame"):
-        if key not in projection and report.get(key) is not None:
-            projection[key] = report.get(key)
-    compact = gfx_independent_replay.compact_diagnosis(projection)
+    diagnosis = report.get("diagnosis")
+    if not diagnosis:
+        # Legacy flat reports describe final pixels without a pixels record.
+        diagnosis = report
+        if not isinstance(report.get("pixels"), dict) and report.get("final"):
+            diagnosis = {**report, "pixels": {"status": report["final"].get("status"),
+                                              "final": report["final"]}}
+    compact = gfx_independent_replay.compact_diagnosis(diagnosis)
     if report.get("policy") is not None:
         compact["policy"] = report.get("policy")
     if report_path:
@@ -2742,26 +2731,13 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
                 and isinstance(value, (str, int, float, bool))
                 and _utf8_len(value) <= 256}
 
-    first = result.get("first_divergence") or {}
-    divergence = fields(first, ("kind", "event", "target", "resource", "operation",
-                               "program", "producer_event", "confidence"))
-    for name in ("unresolved_interval", "next_checkpoint", "recommended_checkpoint"):
-        value = first.get(name)
-        if isinstance(value, dict):
-            record = fields(value, ("event", "target", "resource", "timing", "start_event",
-                                    "end_event", "lower_bound", "search_start_event"))
-            if record:
-                divergence[name] = record
-        elif isinstance(value, (str, int)) and _utf8_len(value) <= 256:
-            divergence[name] = value
+    divergence = _essential_divergence(result.get("first_divergence") or {})
     report = result.get("report")
     core = {**fields(result, ("schema", "classification", "qualified")),
             "first_divergence": divergence, "truncated": True, "output_bytes": 0,
             "output_cap_bytes": cap}
     if isinstance(report, str):
-        core["report"] = report if _utf8_len(report) <= 4096 else _truncate_utf8(report, 256) + "…"
-        if core["report"] != report:
-            core["report_truncated"] = True
+        core["report"] = report
     projected = _measured_envelope({
         **fields(envelope, ("schema", "tool", "ok", "status")),
         "reason": _truncate_utf8(envelope.get("reason"), 200),
@@ -2773,7 +2749,7 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
     })
     if _utf8_len(projected) <= cap:
         return projected
-    return _measured_envelope({"result": {"truncated": True, "output_bytes": 0}, "truncated": True})
+    return _essential_cap_error(envelope, cap, _utf8_len(normal))
 
 
 def _replay_report_view(report: dict) -> dict:
@@ -2783,12 +2759,12 @@ def _replay_report_view(report: dict) -> dict:
     source = diagnosis or report
     return {
         **{key: report.get(key) for key in ("status", "reproduction", "campaign", "replay")},
-        **{key: report.get(key) or source.get(key) for key in (
+        **{key: source.get(key, report.get(key)) for key in (
             "classification", "qualification", "policy", "evaluation", "checkpoints",
             "checkpoint_validation", "state_coverage", "provenance",
             "operation_coverage", "binding_audit", "first_divergence", "history")},
         "outcome": report.get("outcome") or source.get("qualification"),
-        "final": (report.get("pixels") or source.get("pixels") or {}).get("final")
+        "final": (source.get("pixels") or report.get("pixels") or {}).get("final")
         or report.get("final"),
     }
 
@@ -2889,7 +2865,7 @@ def _replay_reason(report: dict) -> str:
     identity = diagnosis.get("identity") or {}
     return (capture.get("error") or report.get("receipt_error")
             or "; ".join(identity.get("problems") or [])
-            or "; ".join((report.get("evaluation") or {}).get("reasons") or []))
+            or "; ".join(((report.get("diagnosis") or report).get("evaluation") or {}).get("reasons") or []))
 
 
 def _compact_qualification_case(row: dict) -> dict:
@@ -2913,6 +2889,13 @@ def _compact_qualification_case(row: dict) -> dict:
         if source := row.get(name):
             summary[name] = {field: source[field] for field in fields if field in source}
     if divergence := row.get("earliest_observed_divergence"):
+        detail = summary["earliest_observed_divergence"]
+        for key in ("expected", "actual"):
+            if key in divergence:
+                if _utf8_len(divergence[key]) <= 160:
+                    detail[key] = divergence[key]
+                else:
+                    detail[f"{key}_in_receipt"] = True
         if stats := divergence.get("statistics"):
             summary["earliest_observed_divergence"].update(
                 {key: stats[key] for key in ("mismatched_pixels", "max_channel_error") if key in stats})
@@ -2947,10 +2930,16 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         complete = report["qualified"] or (
             report["mode"] == "focused"
             and report["cases"][0]["verdict"] in ("exact", "different"))
-        return _envelope(
+        envelope = _envelope(
             "eu4_replay", "ok" if complete else "incomplete", report,
             qualified=report["qualified"],
             diagnostic="complete" if complete else "incomplete")
+        if args.full:
+            return envelope
+        measured = _measured_envelope(envelope)
+        size = _utf8_len(measured)
+        return (measured if size <= COMPACT_OUTPUT_CAP
+                else _essential_cap_error(measured, COMPACT_OUTPUT_CAP, size))
     if args.replay_op == "independent":
         if not args.frame or not args.replay_out:
             return _envelope("eu4_replay", "error",
@@ -3203,7 +3192,7 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             return _envelope(
                 "eu4_replay", status, value, diagnostic=diagnostic,
                 verdict=verdict, evidence=evidence, qualified=qualified,
-                reason="; ".join((report.get("evaluation") or {}).get("reasons") or []))
+                reason="; ".join(((report.get("diagnosis") or report).get("evaluation") or {}).get("reasons") or []))
         if kind != gfx_replay_case.CASE_KIND_LEGACY:
             return _case_invalid_envelope(
                 "eu4_replay", case_path, kind, schema, detail)

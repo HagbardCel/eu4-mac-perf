@@ -207,6 +207,16 @@ def _read_json(path: Path, label: str) -> dict:
     return value
 
 
+def _reference_pixels(path: Path, digest: str, width: int, height: int) -> bytes:
+    payload = path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != digest:
+        raise QualificationError("reference_identity", "reference image changed after authentication")
+    expected = width * height * 4
+    if width <= 0 or height <= 0 or len(payload) != expected:
+        raise QualificationError("reference_extent", f"reference image has {len(payload)} bytes, expected {expected}")
+    return payload
+
+
 def compare_payloads(live: bytes, control: bytes, width: int, height: int,
                      *, live_path: Path | None = None,
                      control_path: Path | None = None) -> dict:
@@ -1056,28 +1066,11 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
         return _assemble(
             None, public_authentication, evidence=evidence,
             authority=_load_authority(None))
+    live_sha256 = authentication["identity"].get("checkpoint_reference_sha256")
     try:
-        live_bytes = live_path.read_bytes()
-    except OSError as exc:
-        public_authentication["reasons"].append(
-            f"live image is unreadable: {exc}")
-        public_authentication["authenticated"] = False
-        return _assemble(
-            None, public_authentication, evidence=evidence,
-            authority=_load_authority(None))
-    live_sha256 = hashlib.sha256(live_bytes).hexdigest()
-    if live_sha256 != authentication["identity"].get(
-            "checkpoint_reference_sha256"):
-        public_authentication["reasons"].append(
-            "live image changed after authentication")
-        public_authentication["authenticated"] = False
-        return _assemble(
-            None, public_authentication, evidence=evidence,
-            authority=_load_authority(None))
-    expected = width * height * 4
-    if len(live_bytes) != expected:
-        public_authentication["reasons"].append(
-            f"live image has {len(live_bytes)} bytes, expected {expected}")
+        live_bytes = _reference_pixels(live_path, live_sha256, width, height)
+    except (OSError, QualificationError) as exc:
+        public_authentication["reasons"].append(f"live image is invalid: {exc}")
         public_authentication["authenticated"] = False
         return _assemble(
             None, public_authentication, evidence=evidence,
@@ -1150,50 +1143,30 @@ def _evidence_recheck(qualification: dict) -> bool:
         return False
     if embedded.get("public_key") != authority.get("public_key"):
         return False
-    renderer_path = checked.get("renderer_path")
-    renderer_sha = checked.get("renderer_sha256")
-    if not isinstance(renderer_path, str) or not renderer_path:
+    references = {
+        "renderer": {"path": checked.get("renderer_path"), "sha256": checked.get("renderer_sha256")},
+        **{key: checked.get(key) for key in ("request", "receipt", "control")},
+    }
+    paths = {}
+    for name, reference in references.items():
+        if not isinstance(reference, dict) or not isinstance(reference.get("path"), str):
+            return False
+        path = Path(reference["path"])
+        digest = reference.get("sha256")
+        if not _is_sha256(digest) or _sha_or_none(path) != digest:
+            return False
+        paths[name] = path
+    if paths["renderer"].is_symlink():
         return False
-    renderer_file = Path(renderer_path)
-    if renderer_file.is_symlink() or not renderer_file.is_file():
-        return False
-    if _sha_or_none(renderer_file) != renderer_sha:
-        return False
-    request_ref = checked.get("request") or {}
-    receipt_ref = checked.get("receipt") or {}
-    control_ref = checked.get("control") or {}
-    if not all(isinstance(ref, dict)
-               for ref in (request_ref, receipt_ref, control_ref)):
-        return False
-    request_path = Path(str(request_ref.get("path") or ""))
-    if not request_path.is_file() or _sha_or_none(request_path) != \
-            request_ref.get("sha256"):
-        return False
-    try:
-        request_document = json.loads(request_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return False
-    if not isinstance(request_document, dict):
-        return False
-    receipt_path = Path(str(receipt_ref.get("path") or ""))
-    control_path = Path(str(control_ref.get("path") or ""))
-    live_ref = comparison.get("live") or {}
-    control_comparison = comparison.get("control") or {}
-    if not isinstance(live_ref, dict) or not isinstance(
-            control_comparison, dict):
+    request_document = _read_json(paths["request"], "control_request")
+    live_ref, control_comparison = comparison.get("live"), comparison.get("control")
+    if not isinstance(live_ref, dict) or not isinstance(control_comparison, dict):
         return False
     live_path = Path(str(live_ref.get("path") or ""))
     frame_dir = checked.get("frame_dir")
-    if not receipt_path.is_file() or not control_path.is_file() \
-            or not live_path.is_file() or not isinstance(frame_dir, str) \
-            or not frame_dir:
-        return False
-    if _sha_or_none(receipt_path) != receipt_ref.get("sha256"):
-        return False
-    control_sha = _sha_or_none(control_path)
-    if control_sha != control_ref.get("sha256"):
-        return False
-    if control_sha != control_comparison.get("sha256"):
+    control_sha = references["control"]["sha256"]
+    if (not live_path.is_file() or not isinstance(frame_dir, str) or not frame_dir
+            or control_sha != control_comparison.get("sha256")):
         return False
     width = _int_or_none(comparison.get("width"))
     height = _int_or_none(comparison.get("height"))
@@ -1259,7 +1232,7 @@ def _evidence_recheck(qualification: dict) -> bool:
             or expected.get("draw_event") != draw_event \
             or expected.get("checkpoint_resource") != resource:
         return False
-    receipt = _read_json(receipt_path, "control_receipt")
+    receipt = _read_json(paths["receipt"], "control_receipt")
     reasons, _unsupported, execution = _validate_receipt(
         receipt, nonce=str(checked.get("nonce") or ""),
         renderer_sha=str(checked.get("renderer_sha256") or ""),
@@ -1267,10 +1240,10 @@ def _evidence_recheck(qualification: dict) -> bool:
         package_sha256=package["package_sha256"], width=width,
         height=height, draw_event=draw_event,
         checkpoint_event=checkpoint_event, resource=resource,
-        artifact=control_path, evidence=evidence)
+        artifact=paths["control"], evidence=evidence)
     if reasons or execution != "completed":
         return False
-    recomputed = compare(live_path, control_path, width, height)
+    recomputed = compare(live_path, paths["control"], width, height)
     return (recomputed.get("exact") is True
             and recomputed["live"]["sha256"] == derived.get("checkpoint_reference_sha256")
             and recomputed["control"]["sha256"] == control_sha)
@@ -1730,13 +1703,14 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, package: Path, e
     from automation import gfx_gl_control_renderer as driver
     from automation import candidate_snapshot, dsh_receipts, launch_lease, native_build, qualification_sandbox
 
-    reference_sha = _sha(expected)
     try:
         package_record = _verified_input_package(package, expectation["package_sha256"])
-    except QualificationError as exc:
+        width, height = (package_record["manifest_document"]["identity"][name]
+                         for name in ("width", "height"))
+        reference_sha = expectation["expected_sha256"]
+        reference = _reference_pixels(expected, reference_sha, width, height)
+    except (OSError, QualificationError) as exc:
         return {"verdict": "invalid_provenance", "problems": [str(exc)]}
-    if reference_sha != expectation["expected_sha256"]:
-        return {"verdict": "invalid_provenance", "problems": ["GL fixture digest differs"]}
     manifest = package_record["manifest_document"]
     try:
         observed_state = _required_observations(manifest)
@@ -1753,11 +1727,10 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, package: Path, e
         phase["shader_sha256"] = shaders
     if any(item["sha256"] == reference_sha for item in manifest["files"]):
         return {"verdict": "invalid_provenance", "problems": ["GL reference bytes overlap input"]}
-    width, height = (manifest["identity"][name] for name in ("width", "height"))
-    pre = package / manifest["prestate"]["color"]["path"]
-    if _sha(pre) == reference_sha:
+    seed = (package / manifest["prestate"]["color"]["path"]).read_bytes()
+    seed_sha = hashlib.sha256(seed).hexdigest()
+    if seed_sha == reference_sha:
         return {"verdict": "inapplicable_reference", "problems": ["draw has no attachment effect"]}
-    reference = expected.read_bytes()
     control = directory / "control.ctl"
     control.write_text("\n".join(driver._ctl_lines(manifest, package)) + "\n")
 
@@ -1822,11 +1795,11 @@ def qualify_candidate(repo: Path, commit: str, directory: Path, package: Path, e
             actual = {phase: rows[n * 2 + offset] for offset, phase in enumerate(("restore", "post"))}
             restored = (work / f"observed-{n}-restore.bgra").read_bytes()
             final = (work / f"observed-{n}-post.bgra").read_bytes()
-            seed_path = pre if n == 0 or mode == "omit" else expected
+            initial = seed if n == 0 or mode == "omit" else reference
             steps.append({"observation": actual,
-                          "restore": compare_payloads(seed_path.read_bytes(), restored, width, height),
+                          "restore": compare_payloads(initial, restored, width, height),
                           "post": compare_payloads(reference, final, width, height),
-                          "post_equals_seed": replay_input.sha256_bytes(final) == _sha(pre)})
+                          "post_equals_seed": replay_input.sha256_bytes(final) == seed_sha})
         observations = work / "trusted-observations.json"
         observations.write_text(json.dumps(rows) + "\n")
         receipt, execution_receipt = dsh_receipts.write_receipt(work, {

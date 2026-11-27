@@ -46,6 +46,10 @@ execution receipt does not rebuild a candidate. Verify the aggregate against
 the signed case judgments and protected policy. A verified incomplete decision
 remains incomplete. [Qualification operations](agent-tools.md)
 
+Maintain canonical knowledge entries for functions and components. Link each
+entry to implementation, evidence and the independently qualified scope. Record
+uncertainties, negative outcomes and the conditions needed to resolve them.
+
 Keep synthetic passes, execution health, tolerated comparisons and exact
 qualification distinct. Independent review of the retained revision and its
 evidence is required before promotion.
@@ -56,15 +60,19 @@ Reusable implementation is milestone-independent. Maintain functional owners
 for capture, input staging, qualification, comparison and reporting. Keep
 historical IDs in evidence, protected cases, reports and justified reproduction
 entry points. Use the shared mechanisms instead of building per-experiment
-orchestration. Measure enabling refactoring separately from scientific
+orchestration. Each nontrivial infrastructure addition names the capability it
+extends or replaces. Retire superseded implementations after verified consumer
+migration. Measure enabling refactoring separately from scientific
 functionality. Aim for a nonpositive enabling change and review any exception
 explicitly. Pure moves carry no reduction credit. [Refactoring plan](../plans/repository-refactor/approved-plan.md)
 
 The repository owns scientific methodology, protected qualification and
 minimal safety enforcement. OpenCode remains the supported transitional
 campaign runtime. Native DSH owns autonomous continuation in the permanent
-target and already operates explicitly authorized DSH experiments. Broader
-continuation and checkpointing guarantees are R4 work. [Runtime contracts](../automation/README.md)
+target and already operates explicitly authorized DSH experiments. The
+permanent default is a two-hour autonomous session with recoverable native
+continuation. Checkpoint the authorized Git worktree after each changed round
+and before continuation. R4 owns those lifecycle guarantees. [Runtime contracts](../automation/README.md)
 
 The earlier domain-by-domain roadmap, its performance hypotheses and the
 exploratory GL/Metal interoperation rationale are preserved in the

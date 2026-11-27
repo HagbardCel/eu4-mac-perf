@@ -23,7 +23,7 @@ from pathlib import Path
 
 from automation import (
     gfx_frame_compare, gfx_frame_graph, gfx_independent_replay, gfx_frame_pixels, gfx_frame)
-from automation.gfx_artifacts import sha256_bytes, sha256_file as _sha
+from automation.gfx_artifacts import is_leaf_name, sha256_bytes, sha256_file as _sha
 
 SCHEMA = "gfx-strategy-b-case/v1"
 SEQUENCE_SCHEMA = "gfx-strategy-b-case/v2"
@@ -222,7 +222,7 @@ def _normalized_frame_bytes(frames: list[Path]) -> int:
 
 
 def _checkpoint_sources(metal_dir: Path, report: dict):
-    for item in report.get("checkpoints") or []:
+    for item in (report.get("diagnosis") or report).get("checkpoints") or []:
         # Older reports use "file" for the same native checkpoint.
         source = metal_dir / str(item.get("metal_file") or item.get("file") or "")
         if source.is_file():
@@ -425,7 +425,7 @@ def package(
         "verify_command": _case_command("verify"),
         "replay_status": portable_report.get("status"),
         "graph_status": graph.get("status"),
-        "first_divergence": portable_report.get("first_divergence"),
+        "first_divergence": (portable_report.get("diagnosis") or portable_report).get("first_divergence"),
         "files": _relative_files(case_dir),
     }
     _write_json(case_dir / "case.json", manifest)
@@ -469,7 +469,7 @@ def _portable_report(report: dict, capture_dir: str = "capture", *,
                              if key in case}
     else:
         value["out_dir"] = "replay"
-        _portable_paths(value.get("checkpoints") or [], capture_dir)
+        _portable_paths((value.get("diagnosis") or value).get("checkpoints") or [], capture_dir)
     artifacts = value.get("artifacts")
     if isinstance(artifacts, dict):
         value["artifacts"] = {
@@ -578,16 +578,10 @@ def _single_frame_shader_dir(frame: Path, metal_dir: Path,
 
 def _shader_member(shader_dir: Path, name) -> Path | None:
     """Resolve a declared shader payload and require it to stay inside the dir."""
-    if not isinstance(name, str) or not name:
+    if not isinstance(name, str):
         return None
-    relative = Path(name)
-    if relative.is_absolute() or ".." in relative.parts:
-        return None
-    root = shader_dir.resolve()
-    target = (shader_dir / relative).resolve()
-    if target != root and root not in target.parents:
-        return None
-    return target if target.is_file() else None
+    target, problem = _case_relative_path(shader_dir, name)
+    return target if problem is None and target.is_file() else None
 
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -2531,30 +2525,28 @@ def verify_replay_producer_receipt(replay_dir: Path, seal: dict) -> dict:
         if result.get(key) != replay.get(key):
             problems.append(
                 f"producer receipt result.{key} disagrees with replay.json")
-    declared = []
+    declared = set()
     checkpoints = replay.get("checkpoints") or []
     if not isinstance(checkpoints, list):
         problems.append("replay.json checkpoints are not a list")
         checkpoints = []
     for item in checkpoints:
-        name = Path(str(item.get("file"))).name if isinstance(item, dict) else ""
-        if not name or Path(str(item.get("file"))).name != str(
-                item.get("file")) or name in declared:
+        name = item.get("file") if isinstance(item, dict) else None
+        if not is_leaf_name(name) or name in declared:
             problems.append("replay.json checkpoint files are invalid")
         else:
-            declared.append(name)
+            declared.add(name)
     recorded = result.get("checkpoint_files")
     if recorded is None:
         recorded = [] if not declared else None
     if not isinstance(recorded, list):
         problems.append("producer receipt has no checkpoint file list")
     else:
-        seen = []
+        seen = set()
         for item in recorded:
-            name = str(item.get("file") or "") if isinstance(item, dict) else ""
-            if (not name or Path(name).name != name or name in seen
-                    or not _valid_sha256(item.get("sha256")
-                                         if isinstance(item, dict) else None)):
+            name = item.get("file") if isinstance(item, dict) else None
+            if (not is_leaf_name(name) or name in seen
+                    or not _valid_sha256(item.get("sha256"))):
                 problems.append("producer receipt checkpoint file entry is invalid")
                 continue
             path = replay_dir / name
@@ -2564,8 +2556,8 @@ def verify_replay_producer_receipt(replay_dir: Path, seal: dict) -> dict:
             elif item.get("sha256") != _sha(path):
                 problems.append(
                     f"producer receipt checkpoint digest mismatch: {name}")
-            seen.append(name)
-        if set(seen) != set(declared):
+            seen.add(name)
+        if seen != declared:
             problems.append(
                 "producer receipt checkpoint files do not match replay.json")
 
@@ -2828,12 +2820,14 @@ def main(argv: list[str] | None = None) -> int:
             value = replay_case(args.case, args.out, faults=faults,
                                 rationale=rationale)
             outcome = value.get("outcome") or {}
+            diagnosis = value.get("diagnosis") or value
+            final = (diagnosis.get("pixels") or {}).get("final") or value.get("final") or {}
             print(json.dumps({
                 "status": value.get("status"),
                 "outcome": outcome,
                 "qualified": outcome.get("qualified"),
-                "final": (value.get("final") or {}).get("status"),
-                "first_divergence": value.get("first_divergence"),
+                "final": final.get("status"),
+                "first_divergence": diagnosis.get("first_divergence"),
             }, indent=2))
             return gfx_independent_replay.qualification_exit_code(value)
     except (CaseError, gfx_independent_replay.ReplayError,

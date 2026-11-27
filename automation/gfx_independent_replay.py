@@ -3444,83 +3444,6 @@ def full_frame_completion_problems(replay: dict) -> list[str]:
     return problems
 
 
-def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
-                    pixels: str, checkpoints: list[dict],
-                    checkpoint_validation: dict, faults: dict | None,
-                    state_cov: str = "complete",
-                    identity: str = "unverified_session",
-                    capture_validity: str = "incomplete",
-                    provenance: str = "incomplete",
-                    ) -> tuple[str, dict]:
-    """Pure qualification classification used by replay() and its tests.
-
-    Invalid or unknown required evidence is always an instrumentation failure.
-    It can never fall through to a merely nonqualifying or qualified result.
-    Qualification additionally requires an explicit positive identity,
-    capture validity and resource provenance; a legacy caller that supplies
-    none of them can still receive a completed *diagnostic* result but never a
-    qualified equivalence claim.
-    """
-    intermediate_divergent = any(
-        item.get("status") == "divergent" and item.get("authoritative")
-        for item in checkpoints)
-    checkpoint_invalid = (
-        (checkpoint_validation or {}).get("status") not in ("ok",)
-        or any(item.get("status") == "invalid" for item in checkpoints))
-    fault_injection = bool(faults)
-    invalid_verdict = (
-        not execution_ok
-        or identity == "mismatch" or capture_validity == "invalid"
-        or provenance == "invalid"
-        or coverage not in ("complete", "partial")
-        or pixels not in ("match", "divergent")
-        or semantic not in ("match", "divergent")
-        or state_cov not in ("complete", "partial")
-        or checkpoint_invalid
-    )
-    positive_identity = (
-        identity == "verified" and capture_validity == "valid"
-        and provenance == "verified")
-    qualified = bool(
-        not invalid_verdict
-        and coverage == "complete" and state_cov == "complete"
-        and semantic == "match" and pixels == "match"
-        and not intermediate_divergent
-        and not fault_injection
-        and positive_identity
-    )
-    if invalid_verdict:
-        status = "invalid"
-    elif semantic == "divergent":
-        status = "semantic_divergence"
-    elif pixels == "divergent" or intermediate_divergent:
-        status = ("confirmed_rendering_difference" if coverage == "complete"
-                  else "partial_rendering_difference")
-    elif coverage == "partial" or state_cov == "partial":
-        status = "partial"
-    elif not qualified:
-        # A deliberate fault experiment, for example, is a valid nonqualifying
-        # outcome.  It must never be labelled qualified while qualified=false.
-        status = "partial"
-    else:
-        status = "qualified"
-    return status, {
-        "execution": "ok" if execution_ok else "failed",
-        "coverage": coverage,
-        "pixels": pixels,
-        "semantic": semantic,
-        "semantic_scope": "binding_audit",
-        "state_coverage": state_cov,
-        "checkpoints": "invalid" if checkpoint_invalid else "ok",
-        "identity": identity,
-        "capture_validity": capture_validity,
-        "provenance": provenance,
-        "qualified": qualified,
-        "intermediate_divergence": intermediate_divergent,
-        "fault_injection": fault_injection,
-    }
-
-
 def qualification_exit_code(report: dict) -> int:
     """Stable CLI policy for replay qualification.
 
@@ -3529,10 +3452,22 @@ def qualification_exit_code(report: dict) -> int:
     3  deliberate fault injection executed; qualification is expected to fail
     1  invalid execution, invalid checkpoint evidence or unusable report
     """
+    diagnosis = report.get("diagnosis") or report
+    if diagnosis.get("classification"):
+        outcome = classification_outcome(diagnosis)
+        axes = outcome["axes"] or {}
+        if (outcome["diagnostic"] in ("invalid", "failed")
+                or axes.get("gpu_execution") != "ok"
+                or axes.get("operation_coverage") not in ("complete", "partial")
+                or axes.get("pixel_comparison") not in ("match", "divergent")
+                or axes.get("rendering_state_coverage") not in ("complete", "partial")):
+            return 1
+        if outcome["qualified"]:
+            return 0
+        return 3 if outcome["classification"] == "fault_experiment" else 2
+
+    # Historical replay reports without a canonical diagnosis.
     outcome = report.get("outcome") or {}
-    canonical = classification_outcome(report) if report.get("classification") else {}
-    if canonical.get("diagnostic") in ("invalid", "failed"):
-        return 1
     execution = outcome.get("execution")
     if execution != "ok":
         return 1
@@ -3546,7 +3481,7 @@ def qualification_exit_code(report: dict) -> int:
         return 1
     if outcome.get("state_coverage") not in ("complete", "partial"):
         return 1
-    if outcome.get("qualified") and canonical.get("qualified", True):
+    if outcome.get("qualified"):
         return 0
     if outcome.get("fault_injection"):
         return 3
@@ -3583,6 +3518,7 @@ def classification_outcome(report: dict) -> dict:
     experiments remain explicit and non-qualifying. A returned report means
     the tool ran; the Metal host's outcome is in ``axes.gpu_execution``.
     """
+    report = report.get("diagnosis") or report
     classification = str(report.get("classification")
                          or report.get("status") or "")
     qualification = report.get("qualification") or {}
@@ -3721,34 +3657,36 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
     outcome = report.get("outcome")
-    diagnostic_outcome = classification_outcome(report)
+    diagnosis = report.get("diagnosis") or report
+    final = (diagnosis.get("pixels") or {}).get("final") or report.get("final") or {}
+    diagnostic_outcome = classification_outcome(diagnosis)
     print(json.dumps({
         "status": report.get("status"),
-        "classification": report.get("classification"),
+        "classification": diagnosis.get("classification"),
         # Preserve the standalone CLI's Metal execution and qualification fields.
         "outcome": outcome,
         "diagnostic_outcome": diagnostic_outcome,
         "qualified": (outcome or {}).get("qualified") and diagnostic_outcome["qualified"],
         "graph": (report.get("graph") or {}).get("status"),
-        "evaluation": (report.get("evaluation") or {}).get("status"),
-        "final": (report.get("final") or {}).get("status"),
-        "mismatched_pixels": ((report.get("final") or {}).get("statistics") or {}).get(
+        "evaluation": (diagnosis.get("evaluation") or {}).get("status"),
+        "final": final.get("status"),
+        "mismatched_pixels": (final.get("statistics") or {}).get(
             "mismatched_pixels"),
         "checkpoints": [
             {"event": item["event"], "target": item["target"],
              "status": item["status"],
              "mismatched_pixels": (item.get("statistics") or {}).get(
                  "mismatched_pixels")}
-            for item in report.get("checkpoints") or []
+            for item in diagnosis.get("checkpoints") or []
         ],
-        "checkpoint_validation": report.get("checkpoint_validation"),
-        "state_coverage": report.get("state_coverage"),
+        "checkpoint_validation": diagnosis.get("checkpoint_validation"),
+        "state_coverage": diagnosis.get("state_coverage"),
         "binding_audit": {
-            "ok": (report.get("binding_audit") or {}).get("ok"),
-            "mismatched": (report.get("binding_audit") or {}).get("mismatched_bindings"),
-            "earliest_event": (report.get("binding_audit") or {}).get("earliest_event"),
+            "ok": (diagnosis.get("binding_audit") or {}).get("ok"),
+            "mismatched": (diagnosis.get("binding_audit") or {}).get("mismatched_bindings"),
+            "earliest_event": (diagnosis.get("binding_audit") or {}).get("earliest_event"),
         },
-        "first_divergence": report.get("first_divergence"),
+        "first_divergence": diagnosis.get("first_divergence"),
         "report": str(Path(args.out) / "replay-report.json"),
     }, indent=2))
     return qualification_exit_code(report)
@@ -4253,9 +4191,7 @@ def _replay_locked_serialized(
                                       classification=exc.kind)
         return _write_replay_report(out_dir, {
             "schema": SCHEMA, "frame_dir": str(frame_dir), "out_dir": str(out_dir),
-            "status": "invalid", "classification": diagnosis["classification"],
-            "qualification": diagnosis["qualification"], "diagnosis": diagnosis,
-            "first_divergence": diagnosis["first_divergence"],
+            "status": "invalid", "diagnosis": diagnosis,
         })
     shader_dir = _shader_dir(frame_dir, shaders)
     out_dir = prepare_replay_output(out_dir, [frame_dir, shader_dir])
@@ -4329,22 +4265,12 @@ def _replay_locked_serialized(
         "status": status,
         "outcome": outcome,
         "receipt_error": receipt_error,
-        "execution": diagnosis.get("execution"),
         "command": execution["command"],
         "execution_identity": execution,
         "returncode": ran.returncode,
         "stderr": (ran.stderr or "")[-4000:],
-        "classification": diagnosis.get("classification"),
-        "qualification": diagnosis.get("qualification"),
         "faults": faults,
         "graph": diagnosis.get("graph") or graph,
-        "evaluation": evaluation,
-        "checkpoints": checkpoints,
-        "checkpoint_validation": checkpoint_validation,
-        "binding_audit": audit,
-        "state_coverage": states,
-        "final": final,
-        "first_divergence": diagnosis.get("first_divergence"),
         "diagnosis": diagnosis,
         "replay": {
             key: replay_result.get(key) for key in (

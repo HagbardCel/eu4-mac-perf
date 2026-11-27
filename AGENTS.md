@@ -18,14 +18,20 @@ ownership and the order of reconstruction, qualification and migration.
   belong in evidence, protected cases, historical reports and reproduction
   commands. Maintained execution must not depend on planning documents or
   historical campaign wrappers.
-- Reuse capture, replay, comparison, receipt and candidate-build owners. Extend
-  an existing contract where a real workload requires it. Consolidate before
+- Identify the existing capability each nontrivial infrastructure change extends
+  or replaces. Retire superseded paths after verified consumer migration.
+  Reuse capture, replay, comparison, receipt and candidate-build owners. Consolidate before
   renaming. Count pure moves as zero and measure enabling changes separately
   from scientific functionality. Aim for nonpositive net enabling LOC and
   obtain explicit review for exceptions.
 
+- Maintain canonical function and component knowledge linked to the implementation,
+  evidence, qualified scope, uncertainties and negative outcomes.
+
 ## Qualification
 
+- Use protected automatic reference selection and independent qualification.
+  Candidate inputs cannot narrow mandatory coverage.
 - Verify the immutable original seal, candidate revision, effective command,
   execution environment, observations and output bytes independently.
 - Keep original evidence, derived portable evidence and restricted candidate
@@ -54,8 +60,9 @@ covers contracts, review, evidence and tooling.
 When an operator starts a native DSH `/goal` reconstruction experiment, work
 in its authorized worktree through DSH. DSH owns its orchestration. The permanent
 target is native DSH continuation with repository-owned scientific methodology
-and minimal safety enforcement. R4 owns broader lifecycle and checkpointing
-migration. See [runtime contracts](automation/README.md) and
+and minimal safety enforcement. Its default autonomous session lasts two hours.
+The target requires recoverable continuation and Git checkpoints after changed
+rounds and before continuation. R4 owns these lifecycle guarantees. See [runtime contracts](automation/README.md) and
 [the approved refactoring plan](plans/repository-refactor/approved-plan.md).
 
 ## Verification workflow
