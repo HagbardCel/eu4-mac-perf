@@ -211,3 +211,37 @@ The recorder now reads a separate sampler object's binding only when the
 current GL context supports sampler objects. The legacy path still reads the
 bound texture's effective filtering and wrapping state. The selected error
 gate is unchanged.
+
+### Complete original observation after the sampler correction
+
+Recorder revision `bfd5db7cf424f5b4527ff6d4e5f5a58b826cec9a` produced the
+complete original seal in `.local/r3-authentic-capture-legacy-sampler`.
+Session `74c3f427-1fed-4545-bc26-0d968cd07f5d` binds manifest SHA-256
+`054855fae329784ee85a1461cf123bc98844a26225056867facebff7ddf4c700`, seal
+SHA-256 `31f9fe67f1558872719904bd14a0b7ec4df74c0839d131dae0befc79b6c62927`,
+and event stream SHA-256
+`5089cbd667e8e68369f0b0fcae582781a785c67d476ccdc4e7591d44adc29a8a`.
+The launch request and preflight agree on startup library SHA-256
+`93af2239872e1809a4a3e6e3067ef3a3d1da7a7508f5e0960fedffcac800faff`.
+The original executable, x86-64 process and GL/macOS identity match the
+previous verified environment.
+
+The verified stream has 283 operations and the inventory has 1,159
+recorded blobs. One draw matches the pinned caller, shader digests and
+attachment contract. Event 273 observed `glDrawArrays(5, 0, 4)` and verified
+entry/submission/exit continuity on RGBA8 texture 447, level 0, with no
+multisampling, depth or stencil attachment. The verifier admitted direct
+lossless pre/post color, one active attribute, two active uniforms, one
+sampled texture level and the applicable raster state. Pre/post payloads
+are independently bound at 1,928,448 bytes each, including alpha.
+
+The launcher confirmed process exit, settings restoration and lease release.
+The health scan reported no failure events and an unknown generic verdict.
+Admission uses the verified original event stream and seal.
+
+The published reference is
+`74c3f427-1fed-4545-bc26-0d968cd07f5d-1-31f9fe67f1558872-reference`.
+Protected deployment pins its trusted package manifest SHA-256
+`2c8af5db28b51900628e7030c965041f8b152d8c3e64c788dd597823a45a8c99`
+and the original seal digest above. The package verifier checked 1,165
+files. The original frame manifest is independently bound by the seal.
