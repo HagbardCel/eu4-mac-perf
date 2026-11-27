@@ -82,6 +82,45 @@ class ToolTests(unittest.TestCase):
         self.assertTrue(value["ok"])
         self.assertEqual(value["status"], "ok")
 
+    def test_mandatory_qualification_summary_fits_governed_dsh_output(self):
+        from automation import gfx_revision
+
+        case_ids = [*gfx_revision.PROTECTED_CASES, "offscreen-273"]
+        artifact = "candidate-output/" + "a" * 130
+        rows = [{
+            "case_id": case, "category": "diagnostic", "verdict": "different",
+            "requirement_satisfied": False, "receipt": artifact,
+            "candidate": {"source_digests": {str(i): "a" * 64 for i in range(90)}},
+            "scope": {"through": 1, "unbounded_scope": list(range(360))},
+            "problems": ["state differs", "required checkpoint missing"],
+            "evidence_tier": "original-eu4", "execution": "completed",
+            "reference": {"key": "sealed-reference", "manifest_sha256": "b" * 64},
+            "earliest_observed_divergence": {
+                "event": 1, "phase": "post", "field": "attachment",
+                "statistics": {"mismatched_pixels": 23, "max_channel_error": 1},
+            },
+        } for case in case_ids]
+        report = {
+            "schema": gfx_revision.SCHEMA, "mode": "mandatory", "revision": "a" * 40,
+            "qualified": False, "required_cases": case_ids, "executed_cases": case_ids,
+            "cases": rows, "receipt": artifact,
+        }
+        argv = ["eu4_replay", "qualify", "--workspace", str(self.root), "--commit", "a" * 40]
+        with mock.patch.object(gfx_revision, "qualify", side_effect=lambda *args: dict(report)):
+            _, compact = self.call(argv)
+            _, full = self.call([*argv, "--full"])
+        result = compact["result"]
+        self.assertLess(len(agent_tools._json_text(compact).encode()), 8192)
+        self.assertEqual([row["case_id"] for row in result["cases"]], case_ids)
+        self.assertFalse(result["qualified"])
+        self.assertEqual(result["receipt"], artifact)
+        self.assertEqual(result["cases"][-1]["earliest_observed_divergence"], {
+            "event": 1, "phase": "post", "field": "attachment",
+            "mismatched_pixels": 23, "max_channel_error": 1,
+        })
+        self.assertEqual(result["cases"][-1]["problems"], rows[-1]["problems"])
+        self.assertEqual(full["result"]["cases"], rows)
+
     def test_re_query_decompile_is_dispatched(self):
         code, value = self.call(["eu4_re_query", "decompile", "0x2000",
                                  "--index", str(self.index), "--max-bytes", "32"])

@@ -2193,8 +2193,8 @@ def _compact_case_view(case_path: Path, schema: str, manifest: dict,
 
 def _json_text(value) -> str:
     """The exact envelope serialization used on stdout (UTF-8, no escaping)."""
-    if isinstance(value, dict) and (value.get("result") or {}).get(
-            "schema") == "gfx-event-evidence/v1":
+    if isinstance(value, dict) and (value.get("result") or {}).get("schema") in (
+            "gfx-event-evidence/v1", "eu4-revision-qualification/v1"):
         return json.dumps(value, separators=(",", ":"),
                           ensure_ascii=False) + "\n"
     return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
@@ -3326,6 +3326,33 @@ def _replay_reason(report: dict) -> str:
             or "; ".join((report.get("evaluation") or {}).get("reasons") or []))
 
 
+def _compact_qualification_case(row: dict) -> dict:
+    summary = {key: row[key] for key in (
+        "case_id", "category", "verdict", "requirement_satisfied", "receipt",
+        "evidence_tier", "execution", "execution_reused", "preserved_exact",
+    ) if key in row}
+    summary["coverage_count"] = len(row.get("coverage", []))
+    if problems := row.get("problems"):
+        summary["problems"] = [_truncate_utf8(problem, 240) for problem in problems[:3]]
+        if len(problems) > 3:
+            summary["problem_count"] = len(problems)
+    for name, fields in (
+        ("scope", ("draw", "checkpoint", "later_readback", "resource", "through", "events",
+                   "channels", "function", "cases", "memory_window", "return_register",
+                   "attachment", "transitions", "pixels")),
+        ("reference", ("key", "path", "manifest_sha256", "corpus_sha256")),
+        ("earliest_observed_divergence", ("event", "transition", "phase", "field", "target",
+                                         "resource", "status", "timing")),
+    ):
+        if source := row.get(name):
+            summary[name] = {field: source[field] for field in fields if field in source}
+    if divergence := row.get("earliest_observed_divergence"):
+        if stats := divergence.get("statistics"):
+            summary["earliest_observed_divergence"].update(
+                {key: stats[key] for key in ("mismatched_pixels", "max_channel_error") if key in stats})
+    return summary
+
+
 def eu4_replay(args: argparse.Namespace) -> dict:
     if args.replay_op == "qualify":
         from automation import gfx_revision
@@ -3339,15 +3366,7 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 subprocess.SubprocessError) as exc:
             return _envelope("eu4_replay", "refused", reason=str(exc), qualified=False)
         if not args.full:
-            for row in report["cases"]:
-                row["coverage_count"] = len(row.pop("coverage", []))
-                row["problems"] = row.get("problems", [])[:1]
-                row.pop("validation_contract", None)
-                if controls := row.pop("controls", None):
-                    row["controls"] = {mode: {"receipt": control["receipt"],
-                                               "restore_exact": control["restore"]["exact"],
-                                               "post_exact": control["post"]["exact"]}
-                                       for mode, control in controls.items()}
+            report["cases"] = [_compact_qualification_case(row) for row in report["cases"]]
         complete = report["qualified"] or (
             report["mode"] == "focused"
             and report["cases"][0]["verdict"] in ("exact", "different"))
