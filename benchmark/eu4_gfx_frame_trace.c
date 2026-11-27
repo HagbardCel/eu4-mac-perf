@@ -4287,6 +4287,29 @@ static int prefix_emit_texture_locked(int event, const char *timing,
     return prefix_emit_target_locked(event, timing, kind, texture_name);
 }
 
+static int sampler_objects_supported(void) {
+    const char *version = (const char *)glGetString(GL_VERSION);
+    int major = 0, minor = 0;
+    if (version == NULL || sscanf(version, "%d.%d", &major, &minor) != 2) return 0;
+    if (major > 3 || (major == 3 && minor >= 3)) return 1;
+    const char extension[] = "GL_ARB_sampler_objects";
+    if (major >= 3) {
+        const GLubyte *(*get_string_i)(GLenum, GLuint) = dlsym(RTLD_DEFAULT, "glGetStringi");
+        if (get_string_i == NULL) return 0;
+        GLint count = 0;
+        glGetIntegerv(0x821D /* GL_NUM_EXTENSIONS */, &count);
+        for (GLint index = 0; index < count; index++) {
+            const char *name = (const char *)get_string_i(GL_EXTENSIONS, (GLuint)index);
+            if (name != NULL && strcmp(name, extension) == 0) return 1;
+        }
+        return 0;
+    }
+    const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+    const char *match = extensions != NULL ? strstr(extensions, extension) : NULL;
+    return match != NULL && (match == extensions || match[-1] == ' ') &&
+           (match[sizeof(extension) - 1] == ' ' || match[sizeof(extension) - 1] == '\0');
+}
+
 static void capture_draw_state(json_out *out, int indexed, GLint mode, int first,
                                int count, int instance_count, int base_vertex,
                                uintptr_t master,
@@ -4458,6 +4481,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
     int emitted = 0;
     int captured_units[FTRACE_MAX_UNITS];
     int captured_count = 0;
+    const int sampler_objects = uniform_count > 0 && sampler_objects_supported();
     for (GLint i = 0; i < uniform_count; i++) {
         char name[256];
         GLsizei length = 0;
@@ -4507,7 +4531,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
             continue;
         }
         GLint sampler = 0;
-        glGetIntegerv(GL_SAMPLER_BINDING_VALUE, &sampler);
+        if (sampler_objects) glGetIntegerv(GL_SAMPLER_BINDING_VALUE, &sampler);
         GLint min_filter = 0, mag_filter = 0, wrap_s = 0, wrap_t = 0, wrap_r = 0,
               compare_mode = 0, compare_func = 0, base_level = 0,
               texture_max_level = 0;
@@ -6889,6 +6913,13 @@ int eu4_gfx_frame_trace_test_write_arrays(FILE *output) {
     }
     g_selected.call_id = 0;
     return ok;
+}
+
+int eu4_gfx_frame_trace_test_write_cached_draw(FILE *output) {
+    json_out out = {output, 0};
+    const eu4_gfx_observe_call call = {.call_id = 1};
+    capture_draw_state(&out, 0, GL_TRIANGLE_STRIP, 0, 4, 1, 0, 0, &call);
+    return !out.failed;
 }
 
 /* Host-test only: run one real observation (shared readback and writer) and

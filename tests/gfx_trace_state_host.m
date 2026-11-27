@@ -200,6 +200,18 @@ static int selected_fixture(const char *directory) {
     }
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1728, 1117, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     free(pixels);
+    /* The second observation reuses the texture inventory and must leave the
+       original error state clear even without a fresh texture readback. */
+    FILE *cached_draw = tmpfile();
+    if (!cached_draw || !eu4_gfx_frame_trace_test_write_cached_draw(cached_draw) ||
+        glGetError() != GL_NO_ERROR || !eu4_gfx_frame_trace_test_write_cached_draw(cached_draw))
+        return 1;
+    fclose(cached_draw);
+    GLenum cached_error = glGetError();
+    if (cached_error != GL_NO_ERROR) {
+        fprintf(stderr, "cached draw observation GL error 0x%x\n", cached_error);
+        return 1;
+    }
     selected_state(before);
     GLuint query = 0, samples = 0;
     glGenQueries(1, &query);

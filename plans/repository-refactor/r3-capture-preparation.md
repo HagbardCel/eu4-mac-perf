@@ -195,3 +195,19 @@ and host inspection verified cleanup, settings restoration and a free lease.
 The error could still originate before the selected entry probes or within
 them. The diagnostic supplies no further original observation. There was
 no automatic retry, alternate workload, evidence publication or policy change.
+
+### Legacy sampler query reproduction
+
+An offline x86-64 legacy CGL context on the same Apple implementation did
+not advertise `GL_ARB_sampler_objects`. Querying `GL_SAMPLER_BINDING` in that
+context returned `GL_INVALID_ENUM`. The native recorder fixture reproduced
+that pending error after a draw-state observation reused its texture
+inventory. A fresh readback consumes errors in its existing readback checks,
+so the earlier fixture did not exercise this failure. In the corrected
+original run, draw 270 reused cube texture 428, previously captured at draw
+257, and the manifest records 2,277 texture cache hits with zero invalidations.
+
+The recorder now reads a separate sampler object's binding only when the
+current GL context supports sampler objects. The legacy path still reads the
+bound texture's effective filtering and wrapping state. The selected error
+gate is unchanged.

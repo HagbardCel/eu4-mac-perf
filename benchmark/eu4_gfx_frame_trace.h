@@ -112,6 +112,7 @@ int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
 /* Exercise the same submission and target observations in a GL test context. */
 void eu4_gfx_frame_trace_test_begin_arrays(unsigned mode, int first, int count);
 int eu4_gfx_frame_trace_test_write_arrays(FILE *output);
+int eu4_gfx_frame_trace_test_write_cached_draw(FILE *output);
 int eu4_gfx_frame_trace_test_observe(const char *directory, int event,
                                      const char *timing, const char *kind,
                                      int texture_name, char *out_record,
