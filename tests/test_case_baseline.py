@@ -396,7 +396,7 @@ class BaselineIdentityTests(unittest.TestCase):
         digest = case_baseline.sha256_file
         for name in (
             "gfx_independent_replay.py", "gfx_artifacts.py",
-            "replay_host_dependencies.py", "m6_compare.py", "gfx_observation.py",
+            "replay_host_dependencies.py", "gfx_frame_pixels.py", "gfx_observation.py",
         ):
             source = case_baseline.ROOT / "automation" / name
             member = f"automation/{name}"

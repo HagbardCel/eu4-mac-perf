@@ -42,6 +42,7 @@ import uuid
 from pathlib import Path
 
 from automation import gfx_replay_case
+from automation.gfx_artifacts import sha256_file
 
 SCHEMA = "gfx-case-locator/v1"
 LOCATOR_DIR = "locators"
@@ -68,14 +69,7 @@ def _json(path: Path) -> dict:
 
 
 def _sha(path: Path) -> str | None:
-    path = Path(path)
-    if not path.is_file():
-        return None
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return sha256_file(path) if path.is_file() else None
 
 
 def _now() -> str:
@@ -212,6 +206,11 @@ def _identity_conflict(expected: dict, actual: dict) -> str | None:
     return None
 
 
+def _trusted_reference(case_dir: Path) -> bool:
+    return ((case_dir / "trusted-evidence.json").exists()
+            and not (case_dir / "case.json").exists())
+
+
 def case_identity(case_dir: Path | str) -> dict:
     """Capture and manifest identity of one packaged case.
 
@@ -221,8 +220,16 @@ def case_identity(case_dir: Path | str) -> dict:
     seal keeps its manifest identity and an explicit limitation.
     """
     case_dir = Path(case_dir).resolve()
-    manifest = _json(case_dir / "case.json")
-    seal_path = gfx_replay_case.case_capture_seal_path(case_dir, manifest)
+    if _trusted_reference(case_dir):
+        from automation import gfx_prefix_check
+
+        manifest_path = case_dir / "trusted-evidence.json"
+        frame, manifest = gfx_prefix_check.trusted_frame_path(case_dir, portable=True)
+        seal_path = frame / "frame-seal.json"
+    else:
+        manifest_path = case_dir / "case.json"
+        manifest = _json(manifest_path)
+        seal_path = gfx_replay_case.case_capture_seal_path(case_dir, manifest)
     seal = _json(seal_path) if seal_path is not None else {}
     seal_file = None
     if seal_path is not None:
@@ -237,7 +244,7 @@ def case_identity(case_dir: Path | str) -> dict:
         "event_stream_sha256": seal.get("event_stream_sha256"),
         "seal_sha256": _sha(seal_path) if seal_path is not None else None,
         "seal_file": seal_file,
-        "manifest_sha256": _sha(case_dir / "case.json"),
+        "manifest_sha256": _sha(manifest_path),
         "schema": manifest.get("schema"),
     }
 
@@ -250,7 +257,9 @@ def locator_key(identity: dict) -> str:
                          str(identity.get("session_id") or "session"))[:80]
         frame = re.sub(r"[^A-Za-z0-9._-]+", "-",
                        str(identity.get("capture_frame_id") or "frame"))[:40]
-        return f"{session}-{frame}-{seal[:16]}"
+        key = f"{session}-{frame}-{seal[:16]}"
+        return (f"{key}-reference" if identity.get("schema") in
+                ("gfx-trusted-evidence/v1", "m7-trusted-evidence/v1") else key)
     manifest = identity.get("manifest_sha256")
     if not isinstance(manifest, str) or len(manifest) != 64:
         raise CaseLocatorError("case_identity", "case has no usable identity")
@@ -258,6 +267,8 @@ def locator_key(identity: dict) -> str:
 
 
 def _limitations(identity: dict, verification: dict) -> list[str]:
+    if identity.get("schema") in ("gfx-trusted-evidence/v1", "m7-trusted-evidence/v1"):
+        return ["verified original evidence; workload applicability is evaluated separately"]
     limitations: list[str] = []
     if not identity.get("seal_sha256"):
         limitations.append(
@@ -295,6 +306,16 @@ def _verification_summary(verification: dict) -> dict:
 
 def _verify(case_dir: Path) -> dict:
     try:
+        if _trusted_reference(case_dir):
+            from automation import gfx_prefix_check, gfx_frame
+
+            problem = _symlink_problem(case_dir)
+            if problem:
+                return {"ok": False, "problems": [problem]}
+            frame, _ = gfx_prefix_check.trusted_frame_path(case_dir, portable=True)
+            trusted = gfx_prefix_check.verify_trusted_evidence(case_dir, frame)
+            gfx_frame.load_seal(frame, trusted_evidence=trusted)
+            return {"ok": True, "files": len(trusted["files"]) + 1}
         return gfx_replay_case.verify(case_dir)
     except Exception as exc:  # noqa: BLE001 - every verifier failure is closed
         return {"ok": False,
@@ -569,9 +590,14 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
                 raise CaseLocatorError(
                     "publish_identity_changed",
                     f"copied case identity changed: {conflict}")
-            target.parent.mkdir(parents=True, exist_ok=True)
             try:
-                os.rename(staging, target)
+                if _trusted_reference(staging):
+                    # A read-only directory cannot be reparented on macOS.
+                    # Publish its writable staging parent instead.
+                    os.rename(staging_parent, target.parent)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.rename(staging, target)
             except OSError as exc:
                 # A concurrent publisher may have won the same key.  Verify
                 # both its bytes and its complete identity before adopting it.
@@ -802,8 +828,6 @@ def _resolve_match(root: Path, locator: dict) -> dict:
             current_verification="missing_payload",
             recorded_verification=locator.get("verification")))
     verification = _verify(target)
-    identity = case_identity(target)
-    expected = locator.get("identity") or {}
     if verification.get("ok") is not True:
         return _identity_view(locator, dict(
             locator, state="digest_mismatch", resolved_path=str(target),
@@ -813,7 +837,8 @@ def _resolve_match(root: Path, locator: dict) -> dict:
             verification=_verification_summary(verification),
             detail="; ".join(str(item) for item in
                              (verification.get("problems") or [])[:4])))
-    conflict = _identity_conflict(expected, identity)
+    identity = case_identity(target)
+    conflict = _identity_conflict(locator.get("identity") or {}, identity)
     if conflict is not None:
         return _identity_view(locator, dict(
             locator, state="digest_mismatch", resolved_path=str(target),
@@ -1108,6 +1133,74 @@ def _parser() -> argparse.ArgumentParser:
     inventory_parser.add_argument("--offset", type=int, default=0)
     inventory_parser.add_argument("--limit", type=int, default=None)
     return parser
+
+
+def _reference_roots(roots: list | None, workspace: Path):
+    from automation.state import outside_workspace
+
+    for root in roots or []:
+        root = {"path": root, "required": True} if isinstance(root, str) else root
+        path = outside_workspace(Path(root["path"]), workspace)
+        if path.is_dir():
+            yield path
+        elif root["required"]:
+            raise CaseLocatorError("missing_required_evidence_root", str(path))
+
+
+def resolve_legacy_reference(roots, reference: dict, workspace: Path) -> Path:
+    """Resolve a fixed archive member. Its format owner verifies committed digests."""
+    from automation.state import outside_workspace
+
+    if path := reference.get("path"):
+        return outside_workspace(Path(path), workspace)
+    paths = [outside_workspace(root / reference["archive_path"], workspace)
+             for root in _reference_roots(roots, workspace)]
+    matches = [path for path in paths if path.is_dir()]
+    if len(matches) != 1:
+        raise CaseLocatorError("invalid_provenance" if matches else "missing_original_payload",
+                               "historical case has no unique archive location")
+    return matches[0]
+
+
+def resolve_sealed_reference(roots: list | None, reference: dict, workspace: Path):
+    from automation import gfx_prefix_check, gfx_frame
+    from automation.state import outside_workspace
+
+    matches = []
+    if not isinstance(roots, list) or not roots:
+        return None, {"verdict": "missing_original_observation",
+                      "problems": ["operator evidence roots are unconfigured"]}
+    try:
+        roots = list(_reference_roots(roots, workspace))
+    except CaseLocatorError as exc:
+        return None, {"verdict": exc.kind, "problems": [str(exc)]}
+    for root_path in roots:
+        located = locate(root_path, key=reference["key"])
+        if located["state"] == "unknown":
+            continue
+        if located["state"] == "missing_payload":
+            return None, {"verdict": "missing_original_payload",
+                          "problems": [f"{root_path}: locator payload is missing"]}
+        if not located["safe_to_reuse"]:
+            return None, {"verdict": "invalid_provenance",
+                          "problems": [f"{root_path}: {located['state']}"]}
+        matches.extend(located["matches"])
+    if len(matches) != 1:
+        return None, {"verdict": "invalid_provenance" if matches else "missing_original_observation",
+                      "problems": ["trusted reference has no unique verified locator"]}
+    row = matches[0]
+    if any(row["identity"].get(key) != reference.get(key)
+           for key in ("manifest_sha256", "seal_sha256")):
+        return None, {"verdict": "invalid_provenance", "problems": ["locator identity differs"]}
+    root = outside_workspace(Path(row["resolved_path"]), workspace)
+    try:
+        frame, _ = gfx_prefix_check.trusted_frame_path(root, portable=True)
+        trusted = gfx_prefix_check.verify_trusted_evidence(root, frame)
+        trace = gfx_frame.load_trace(frame)
+        seal = gfx_frame.load_seal(frame, trace=trace, trusted_evidence=trusted)
+    except (OSError, ValueError, gfx_prefix_check.PrefixCheckError, gfx_frame.FrameError) as exc:
+        return None, {"verdict": "invalid_provenance", "problems": [str(exc)]}
+    return (frame, trace, seal, trusted), None
 
 
 def main(argv: list[str] | None = None) -> int:

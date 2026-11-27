@@ -133,7 +133,7 @@ class EfficiencyTests(unittest.TestCase):
             {"type": "tool/call", "time": 1000, "data": {
                 "callId": "b1", "name": "bash",
                 "arguments": {"command":
-                              "python3 -m automation.m6_frame capture "
+                              "python3 -m automation.gfx_frame capture "
                               "--output /tmp/cap"}}},
             {"type": "tool/result", "time": 2000, "data": {
                 "toolCallId": "b1",
@@ -163,7 +163,7 @@ class EfficiencyTests(unittest.TestCase):
             {"type": "tool/call", "data": {
                 "callId": "search", "name": "bash",
                 "arguments": {"command":
-                              "rg 'python3 -m automation.m6_frame capture' "
+                              "rg 'python3 -m automation.gfx_frame capture' "
                               "analysis/m7/post206/reproduce.md"}}},
             {"type": "tool/result", "data": {
                 "toolCallId": "search",
@@ -172,7 +172,7 @@ class EfficiencyTests(unittest.TestCase):
             {"type": "tool/call", "data": {
                 "callId": "launch", "name": "bash",
                 "arguments": {"command":
-                              "cd /tmp && python3 -m automation.m6_frame "
+                              "cd /tmp && python3 -m automation.gfx_frame "
                               "capture --output /tmp/x"}}},
             {"type": "tool/result", "data": {
                 "toolCallId": "launch",
@@ -472,7 +472,7 @@ class GoalPhaseTests(unittest.TestCase):
             {"type": "tool/call", "time": 1000, "data": {
                 "callId": "help", "name": "bash",
                 "arguments": {"command":
-                              "python3 -m automation.m6_frame capture --help"}}},
+                              "python3 -m automation.gfx_frame capture --help"}}},
             {"type": "tool/result", "time": 1100, "data": {
                 "toolCallId": "help", "message": {"isError": False,
                                                   "content": []}}},
@@ -739,42 +739,42 @@ class LaunchCommandBoundaryTests(unittest.TestCase):
 
     def test_command_at_string_start(self):
         value = self.analyze(
-            "python3 -m automation.m6_frame capture --output /tmp/a")
+            "python3 -m automation.gfx_frame capture --output /tmp/a")
         self.assertEqual(value["eu4_launches"]["count"], 1)
 
     def test_command_after_and_semicolon_and_newline(self):
         value = self.analyze(
-            "cd /tmp && python3 -m automation.m6_frame capture --output /tmp/a\n"
-            "echo hi; python3 -m automation.m6_frame capture --output /tmp/b")
+            "cd /tmp && python3 -m automation.gfx_frame capture --output /tmp/a\n"
+            "echo hi; python3 -m automation.gfx_frame capture --output /tmp/b")
         self.assertEqual(value["eu4_launches"]["count"], 2)
 
     def test_multiple_real_invocations_in_one_script(self):
         value = self.analyze(
-            "python3 -m automation.m6_frame capture --output /tmp/a; "
-            "python3 -m automation.m6_frame capture --output /tmp/b; "
-            "python3 -m automation.m6_frame capture --output /tmp/c")
+            "python3 -m automation.gfx_frame capture --output /tmp/a; "
+            "python3 -m automation.gfx_frame capture --output /tmp/b; "
+            "python3 -m automation.gfx_frame capture --output /tmp/c")
         self.assertEqual(value["eu4_launches"]["count"], 3)
 
     def test_documentation_search_and_printed_command_are_not_launches(self):
         value = self.analyze(
-            "rg 'python3 -m automation.m6_frame capture' "
+            "rg 'python3 -m automation.gfx_frame capture' "
             "analysis/m7/post206/reproduce.md\n"
-            "echo 'python3 -m automation.m6_frame capture --output /tmp/a'")
+            "echo 'python3 -m automation.gfx_frame capture --output /tmp/a'")
         self.assertEqual(value["eu4_launches"]["count"], 0)
 
     def test_heredoc_source_text_is_not_a_launch(self):
         value = self.analyze(
             "cat > /tmp/note.txt <<'PY'\n"
-            "python3 -m automation.m6_frame capture --output /tmp/a\n"
+            "python3 -m automation.gfx_frame capture --output /tmp/a\n"
             "PY")
         self.assertEqual(value["eu4_launches"]["count"], 0)
 
     def test_real_command_after_heredoc_is_counted(self):
         value = self.analyze(
             "cat > /tmp/note.txt <<'PY'\n"
-            "python3 -m automation.m6_frame capture --output /tmp/a\n"
+            "python3 -m automation.gfx_frame capture --output /tmp/a\n"
             "PY\n"
-            "python3 -m automation.m6_frame capture --output /tmp/b")
+            "python3 -m automation.gfx_frame capture --output /tmp/b")
         self.assertEqual(value["eu4_launches"]["count"], 1)
 
 
@@ -796,7 +796,7 @@ class PhysicalLaunchJoinTests(unittest.TestCase):
 
         call("capture", 1000,
              f'export EU4_CAMPAIGN_STATE="$PWD/{self.STATE}" && '
-             f"python3.14 -m automation.m6_frame capture "
+             f"python3.14 -m automation.gfx_frame capture "
              f"--output {self.OUTPUT}",
              "started background job bash-1")
         if claim:
@@ -855,7 +855,7 @@ class PhysicalLaunchJoinTests(unittest.TestCase):
         events.append({"type": "tool/call", "time": 1000, "data": {
             "callId": "capture", "name": "bash",
             "arguments": {"command":
-                          "python3.14 -m automation.m6_frame capture "
+                          "python3.14 -m automation.gfx_frame capture "
                           "--output .local/m7/capture-a"}}})
         events.append({"type": "tool/result", "time": 1100, "data": {
             "toolCallId": "capture", "message": {"isError": False, "content": [

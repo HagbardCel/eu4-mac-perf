@@ -8,7 +8,7 @@
  * boundary around eu4_gfx_draw_encode_into.
  *
  * Usage:
- *   gfx_m5_replay_host --reference <gl-ref-dir> --out <dir> [--constant-words <n>]
+ *   gfx_sprite_replay_host --reference <gl-ref-dir> --out <dir> [--constant-words <n>]
  */
 
 #import "../renderer/metal/eu4_gfx_buffers.h"
@@ -123,7 +123,7 @@ static id<MTLTexture> make_texture(id<MTLDevice> device, uint32_t width,
     return [device newTextureWithDescriptor:descriptor];
 }
 
-static void boot(void) {
+static void boot(const char *event_directory) {
     g_image = (uint8_t *)mmap(NULL, kImageBytes, PROT_READ | PROT_WRITE,
                               MAP_PRIVATE | MAP_ANON, -1, 0);
     if (g_image == MAP_FAILED) {
@@ -146,10 +146,10 @@ static void boot(void) {
     eu4_gfx_set_layer((__bridge void *)layer);
     eu4_gfx_publish_physical_geometry(64, 64);
     char dir[] = "/tmp/eu4-m5-replay-XXXXXX";
-    if (mkdtemp(dir) == NULL) {
+    if (event_directory == NULL && mkdtemp(dir) == NULL) {
         fail("event dir");
     }
-    eu4_metal_events_set_dir(dir);
+    eu4_metal_events_set_dir(event_directory != NULL ? event_directory : dir);
     eu4_gfx_enable_game_window();
     uint8_t handle[0x20];
     memset(handle, 0, sizeof handle);
@@ -203,7 +203,9 @@ int main(int argc, char **argv) {
         fail("captured input size mismatch");
     }
 
-    boot();
+    char event_path[1200];
+    snprintf(event_path, sizeof event_path, "%s/events", out_dir);
+    boot(getenv("EU4_QUALIFICATION_WORKER") != NULL ? event_path : NULL);
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     id<MTLCommandQueue> queue = [device newCommandQueue];
     if (queue == nil) {

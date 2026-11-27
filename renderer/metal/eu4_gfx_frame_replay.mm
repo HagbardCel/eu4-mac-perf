@@ -529,6 +529,12 @@ static NSData *read_file(NSString *path) {
     return [NSData dataWithContentsOfFile:path];
 }
 
+/* Qualification reads the worker's private artifacts after it exits. The
+   trusted supervisor publishes the receipt after validating every file. */
+static BOOL write_replay_artifact(NSData *data, NSString *path) {
+    return [data writeToFile:path atomically:getenv("EU4_QUALIFICATION_WORKER") == NULL];
+}
+
 static NSArray *read_json_lines(NSString *path, NSError **error) {
     NSString *text = [NSString stringWithContentsOfFile:path
                                               encoding:NSUTF8StringEncoding
@@ -2524,7 +2530,7 @@ static NSData *uv2_probe_write_descriptor(NSString *directory, NSString *file,
                               withIntermediateDirectories:YES attributes:nil error:NULL];
     NSData *json = [NSJSONSerialization dataWithJSONObject:document
                                                    options:NSJSONWritingPrettyPrinted error:NULL];
-    return [json writeToFile:[directory stringByAppendingPathComponent:file] atomically:YES]
+    return write_replay_artifact(json, [directory stringByAppendingPathComponent:file])
         ? json : nil;
 }
 
@@ -2736,7 +2742,7 @@ static NSDictionary *uv2_probe_write_outputs(NSString *output_path) {
                               withIntermediateDirectories:YES
                                                attributes:nil
                                                     error:NULL];
-    if (![data writeToFile:raw_path atomically:YES]) {
+    if (!write_replay_artifact(data, raw_path)) {
         return @{@"status": @"error", @"reason": @"probe_raw_write"};
     }
     /* The normal event target is read at the event boundary by the existing
@@ -4847,7 +4853,7 @@ static BOOL capture_target_to_file(NSDictionary *target_info, NSString *path,
     flip_rows((const uint8_t *)buffer.contents, flipped, width, height, 4);
     NSData *data = [NSData dataWithBytes:flipped length:bytes_per_row * height];
     free(flipped);
-    if (![data writeToFile:path atomically:YES]) {
+    if (!write_replay_artifact(data, path)) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:102
                                      userInfo:@{NSLocalizedDescriptionKey:
@@ -5613,11 +5619,8 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                                            options:
                                                                NSJSONWritingPrettyPrinted
                                                              error:NULL];
-            BOOL written =
-                json != nil &&
-                [json writeToFile:[output_path stringByAppendingPathComponent:
-                                            @"replay.json"]
-                       atomically:YES];
+            BOOL written = write_replay_artifact(
+                json, [output_path stringByAppendingPathComponent:@"replay.json"]);
             if (written) {
                 g_state.current_result_json = YES;
             }
@@ -6289,7 +6292,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                               width, height, 4);
                     NSString *path = [output_path stringByAppendingPathComponent:@"metal-frame.bgra"];
                     NSData *data = [NSData dataWithBytes:readback length:bytes_per_row * height];
-                    readback_ok = [data writeToFile:path atomically:YES];
+                    readback_ok = write_replay_artifact(data, path);
                     result[@"frame"] = @{
                         @"width": @(width),
                         @"height": @(height),
@@ -6365,10 +6368,8 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                     [lines appendBytes:"\n" length:1];
                 }
             }
-            provenance_written = [lines writeToFile:[output_path
-                                   stringByAppendingPathComponent:
-                                       @"replay-provenance.jsonl"]
-                    atomically:YES];
+            provenance_written = write_replay_artifact(
+                lines, [output_path stringByAppendingPathComponent:@"replay-provenance.jsonl"]);
         }
         if (g_checkpoints_by_event != nil) {
             result[@"checkpoints"] = g_checkpoint_results;
@@ -6432,10 +6433,8 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         NSData *json = [NSJSONSerialization dataWithJSONObject:result
                                                        options:NSJSONWritingPrettyPrinted
                                                          error:NULL];
-        BOOL json_written =
-            json != nil &&
-            [json writeToFile:[output_path stringByAppendingPathComponent:@"replay.json"]
-                   atomically:YES];
+        BOOL json_written = write_replay_artifact(
+            json, [output_path stringByAppendingPathComponent:@"replay.json"]);
         if (!json_written) {
             failed++;
             NSString *artifact_error = @"replay.json write failed";

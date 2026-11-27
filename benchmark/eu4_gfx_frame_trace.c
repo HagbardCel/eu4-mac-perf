@@ -53,6 +53,7 @@ extern int eu4_gfx_frame_observe_emit(const uint8_t *, uint32_t, uint32_t,
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <dlfcn.h>
@@ -273,6 +274,7 @@ static struct {
     int gl_draw_buffer;
     int gl_read_buffer;
     char pre_image_json[2048];
+    uint64_t pre_image_call_id;
     int pre_image_valid;
     char seed_json[2048];
     int seed_width;
@@ -307,6 +309,7 @@ static struct {
     int prefix_end;
     int prefix_sparse;
     int prefix_event_count;
+    uint64_t prefix_caller;
     int prefix_events[FTRACE_MAX_PREFIX_EVENTS];
     int prefix_depth_stencil;
     int prefix_count;
@@ -1058,6 +1061,79 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
     return accepted;
 }
 
+/* Checked at engine entry, the effective submission, and engine exit.
+ * Readback may temporarily bind a different framebuffer, so observe first. */
+typedef struct {
+    GLint framebuffer, read_framebuffer, draw_buffer, read_buffer;
+    GLint attachment, level, samples, depth, stencil, attachment_type, other_buffer;
+    GLenum framebuffer_status, error;
+    unsigned queried;
+} selected_draw_target;
+
+enum {
+    SELECTED_BINDINGS = 1u << 0, SELECTED_STATUS = 1u << 1,
+    SELECTED_TYPE = 1u << 2, SELECTED_ATTACHMENT = 1u << 3,
+    SELECTED_BUFFERS = 1u << 4, SELECTED_ERROR = 1u << 5,
+};
+
+static int selected_target_equal(const selected_draw_target *a,
+                                 const selected_draw_target *b) {
+    /* The callers have already validated the target contracts. */
+    return a->framebuffer == b->framebuffer &&
+           a->read_framebuffer == b->read_framebuffer &&
+           a->draw_buffer == b->draw_buffer && a->read_buffer == b->read_buffer &&
+           a->attachment == b->attachment && a->level == b->level &&
+           a->samples == b->samples && a->depth == b->depth && a->stencil == b->stencil;
+}
+
+static int selected_target(selected_draw_target *target, int check_error) {
+    GLint type = 0, buffers = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target->framebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &target->read_framebuffer);
+    glGetIntegerv(GL_DRAW_BUFFER, &target->draw_buffer);
+    glGetIntegerv(GL_READ_BUFFER, &target->read_buffer);
+    target->queried |= SELECTED_BINDINGS;
+    if (target->framebuffer <= 0 || target->read_framebuffer != target->framebuffer ||
+        target->draw_buffer != GL_COLOR_ATTACHMENT0 || target->read_buffer != GL_COLOR_ATTACHMENT0)
+        return 0;
+    target->framebuffer_status = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+    target->queried |= SELECTED_STATUS;
+    if (target->framebuffer_status != GL_FRAMEBUFFER_COMPLETE) return 0;
+#define ATTACHMENT(slot, field, value) glGetFramebufferAttachmentParameteriv( \
+    GL_DRAW_FRAMEBUFFER, (slot), GL_FRAMEBUFFER_ATTACHMENT_##field, &(value))
+    ATTACHMENT(GL_COLOR_ATTACHMENT0, OBJECT_TYPE, type);
+    target->attachment_type = type;
+    target->queried |= SELECTED_TYPE;
+    if (type != GL_TEXTURE) return 0;
+    ATTACHMENT(GL_COLOR_ATTACHMENT0, OBJECT_NAME, target->attachment);
+    ATTACHMENT(GL_COLOR_ATTACHMENT0, TEXTURE_LEVEL, target->level);
+    ATTACHMENT(GL_DEPTH_ATTACHMENT, OBJECT_TYPE, target->depth);
+    ATTACHMENT(GL_STENCIL_ATTACHMENT, OBJECT_TYPE, target->stencil);
+#undef ATTACHMENT
+    glGetIntegerv(GL_SAMPLES, &target->samples);
+    target->queried |= SELECTED_ATTACHMENT;
+    glGetIntegerv(GL_MAX_DRAW_BUFFERS, &buffers);
+    for (GLint i = 1; i < buffers; i++) {
+        GLint other = 0;
+        glGetIntegerv(GL_DRAW_BUFFER0 + i, &other);
+        if (other != GL_NONE) {
+            target->other_buffer = other;
+            target->queried |= SELECTED_BUFFERS;
+            return 0;
+        }
+    }
+    if (buffers > 0) target->queried |= SELECTED_BUFFERS;
+    if (target->attachment <= 0 || target->level != 0 ||
+        target->samples || target->depth || target->stencil) return 0;
+    /* This established query consumes an error. Inspect it for a potentially
+       valid observation only, never to enrich an already-refused result. */
+    if (check_error) {
+        target->queried |= SELECTED_ERROR;
+        target->error = glGetError();
+    }
+    return target->error == GL_NO_ERROR;
+}
+
 /* Entry-side draw arguments. The gateway's exit frame holds post-call
  * registers, so every engine argument the packet needs is captured here. */
 typedef struct {
@@ -1074,6 +1150,53 @@ typedef struct {
 } pending_draw;
 
 static _Thread_local pending_draw g_pending;
+static _Thread_local struct {
+    selected_draw_target entry, submission;
+    CGLContextObj context;
+    uint64_t call_id;
+    unsigned count;
+    const char *failure;
+    int mode, first, vertices;
+    int observed_mode, observed_first, observed_vertices;
+    int submission_context_matches;
+} g_selected;
+
+static void selected_failure(const char *reason) {
+    if (g_selected.failure == NULL) g_selected.failure = reason;
+}
+
+static void begin_selected(uint64_t call_id, int supported, int mode, int first, int count) {
+    memset(&g_selected, 0, sizeof(g_selected));
+    g_selected.call_id = call_id;
+    g_selected.context = CGLGetCurrentContext();
+    g_selected.mode = mode;
+    g_selected.first = first;
+    g_selected.vertices = count;
+    if (!supported) selected_failure("unsupported_draw");
+    else if (g_selected.context == NULL) selected_failure("entry_context");
+    else if (!selected_target(&g_selected.entry, 1)) selected_failure("entry_target");
+}
+
+void eu4_gfx_frame_trace_submit_arrays(unsigned mode, int first, int count) {
+    if (!g_selected.call_id) return;
+    if (++g_selected.count != 1) {
+        selected_failure("multiple_submissions");
+        return;
+    }
+    g_selected.observed_mode = (int)mode;
+    g_selected.observed_first = first;
+    g_selected.observed_vertices = count;
+    g_selected.submission_context_matches = g_selected.context == CGLGetCurrentContext();
+    if (!g_selected.submission_context_matches) {
+        selected_failure("submission_context");
+        return;
+    }
+    if (mode != (unsigned)g_selected.mode || first != g_selected.first ||
+        count != g_selected.vertices) selected_failure("submission_arguments");
+    if (!selected_target(&g_selected.submission, g_selected.failure == NULL)) selected_failure("submission_target");
+    else if (!selected_target_equal(&g_selected.entry, &g_selected.submission))
+        selected_failure("submission_target_changed");
+}
 
 static void sha256_hex(const void *data, size_t size, char out[65]) {
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
@@ -1754,11 +1877,25 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     const char *prefix_end = getenv("EU4_GFX_FRAME_TRACE_PREFIX_END");
     const char *observe_events =
         getenv("EU4_GFX_FRAME_TRACE_OBSERVE_EVENTS");
-    if (prefix_end != NULL && prefix_end[0] != 0 &&
-        observe_events != NULL && observe_events[0] != 0) {
+    const char *observe_caller =
+        getenv("EU4_GFX_FRAME_TRACE_OBSERVE_CALLER");
+    int select_prefix = prefix_end != NULL && prefix_end[0] != 0;
+    int select_events = observe_events != NULL && observe_events[0] != 0;
+    int select_caller = observe_caller != NULL && observe_caller[0] != 0;
+    if (select_prefix + select_events + select_caller > 1) {
         return -1;
     }
-    if (prefix_end != NULL && prefix_end[0] != 0) {
+    if (select_caller) {
+        if (parse_u64(observe_caller, &g.prefix_caller) != 0 ||
+            g.prefix_caller == 0) {
+            return -1;
+        }
+        g.prefix_enabled = 1;
+        g.prefix_sparse = 1;
+        g.prefix_event_count = 1;
+        g.prefix_events[0] = -1;
+        g.prefix_end = FTRACE_MAX_PREFIX_EVENTS - 1;
+    } else if (prefix_end != NULL && prefix_end[0] != 0) {
         uint64_t value = 0;
         if (parse_u64(prefix_end, &value) != 0 ||
             value >= (uint64_t)FTRACE_MAX_PREFIX_EVENTS) {
@@ -3014,6 +3151,12 @@ static int capture_target_pixels(const char *prefix, const char *member,
     GLint framebuffer = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
     GLint width = 0, height = 0;
+    GLint object_type = 0, object_name = 0, level = 0, internal_format = 0;
+    int selected_pre = g.prefix_caller != 0 && strcmp(member, "pre_image") == 0;
+    if (selected_pre && (framebuffer == 0 ||
+            glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)) {
+        return -1;
+    }
     if (framebuffer == 0) {
         GLint viewport[4] = {0, 0, 0, 0};
         glGetIntegerv(GL_VIEWPORT, viewport);
@@ -3027,7 +3170,6 @@ static int capture_target_pixels(const char *prefix, const char *member,
             height = viewport[3];
         }
     } else {
-        GLint object_type = 0, object_name = 0, level = 0;
         glGetFramebufferAttachmentParameteriv(
             GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
             GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &object_type);
@@ -3045,6 +3187,10 @@ static int capture_target_pixels(const char *prefix, const char *member,
                                      &width);
             glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT,
                                      &height);
+            if (selected_pre) {
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_INTERNAL_FORMAT,
+                                         &internal_format);
+            }
             glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
         } else {
             GLint previous_renderbuffer = 0;
@@ -3058,6 +3204,10 @@ static int capture_target_pixels(const char *prefix, const char *member,
         }
     }
     if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
+        return -1;
+    }
+    if (selected_pre && (object_type != GL_TEXTURE || object_name <= 0 || level != 0 ||
+                         internal_format != GL_RGBA8)) {
         return -1;
     }
     size_t bytes = (size_t)width * (size_t)height * 4;
@@ -3079,8 +3229,14 @@ static int capture_target_pixels(const char *prefix, const char *member,
     free(pixels);
     jprintf(out,
             "\"%s\":{\"width\":%d,\"height\":%d,\"file\":\"%s\","
-            "\"sha256\":\"%s\"}",
+            "\"sha256\":\"%s\"",
             member, width, height, blob_name, blob_sha);
+    if (selected_pre) {
+        jprintf(out, ",\"framebuffer\":%d,\"attachment\":%d,\"level\":%d,"
+                "\"internal_format\":%d,\"pixel_format\":\"BGRA8\",\"origin\":\"lower_left\"",
+                framebuffer, object_name, level, internal_format);
+    }
+    jprintf(out, "}");
     if (out_width != NULL) {
         *out_width = width;
     }
@@ -3137,6 +3293,10 @@ static int prefix_complete_locked(void) {
 }
 
 static void prefix_reset_locked(void) {
+    if (g.prefix_caller != 0) {
+        g.prefix_events[0] = -1;
+        g.prefix_end = FTRACE_MAX_PREFIX_EVENTS - 1;
+    }
     if (g.prefix_observations != NULL) {
         fclose(g.prefix_observations);
         g.prefix_observations = NULL;
@@ -4127,10 +4287,34 @@ static int prefix_emit_texture_locked(int event, const char *timing,
     return prefix_emit_target_locked(event, timing, kind, texture_name);
 }
 
+static int sampler_objects_supported(void) {
+    const char *version = (const char *)glGetString(GL_VERSION);
+    int major = 0, minor = 0;
+    if (version == NULL || sscanf(version, "%d.%d", &major, &minor) != 2) return 0;
+    if (major > 3 || (major == 3 && minor >= 3)) return 1;
+    const char extension[] = "GL_ARB_sampler_objects";
+    if (major >= 3) {
+        const GLubyte *(*get_string_i)(GLenum, GLuint) = dlsym(RTLD_DEFAULT, "glGetStringi");
+        if (get_string_i == NULL) return 0;
+        GLint count = 0;
+        glGetIntegerv(0x821D /* GL_NUM_EXTENSIONS */, &count);
+        for (GLint index = 0; index < count; index++) {
+            const char *name = (const char *)get_string_i(GL_EXTENSIONS, (GLuint)index);
+            if (name != NULL && strcmp(name, extension) == 0) return 1;
+        }
+        return 0;
+    }
+    const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+    const char *match = extensions != NULL ? strstr(extensions, extension) : NULL;
+    return match != NULL && (match == extensions || match[-1] == ' ') &&
+           (match[sizeof(extension) - 1] == ' ' || match[sizeof(extension) - 1] == '\0');
+}
+
 static void capture_draw_state(json_out *out, int indexed, GLint mode, int first,
                                int count, int instance_count, int base_vertex,
                                uintptr_t master,
                                const eu4_gfx_observe_call *call) {
+    const int selected = g.prefix_caller != 0 && g.prefix_caller == call->caller_rva;
     char *target_json = NULL;
     size_t target_size = 0;
     FILE *target_stream = open_memstream(&target_json, &target_size);
@@ -4266,7 +4450,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
     jprintf(out, ",\"program\":{\"name\":%d", program);
     json_out sub = *out;
     jprintf(&sub, ",");
-    const char *cached_shaders = shader_cache_get((uint64_t)program);
+    const char *cached_shaders = selected ? NULL : shader_cache_get((uint64_t)program);
     if (cached_shaders != NULL) {
         jprintf(&sub, "%s", cached_shaders);
     } else {
@@ -4278,7 +4462,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
             capture_shaders((GLuint)program, &shader_out);
             fclose(shader_stream);
             if (!shader_out.failed && shader_json != NULL) {
-                shader_cache_put((uint64_t)program, shader_json);
+                if (!selected) shader_cache_put((uint64_t)program, shader_json);
                 jprintf(&sub, "%s", shader_json);
             }
             free(shader_json);
@@ -4297,6 +4481,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
     int emitted = 0;
     int captured_units[FTRACE_MAX_UNITS];
     int captured_count = 0;
+    const int sampler_objects = uniform_count > 0 && sampler_objects_supported();
     for (GLint i = 0; i < uniform_count; i++) {
         char name[256];
         GLsizei length = 0;
@@ -4346,7 +4531,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
             continue;
         }
         GLint sampler = 0;
-        glGetIntegerv(GL_SAMPLER_BINDING_VALUE, &sampler);
+        if (sampler_objects) glGetIntegerv(GL_SAMPLER_BINDING_VALUE, &sampler);
         GLint min_filter = 0, mag_filter = 0, wrap_s = 0, wrap_t = 0, wrap_r = 0,
               compare_mode = 0, compare_func = 0, base_level = 0,
               texture_max_level = 0;
@@ -4416,7 +4601,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
         char texture_name[64];
         snprintf(texture_name, sizeof(texture_name), "%d", binding);
         const char *cached_levels =
-            render_target_known(texture_name)
+            selected || render_target_known(texture_name)
                 ? NULL
                 : texture_cache_get(target, (unsigned)binding);
         if (cached_levels != NULL) {
@@ -4430,7 +4615,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
                 (void)read_texture(target, (GLuint)binding, &levels_out);
                 fclose(levels_stream);
                 if (!levels_out.failed && levels_json != NULL) {
-                    if (!render_target_known(texture_name)) {
+                    if (!selected && !render_target_known(texture_name)) {
                         texture_cache_put(target, (unsigned)binding,
                                           levels_json);
                     }
@@ -4464,7 +4649,7 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
     json_out attr = *out;
     jprintf(&attr, ",");
     if (capture_attributes((GLuint)program, indexed, first, count,
-                           instance_count, base_vertex, master, 0, &attr) != 0) {
+                           instance_count, base_vertex, selected ? 0 : master, 0, &attr) != 0) {
         attr.failed = 1;
     }
     if (attr.failed) {
@@ -4730,6 +4915,21 @@ static int write_frame_manifest(int complete, const char *reason) {
     const char *renderer = g.gl_renderer[0] ? g.gl_renderer : "";
     const char *version = g.gl_version[0] ? g.gl_version : "";
     fputs("{\"schema\":\"gfx-frame-trace/v1\",", file);
+#if defined(__x86_64__)
+    fputs("\"process_architecture\":\"x86_64\",", file);
+#elif defined(__aarch64__)
+    fputs("\"process_architecture\":\"arm64\",", file);
+#endif
+    const char *executable_sha = getenv("EU4_GFX_EXECUTABLE_SHA256");
+    if (executable_sha && strlen(executable_sha) == 64 &&
+        strspn(executable_sha, "0123456789abcdef") == 64)
+        fprintf(file, "\"executable_sha256\":\"%s\",", executable_sha);
+    char macos_build[64] = {0};
+    size_t build_size = sizeof(macos_build);
+    if (sysctlbyname("kern.osversion", macos_build, &build_size, NULL, 0) == 0 &&
+        build_size > 1 && build_size <= sizeof(macos_build) &&
+        strspn(macos_build, "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") == strlen(macos_build))
+        fprintf(file, "\"macos_build\":\"%s\",", macos_build);
     fprintf(file, "\"complete\":%s,", bool_text(complete));
     fprintf(file, "\"reason\":\"%s\",", reason != NULL ? reason : "");
     fprintf(file, "\"truncated\":%s,", bool_text(g.truncated));
@@ -5950,6 +6150,10 @@ static int read_observation_pixels(uint32_t framebuffer, GLenum read_buffer,
     if (pixels == NULL) {
         return -1;
     }
+    if (g.prefix_caller != 0 && glGetError() != GL_NO_ERROR) {
+        free(pixels);
+        return -1;
+    }
     observation_readback_guard guard;
     begin_observation_readback(&guard, framebuffer, read_buffer, texture);
     if (texture != 0) {
@@ -5959,6 +6163,10 @@ static int read_observation_pixels(uint32_t framebuffer, GLenum read_buffer,
                      pixels);
     }
     end_observation_readback(&guard);
+    if (g.prefix_caller != 0 && glGetError() != GL_NO_ERROR) {
+        free(pixels);
+        return -1;
+    }
     *out_pixels = pixels;
     return 0;
 }
@@ -6610,6 +6818,110 @@ int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
     return 0;
 }
 
+static void write_selected_target(json_out *out, const char *key,
+                                  const selected_draw_target *target) {
+    jprintf(out, ",\"%s\":{", key);
+    const char *separator = "";
+#define FIELD(group, name, member, format) do { \
+    jprintf(out, "%s\"" name "\":", separator); \
+    if (target->queried & (group)) jprintf(out, format, target->member); \
+    else jprintf(out, "null"); \
+    separator = ","; \
+} while (0)
+    FIELD(SELECTED_BINDINGS, "framebuffer", framebuffer, "%d");
+    FIELD(SELECTED_BINDINGS, "read_framebuffer", read_framebuffer, "%d");
+    FIELD(SELECTED_BINDINGS, "draw_buffer", draw_buffer, "%d");
+    FIELD(SELECTED_BINDINGS, "read_buffer", read_buffer, "%d");
+    FIELD(SELECTED_STATUS, "framebuffer_status", framebuffer_status, "%u");
+    FIELD(SELECTED_TYPE, "attachment_type", attachment_type, "%d");
+    FIELD(SELECTED_ATTACHMENT, "attachment", attachment, "%d");
+    FIELD(SELECTED_ATTACHMENT, "level", level, "%d");
+    FIELD(SELECTED_ATTACHMENT, "samples", samples, "%d");
+    FIELD(SELECTED_ATTACHMENT, "depth_type", depth, "%d");
+    FIELD(SELECTED_ATTACHMENT, "stencil_type", stencil, "%d");
+    FIELD(SELECTED_BUFFERS, "other_draw_buffer", other_buffer, "%d");
+    FIELD(SELECTED_ERROR, "gl_error", error, "%u");
+#undef FIELD
+    jprintf(out, "}");
+}
+
+static int capture_selected_submission(json_out *out, uint64_t call_id) {
+    selected_draw_target exit_target = {0};
+    int exit_context_matches = g_selected.context != NULL &&
+                               g_selected.context == CGLGetCurrentContext();
+    if (!call_id || g_selected.call_id != call_id) selected_failure("call_identity");
+    if (g_selected.count == 0) selected_failure("missing_submission");
+    if (!exit_context_matches) selected_failure("exit_context");
+    else if (!selected_target(&exit_target, g_selected.failure == NULL)) selected_failure("exit_target");
+    else if (!selected_target_equal(&g_selected.entry, &exit_target))
+        selected_failure("exit_target_changed");
+    if (g_selected.failure != NULL) {
+        jprintf(out, ",\"submission_failure\":{\"reason\":\"%s\",\"count\":%u,"
+                "\"expected_arguments\":[%d,%d,%d],\"submission_context_matches\":%s,"
+                "\"exit_context_matches\":%s", g_selected.failure, g_selected.count,
+                g_selected.mode, g_selected.first, g_selected.vertices,
+                g_selected.submission_context_matches ? "true" : "false",
+                exit_context_matches ? "true" : "false");
+        if (g_selected.count) {
+            jprintf(out, ",\"actual_arguments\":[%d,%d,%d]", g_selected.observed_mode,
+                    g_selected.observed_first, g_selected.observed_vertices);
+            if (g_selected.submission_context_matches)
+                write_selected_target(out, "submission_target", &g_selected.submission);
+        }
+        write_selected_target(out, "entry_target", &g_selected.entry);
+        if (exit_context_matches) write_selected_target(out, "exit_target", &exit_target);
+        jprintf(out, "}");
+        return 0;
+    }
+    jprintf(out, ",\"submission\":{\"api\":\"glDrawArrays\",\"mode\":%d,"
+            "\"first\":%d,\"count\":%d,\"call_id\":%llu,\"framebuffer\":%d,"
+            "\"read_framebuffer\":%d,\"attachment\":%d,\"level\":%d,"
+            "\"draw_buffer\":%d,\"read_buffer\":%d,\"samples\":%d,"
+            "\"depth_present\":false,\"stencil_present\":false,"
+            "\"target_continuity\":\"entry_submission_exit\"}",
+            g_selected.observed_mode, g_selected.observed_first, g_selected.observed_vertices,
+            (unsigned long long)call_id, exit_target.framebuffer,
+            exit_target.read_framebuffer, exit_target.attachment, exit_target.level,
+            exit_target.draw_buffer, exit_target.read_buffer, exit_target.samples);
+    return !out->failed;
+}
+
+static int write_selected_submission(json_out *out, uint64_t call_id) {
+    int complete = capture_selected_submission(out, call_id);
+    if (!complete) fail_capture_locked("selected_submission_or_target_unverified");
+    g_selected.call_id = 0;
+    return complete;
+}
+
+void eu4_gfx_frame_trace_test_begin_arrays(unsigned mode, int first, int count) {
+    begin_selected(1, 1, (int)mode, first, count);
+}
+
+int eu4_gfx_frame_trace_test_write_arrays(FILE *output) {
+    json_out out = {output, 0};
+    int ok = write_selected_submission(&out, 1);
+    jprintf(&out, ",\"fixture_capture_failed\":%s", g.capture_failed ? "true" : "false");
+    if (ok) {
+        const eu4_gfx_observe_call call = {.call_id = 1, .caller_rva = 1};
+        uint64_t caller = g.prefix_caller;
+        g.prefix_caller = call.caller_rva;
+        jprintf(&out, ",");
+        capture_draw_state(&out, 0, g_selected.mode, g_selected.first,
+                           g_selected.vertices, 1, 0, 0, &call);
+        g.prefix_caller = caller;
+        ok = !out.failed;
+    }
+    g_selected.call_id = 0;
+    return ok;
+}
+
+int eu4_gfx_frame_trace_test_write_cached_draw(FILE *output) {
+    json_out out = {output, 0};
+    const eu4_gfx_observe_call call = {.call_id = 1};
+    capture_draw_state(&out, 0, GL_TRIANGLE_STRIP, 0, 4, 1, 0, 0, &call);
+    return !out.failed;
+}
+
 /* Host-test only: run one real observation (shared readback and writer) and
    return its record.  Used by the synthetic GL-context state host. */
 int eu4_gfx_frame_trace_test_observe(const char *directory, int event,
@@ -6628,6 +6940,28 @@ int eu4_gfx_frame_trace_test_observe(const char *directory, int event,
     snprintf(blobs, sizeof(blobs), "%s/blobs", g.dir);
     if (mkdir_p(blobs) != 0) {
         return -1;
+    }
+    if (strcmp(timing, "selected_pre_draw") == 0) {
+        char *json = NULL;
+        size_t size = 0;
+        FILE *memory = open_memstream(&json, &size);
+        if (memory == NULL) {
+            return -1;
+        }
+        uint64_t caller = g.prefix_caller;
+        g.prefix_caller = 1;
+        json_out out = {memory, 0};
+        jprintf(&out, "{");
+        int status = capture_target_pixels("pre", "pre_image", &out, NULL, NULL);
+        jprintf(&out, "}");
+        fclose(memory);
+        g.prefix_caller = caller;
+        int ok = status == 0 && !out.failed && out_record != NULL && size < out_size;
+        if (ok) {
+            memcpy(out_record, json, size + 1);
+        }
+        free(json);
+        return ok ? 0 : -1;
     }
     if (g.prefix_observations != NULL) {
         fclose(g.prefix_observations);
@@ -6994,11 +7328,10 @@ void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
     /* Resolves happen before the first draw of the captured frame, so this
        observation is not gated on arming; the directory only exists once the
        capture has been configured. */
-    GLint read_fbo = 0, draw_fbo = 0, fbo = 0;
+    GLint read_fbo = 0, draw_fbo = 0;
     GLint type = 0, name = 0, level = 0;
-    glGetIntegerv(0x8CAA, &read_fbo); /* GL_READ_FRAMEBUFFER_BINDING */
-    glGetIntegerv(0x8CA6, &draw_fbo); /* GL_DRAW_FRAMEBUFFER_BINDING */
-    glGetIntegerv(0x8D40, &fbo);      /* GL_FRAMEBUFFER_BINDING */
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
     if (read_fbo != 0) {
         GLint previous = 0;
         glGetIntegerv(0x8CAA, &previous);
@@ -7024,7 +7357,7 @@ void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
             "{\"event\":\"resolve\",\"header\":\"0x%llx\","
             "\"read_fbo\":%d,\"draw_fbo\":%d,\"fbo\":%d,"
             "\"color_type\":%d,\"color_name\":%d,\"color_level\":%d}\n",
-            (unsigned long long)(uintptr_t)frame->rsi, read_fbo, draw_fbo, fbo,
+            (unsigned long long)(uintptr_t)frame->rsi, read_fbo, draw_fbo, draw_fbo,
             type, name, level);
     fclose(stream);
     if (body != NULL) {
@@ -9366,26 +9699,36 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         g_pending.base_vertex = base_vertex;
     }
     if (g.armed && g.events != NULL) {
-        for (int i = 0; i < g.pre_post_count; i++) {
-            if (g.pre_post_callers[i] != call->caller_rva) {
-                continue;
-            }
+        int selected_pre = !g.test_only && g.prefix_caller != 0 &&
+                           g.prefix_caller == call->caller_rva;
+        if (selected_pre) {
+            begin_selected(call->call_id, !indexed && !instanced,
+                           g_pending.mode, g_pending.first, g_pending.count);
+        }
+        int observe_pre = selected_pre;
+        for (int i = 0; i < g.pre_post_count && !observe_pre; i++) {
+            observe_pre = g.pre_post_callers[i] == call->caller_rva;
+        }
+        if (observe_pre) {
             char *pre_json = NULL;
             size_t pre_size = 0;
             FILE *pre_stream = open_memstream(&pre_json, &pre_size);
             if (pre_stream != NULL) {
                 json_out pre_out = {pre_stream, 0};
-                (void)capture_target_pixels("pre", "pre_image", &pre_out, NULL,
-                                            NULL);
+                int captured = capture_target_pixels("pre", "pre_image", &pre_out, NULL, NULL);
                 fclose(pre_stream);
-                if (!pre_out.failed && pre_json != NULL) {
-                    snprintf(g.pre_image_json, sizeof(g.pre_image_json), "%s",
-                             pre_json);
+                if (captured == 0 && !pre_out.failed && pre_json != NULL &&
+                    pre_size < sizeof(g.pre_image_json)) {
+                    snprintf(g.pre_image_json, sizeof(g.pre_image_json), "%s", pre_json);
                     g.pre_image_valid = 1;
+                    g.pre_image_call_id = call->call_id;
+                } else if (selected_pre) {
+                    fail_capture_locked("selected_pre_image_unavailable");
                 }
                 free(pre_json);
+            } else if (selected_pre) {
+                fail_capture_locked("selected_pre_image_unavailable");
             }
-            break;
         }
     }
     if (g.armed && g.events != NULL && !g.have_seed) {
@@ -9423,6 +9766,24 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
     }
     pthread_mutex_unlock(&g_lock);
     eu4_gfx_frame_sealed_dispatch();
+}
+
+static void observe_draw_exit_locked(uint64_t caller_rva) {
+    if (!g.prefix_enabled) {
+        return;
+    }
+    int event = g.event_count - 1;
+    if (g.prefix_caller != 0 && caller_rva == g.prefix_caller) {
+        if (event >= FTRACE_MAX_PREFIX_EVENTS || g.prefix_events[0] >= 0) {
+            fail_capture_locked("observation_caller_outside_unique_scope");
+            return;
+        }
+        g.prefix_events[0] = event;
+        g.prefix_end = event;
+    }
+    if (event <= g.prefix_end) {
+        (void)prefix_emit_locked(event, "post_event", "draw");
+    }
 }
 
 static void draw_exit_common(eu4_gfx_capture_frame *frame,
@@ -9471,11 +9832,7 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                     g.event_count++;
                     g.draw_events++;
                     checkpoint_clear_pending_locked();
-                    if (g.prefix_enabled &&
-                        g.event_count - 1 <= g.prefix_end) {
-                        (void)prefix_emit_locked(g.event_count - 1,
-                                                 "post_event", "draw");
-                    }
+                    observe_draw_exit_locked(call->caller_rva);
                 }
             }
         }
@@ -9502,11 +9859,18 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 }
                 g.seed_emitted = 1;
             }
-            if (g.pre_image_valid) {
+            int selected_pre = g.prefix_caller != 0 && g.prefix_caller == call->caller_rva;
+            if (selected_pre) {
+                write_selected_submission(&out, call->call_id);
+            }
+            if (selected_pre && (!g.pre_image_valid || g.pre_image_call_id != call->call_id)) {
+                fail_capture_locked("selected_pre_image_unattached");
+            }
+            if (g.pre_image_valid && g.pre_image_call_id == call->call_id) {
                 jprintf(&out, ",%s", g.pre_image_json);
                 char *post_json = NULL;
                 size_t post_size = 0;
-                FILE *post_stream = open_memstream(&post_json, &post_size);
+                FILE *post_stream = selected_pre ? NULL : open_memstream(&post_json, &post_size);
                 if (post_stream != NULL) {
                     json_out post_out = {post_stream, 0};
                     (void)capture_target_pixels("post", "post_image", &post_out,
@@ -9541,11 +9905,7 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 g.event_count++;
                 g.draw_events++;
                 checkpoint_clear_pending_locked();
-                if (g.prefix_enabled &&
-                    g.event_count - 1 <= g.prefix_end) {
-                    (void)prefix_emit_locked(g.event_count - 1,
-                                             "post_event", "draw");
-                }
+                observe_draw_exit_locked(call->caller_rva);
             } else {
                 fail_capture_locked(g_capture_failure_reason != NULL
                                         ? g_capture_failure_reason

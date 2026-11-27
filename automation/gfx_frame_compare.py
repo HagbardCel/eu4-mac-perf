@@ -9,11 +9,10 @@ It does not use image similarity to decide alignment.
 
 from __future__ import annotations
 
-import struct
-import zlib
 from pathlib import Path
 
-from automation.gfx_artifacts import sha256_file as _sha256
+from automation import gfx_frame_pixels
+from automation.gfx_artifacts import sha256_bytes, sha256_file as _sha256
 
 try:
     import numpy as np
@@ -50,14 +49,10 @@ def decode_frame(payload: bytes, width: int, height: int, *, origin: str,
         raise CompareError("extent", "frame extent must be positive")
     if len(payload) != width * height * 4:
         raise CompareError("payload", "frame payload does not match its extent")
-    image = np.frombuffer(payload, dtype=np.uint8).reshape(height, width, 4).copy()
-    if pixel_format == "BGRA8":
-        image = image[:, :, [2, 1, 0, 3]]
-    if origin == "lower_left":
-        image = image[::-1, :, :]
-    elif origin != "top_left":
+    if origin not in ("lower_left", "top_left"):
         raise CompareError("origin", f"unsupported origin: {origin}")
-    return image
+    packed = gfx_frame_pixels.canonical_rgba(payload, width, height, pixel_format, origin)
+    return np.frombuffer(packed, dtype=np.uint8).reshape(height, width, 4).copy()
 
 
 def load_frame(path: Path, width: int, height: int, *, origin: str,
@@ -67,7 +62,7 @@ def load_frame(path: Path, width: int, height: int, *, origin: str,
         payload = path.read_bytes()
     except OSError as exc:
         raise CompareError("unreadable", str(exc)) from exc
-    if expected_sha256 and _sha256(path) != expected_sha256:
+    if expected_sha256 and sha256_bytes(payload) != expected_sha256:
         raise CompareError("digest", "frame digest does not match its declaration")
     return decode_frame(payload, width, height, origin=origin,
                         pixel_format=pixel_format)
@@ -376,31 +371,16 @@ def difference_image(reference: "np.ndarray", candidate: "np.ndarray",
     _require_numpy()
     if amplification < 1:
         raise CompareError("amplification", "must be >= 1")
-    delta = np.abs(reference.astype(np.int16) - candidate.astype(np.int16)).astype(np.uint16)
-    delta = np.clip(delta * amplification, 0, 255).astype(np.uint8)
-    delta[:, :, 3] = 255
-    return delta
-
-
-def _png_chunk(kind: bytes, payload: bytes) -> bytes:
-    return (struct.pack(">I", len(payload)) + kind + payload
-            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF))
+    raw = gfx_frame_pixels.amplified_difference(
+        reference.tobytes(), candidate.tobytes(), amplification=amplification)
+    return np.frombuffer(raw, dtype=np.uint8).reshape(reference.shape).copy()
 
 
 def write_png(path: Path, rgba: "np.ndarray") -> None:
     """Minimal RGBA PNG writer (no external imaging dependency)."""
     _require_numpy()
     height, width = rgba.shape[:2]
-    raw = b"".join(b"\x00" + rgba[row].tobytes() for row in range(height))
-    value = (
-        b"\x89PNG\r\n\x1a\n"
-        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
-        + _png_chunk(b"IDAT", zlib.compress(raw, 6))
-        + _png_chunk(b"IEND", b"")
-    )
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(value)
+    gfx_frame_pixels.write_png_bytes(path, rgba.tobytes(), width, height)
 
 
 def _apply_normalization_policy(result: dict, normalization: dict,
@@ -462,6 +442,69 @@ def compare_payloads(
         "sha256": candidate_meta.get("sha256"),
     }
     return result
+
+
+def qualify_raw_pair(case: Path, output: Path, reference: dict, configuration: dict) -> dict:
+    """Reproduce a retained raw diagnostic from protected metadata and actual bytes."""
+    import json
+    import os
+    import stat
+
+    from automation import dsh_receipts
+
+    scope = configuration["raw_scope"]
+    extent = scope["width"] * scope["height"] * 4
+    policy = configuration["comparison_policy"]
+    payloads, metadata = [], []
+    for role in ("reference", "candidate"):
+        relative = Path(configuration["frames"][role])
+        digest = reference[f"{role}_sha256"]
+        try:
+            if (not relative.parts or relative.is_absolute() or ".." in relative.parts
+                    or any((case / member).is_symlink() for member in relative.parents)):
+                raise ValueError("unsafe evidence member")
+            with open(case / relative, "rb",
+                      opener=lambda path, flags: os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK)) as source:
+                info = os.fstat(source.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size != extent:
+                    raise ValueError("raw extent or file type differs")
+                payload = source.read(extent + 1)
+            if len(payload) != extent or sha256_bytes(payload) != digest:
+                raise ValueError("raw size or digest differs")
+        except (OSError, ValueError) as exc:
+            return {"verdict": "invalid_provenance", "problems": [f"{role}: {exc}"]}
+        payloads.append(payload)
+        metadata.append({**scope, "sha256": digest})
+    result = compare_payloads(payloads[0], metadata[0], payloads[1], metadata[1],
+                              policy=policy, regions=policy["regions"])
+    statistics = result["statistics"]
+    observed = {
+        "status": result["status"],
+        "pixel_verdict": result["pixel_verdict"],
+        "mismatched_pixels": statistics["mismatched_pixels"],
+        "max_channel_error": statistics["max_channel_error"],
+        "regions": {name: {key: row[key] for key in ("mismatched_pixels", "max_channel_error")}
+                    for name, row in result["regions"].items()},
+    }
+    if observed != configuration["expected_comparison"]:
+        return {"verdict": "regression", "problems": ["protected raw-pair comparison changed"]}
+    locators = {role: (Path(reference["archive_path"]) / path).as_posix()
+                for role, path in configuration["frames"].items()}
+    report = output / "raw-pair-comparison.json"
+    report.write_text(json.dumps({
+        "reference": reference, "evidence_locators": locators,
+        "scope": scope, "comparison_policy": policy, "comparison": result,
+    }, indent=2) + "\n")
+    return {
+        "verdict": observed["pixel_verdict"], "execution": "completed",
+        "independently_verified": True, "coverage": ["raw-pair-comparison"],
+        "evidence_tier": "retained-original-pair", "reference": reference,
+        "evidence_locators": locators, "scope": {
+            **scope, "mismatched_pixels": observed["mismatched_pixels"],
+            "max_channel_error": observed["max_channel_error"],
+        },
+        "outputs": dsh_receipts.artifact_records(output, [report.name]), "problems": [],
+    }
 
 
 # ---------------------------------------------------------------------------

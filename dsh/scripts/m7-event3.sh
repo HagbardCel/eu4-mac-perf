@@ -6,7 +6,7 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 case $1 in preflight|start|status|stop|finish) ;; *) fail "unknown operation: $1" ;; esac
 repo=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 cd -- "$repo"
-unset EU4_CAMPAIGN_STATE EU4_CAMPAIGN_ADMIN_TOKEN EU4_CAMPAIGN_AUTHORIZATION EU4_CAMPAIGN_RESERVATION \
+unset EU4_CAMPAIGN_STATE \
     EU4_M7_CANDIDATE_SIDECAR EU4_M7_EVENT20_TRUSTED_ROOT EU4_DSH_WORKSPACE EU4_DSH_SIDECAR
 export EU4_OFFLINE_ONLY=1 EU4_TEST_PROFILE=offline PYTHONDONTWRITEBYTECODE=1 GIT_OPTIONAL_LOCKS=0
 export EU4_DSH_INFRA_ROOT="$repo" EU4_DSH_SKILL_ROOT="$repo/.opencode/skills"

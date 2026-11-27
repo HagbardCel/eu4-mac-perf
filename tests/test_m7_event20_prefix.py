@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
 
 from automation import (  # noqa: E402
     campaign_guard, gfx_frame_graph, gfx_independent_replay, gfx_prefix_case,
-    gfx_prefix_check, m6_frame, native_build, replay_host_dependencies)
+    gfx_prefix_check, gfx_frame, native_build, replay_host_dependencies)
 BENCH = ROOT / "benchmark"
 CHECKER = ROOT / "campaigns" / "eu4-m7-event20" / "accept.py"
 
@@ -41,7 +41,7 @@ def build_candidate_fixture(root: Path) -> Path:
     own output for that event.  The fixture is synthetic by construction and
     never claims original-frame authority.
     """
-    from tests.test_m6_frame import _write_blob, build_synthetic_trace
+    from tests.test_gfx_frame import _write_blob, build_synthetic_trace
 
     frame = Path(root) / "frame"
     build_synthetic_trace(frame)
@@ -68,12 +68,12 @@ def build_candidate_fixture(root: Path) -> Path:
     base = Path(root)
     shaders = base / "shaders"
     translated = subprocess.run(
-        [sys.executable, "-m", "automation.m6_frame", "translate",
+        [sys.executable, "-m", "automation.gfx_frame", "translate",
          "--frame", str(frame), "--out", str(shaders)],
         capture_output=True, text=True, check=False)
     if translated.returncode != 0:
         raise RuntimeError("fixture shader translation failed")
-    host = m6_frame.build_replay_host()
+    host = gfx_frame.build_replay_host()
     request = base / "checkpoint-request.json"
     request.write_text(json.dumps({"checkpoints": [{
         "event": 0, "target": "0", "file": "event0.bgra",
@@ -138,8 +138,8 @@ def build_candidate_fixture(root: Path) -> Path:
     (frame / "frame-trace.json").write_text(json.dumps(manifest))
     reference = frame / "frame-reference.bgra"
     seal = {
-        "schema": m6_frame.SEAL_SCHEMA, "sealed": True, "complete": True,
-        "struct_size": 2256, "abi_version": m6_frame.SEAL_ABI_VERSION,
+        "schema": gfx_frame.SEAL_SCHEMA, "sealed": True, "complete": True,
+        "struct_size": 2256, "abi_version": gfx_frame.SEAL_ABI_VERSION,
         "capture_frame_id": 1, "session_id": "synthetic-trust",
         "pid": 1234, "process_start_ns": 1, "boundary": "present",
         "present_index": 1, "scene_index": 0, "operation_count": len(events),
@@ -194,6 +194,25 @@ class Event20PrefixTests(unittest.TestCase):
             [str(self.binary), "prefix-seal", str(directory)],
             capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_read_only_trusted_reference_can_be_published_and_verified(self):
+        from automation import case_locator
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            frame = root / "producer"
+            self._sealed_frame(frame)
+            source = root / "trusted"
+            gfx_prefix_check.prepare_trusted_evidence(frame, source)
+            publication = case_locator.publish(source, root / "evidence", min_free_bytes=0)
+            self.assertTrue(publication["key"].endswith("-reference"))
+            resolved = case_locator.locate(root / "evidence", key=publication["key"])
+            self.assertTrue(resolved["safe_to_reuse"], resolved)
+            member = Path(resolved["matches"][0]["resolved_path"]) / "frame/frame-trace.json"
+            member.chmod(0o644)
+            member.write_text("{}")
+            refused = case_locator.locate(root / "evidence", key=publication["key"])
+            self.assertEqual(refused["state"], "digest_mismatch")
 
     def _make_r32f_event20_fixture(self, frame: Path) -> None:
         """Rewrite event 11 as an authenticated R32F clear with its reference."""
@@ -485,7 +504,7 @@ class Event20PrefixTests(unittest.TestCase):
             "expected_by": [{"kind": "observation", "role": "color",
                              "event": 0, "timing": "post_event",
                              "resource": "fb:0"}]}]
-        with mock.patch.object(m6_frame, "replay_input_overlap",
+        with mock.patch.object(gfx_frame, "replay_input_overlap",
                                return_value=fake):
             overlap = gfx_prefix_check.preflight_fixture(frame, require_end=3)
         self.assertTrue(any("cannot qualify" in problem
@@ -549,6 +568,7 @@ class Event20PrefixTests(unittest.TestCase):
 
     def test_trusted_execution_rechecks_the_campaign_after_the_gpu_lock(self):
         from contextlib import contextmanager
+        from automation import launch_lease
 
         frame, _metal = self._fixture()
         temporary = tempfile.TemporaryDirectory()
@@ -576,7 +596,7 @@ class Event20PrefixTests(unittest.TestCase):
             yield
 
         with mock.patch.object(
-                gfx_prefix_check.launch_lease, "gpu_execution",
+                launch_lease, "gpu_execution",
                 lock_with_stop):
             result = gfx_prefix_check.evaluate(
                 frame, None, require_end=20, trusted_execution=True)
@@ -584,6 +604,18 @@ class Event20PrefixTests(unittest.TestCase):
                          "refused")
         self.assertTrue(any("operator_stop" in problem
                             for problem in result["problems"]))
+
+    def test_selected_caller_observes_only_its_post_draw_boundary(self):
+        directory = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        completed = subprocess.run(
+            [str(self.binary), "observe-caller", str(directory)],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        trace = gfx_frame.load_trace(directory)
+        observations = trace["_prefix"]
+        self.assertEqual(observations["events"], [120])
+        self.assertEqual(trace["_events"][120]["draw"]["caller_rva"], "0x2000")
+        self.assertTrue(gfx_frame.load_seal(directory, trace=trace)["sealed"])
 
     def test_selected_late_events_do_not_claim_a_prefix(self):
         directory = Path(tempfile.mkdtemp(dir=self.temporary.name))
@@ -653,8 +685,8 @@ class Event20PrefixTests(unittest.TestCase):
         events_path.write_text(
             "".join(json.dumps(event, sort_keys=True) + "\n"
                     for event in events))
-        trace = m6_frame.load_trace(directory, verify_blobs=True)
-        materialized = m6_frame.materialize_replay_input(
+        trace = gfx_frame.load_trace(directory, verify_blobs=True)
+        materialized = gfx_frame.materialize_replay_input(
             directory, trace, Path(tempfile.mkdtemp(dir=self.temporary.name)))
         copied = {path.name for path in
                   (Path(materialized["frame_dir"]) / "blobs").iterdir()}
@@ -698,7 +730,7 @@ class Event20PrefixTests(unittest.TestCase):
         manifest["prefix"] = prefix
         (frame / "frame-trace.json").write_text(
             json.dumps(manifest, indent=2) + "\n")
-        trace = m6_frame.load_trace(frame, verify_blobs=True)
+        trace = gfx_frame.load_trace(frame, verify_blobs=True)
         self.assertEqual(trace["_prefix"]["end"], 20)
         self.assertEqual(len(trace["_prefix"]["post_events"]), 21)
 
@@ -723,7 +755,7 @@ class Event20PrefixTests(unittest.TestCase):
             "expected_by": [{"kind": "observation", "role": "color",
                              "event": 0, "timing": "post_event",
                              "resource": "fb:0"}]}]
-        with mock.patch.object(m6_frame, "replay_input_overlap",
+        with mock.patch.object(gfx_frame, "replay_input_overlap",
                                return_value=fake):
             result = self._evaluate(frame, metal)
         self.assertFalse(result["independent_equality"])
@@ -739,7 +771,7 @@ class Event20PrefixTests(unittest.TestCase):
             "expected_by": [{"kind": "final_reference",
                              "role": "final_reference", "event": None,
                              "timing": None, "resource": None}]}]
-        with mock.patch.object(m6_frame, "replay_input_overlap",
+        with mock.patch.object(gfx_frame, "replay_input_overlap",
                                return_value=fake):
             result = self._evaluate(frame, metal)
         self.assertTrue(result["independent_equality"])
@@ -785,7 +817,7 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertEqual(summary["events"], 2)
         self.assertEqual(summary["end"], 1)
         self.assertLess(summary["bytes"], 512 * 1024 * 1024)
-        derived = m6_frame.load_trace(destination, verify_blobs=True)
+        derived = gfx_frame.load_trace(destination, verify_blobs=True)
         self.assertEqual(derived["events"], 2)
         self.assertEqual([event["kind"] for event in derived["_events"]],
                          ["clear", "draw"])
@@ -794,7 +826,7 @@ class Event20PrefixTests(unittest.TestCase):
                          21)
         self.assertIn("not the original full seal",
                       derived["derived_from"]["scope"])
-        seal = m6_frame.load_seal(destination)
+        seal = gfx_frame.load_seal(destination)
         self.assertTrue(seal["sealed"])
         self.assertEqual(seal["operation_count"], 2)
         self.assertEqual(seal["derived_from"]["original_operation_count"], 21)
@@ -996,8 +1028,8 @@ class Event20PrefixTests(unittest.TestCase):
         frame, metal = self._fixture()
         path = frame / "prefix-observations.jsonl"
         path.write_bytes(path.read_bytes() + b"\n")
-        with self.assertRaises(m6_frame.FrameError):
-            m6_frame.load_trace(frame, verify_blobs=True)
+        with self.assertRaises(gfx_frame.FrameError):
+            gfx_frame.load_trace(frame, verify_blobs=True)
 
     def test_campaign_checker_does_not_accept_candidate_metal_output(self):
         frame, metal = self._fixture()
@@ -1444,7 +1476,7 @@ class TrustedExecutionTests(unittest.TestCase):
             frame, root, read_only=False)
         copied = root / "frame"
         record = gfx_prefix_check.verify_trusted_evidence(root, copied)
-        seal = m6_frame.load_seal(copied, trusted_evidence=record)
+        seal = gfx_frame.load_seal(copied, trusted_evidence=record)
         self.assertTrue(seal["sealed"])
         path = copied / "frame-events.jsonl"
         data = bytearray(path.read_bytes())

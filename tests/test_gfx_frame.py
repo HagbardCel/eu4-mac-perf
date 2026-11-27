@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "benchmark"))
 
 from automation import gfx_shader_translate as translate  # noqa: E402
-from automation import m6_compare, m6_frame  # noqa: E402
+from automation import gfx_frame_pixels, gfx_frame  # noqa: E402
 
 WIDTH = 4
 HEIGHT = 3
@@ -226,7 +226,7 @@ def build_synthetic_trace(
         },
     ]
     manifest = {
-        "schema": m6_frame.TRACE_SCHEMA,
+        "schema": gfx_frame.TRACE_SCHEMA,
         "complete": True,
         "reason": "present",
         "truncated": False,
@@ -267,8 +267,8 @@ class FrameTraceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             frame = Path(tmp) / "frame"
             build_synthetic_trace(frame)
-            trace = m6_frame.load_trace(frame)
-            coverage = m6_frame.coverage_report(trace)
+            trace = gfx_frame.load_trace(frame)
+            coverage = gfx_frame.coverage_report(trace)
             self.assertTrue(coverage["ok"], coverage["missing"])
             self.assertEqual(coverage["draw_count"], 1)
             self.assertEqual(coverage["shader_pairs"], 2)
@@ -284,15 +284,15 @@ class FrameTraceTests(unittest.TestCase):
             # trailing '}', containing "kind") but is not valid JSON.
             lines[0] = '{"kind":"draw",}'
             (frame / "frame-events.jsonl").write_text("\n".join(lines) + "\n")
-            with self.assertRaises(m6_frame.FrameError):
-                m6_frame.load_trace(frame)
+            with self.assertRaises(gfx_frame.FrameError):
+                gfx_frame.load_trace(frame)
 
     def test_tampered_blob_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             frame = Path(tmp) / "frame"
             build_synthetic_trace(frame, tamper_blob=True)
-            with self.assertRaises(m6_frame.FrameError):
-                m6_frame.load_trace(frame)
+            with self.assertRaises(gfx_frame.FrameError):
+                gfx_frame.load_trace(frame)
 
     def test_truncated_trace_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -302,8 +302,8 @@ class FrameTraceTests(unittest.TestCase):
             manifest["complete"] = False
             manifest["reason"] = "draw_cap"
             (frame / "frame-trace.json").write_text(json.dumps(manifest))
-            with self.assertRaises(m6_frame.FrameError):
-                m6_frame.load_trace(frame)
+            with self.assertRaises(gfx_frame.FrameError):
+                gfx_frame.load_trace(frame)
 
     def test_event_count_disagreement_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -312,8 +312,8 @@ class FrameTraceTests(unittest.TestCase):
             manifest = json.loads((frame / "frame-trace.json").read_text())
             manifest["events"] = 99
             (frame / "frame-trace.json").write_text(json.dumps(manifest))
-            with self.assertRaises(m6_frame.FrameError):
-                m6_frame.load_trace(frame)
+            with self.assertRaises(gfx_frame.FrameError):
+                gfx_frame.load_trace(frame)
 
     def test_coverage_understands_supported_transfers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -353,7 +353,7 @@ class FrameTraceTests(unittest.TestCase):
             manifest = json.loads((frame / "frame-trace.json").read_text())
             manifest["events"] = len(events)
             (frame / "frame-trace.json").write_text(json.dumps(manifest))
-            coverage = m6_frame.coverage_report(m6_frame.load_trace(frame))
+            coverage = gfx_frame.coverage_report(gfx_frame.load_trace(frame))
             self.assertEqual(coverage["resolve_count"], 1)
             self.assertEqual(coverage["copy_count"], 0)
             self.assertEqual(coverage["transfer_count"], 1)
@@ -375,7 +375,7 @@ class FrameTraceTests(unittest.TestCase):
             manifest = json.loads((frame / "frame-trace.json").read_text())
             manifest["events"] = len(events)
             (frame / "frame-trace.json").write_text(json.dumps(manifest))
-            coverage = m6_frame.coverage_report(m6_frame.load_trace(frame))
+            coverage = gfx_frame.coverage_report(gfx_frame.load_trace(frame))
             self.assertEqual(coverage["resolve_count"], 1)
             self.assertTrue(any(item["issue"] == "invalid_transfer"
                                 for item in coverage["missing"]))
@@ -392,7 +392,7 @@ class FrameTraceTests(unittest.TestCase):
             (frame / "frame-events.jsonl").write_text(
                 "\n".join(json.dumps(event) for event in events) + "\n"
             )
-            coverage = m6_frame.coverage_report(m6_frame.load_trace(frame))
+            coverage = gfx_frame.coverage_report(gfx_frame.load_trace(frame))
             self.assertFalse(coverage["ok"])
             self.assertTrue(
                 any(item["issue"] == "missing_frame_seed" for item in coverage["missing"])
@@ -426,7 +426,7 @@ class ShaderReceiptIdentityTests(unittest.TestCase):
     def test_nested_tree_digest_and_count_are_pinned(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             shader_dir = self.write(Path(temporary) / "shaders")
-            identity = m6_frame.shader_receipt_identity(shader_dir)
+            identity = gfx_frame.shader_receipt_identity(shader_dir)
         self.assertEqual(identity["artifacts_sha256"], self.EXPECTED_DIGEST)
         self.assertEqual(identity["artifact_count"], 3)
         self.assertEqual(list(identity), [
@@ -441,16 +441,16 @@ class ShaderReceiptIdentityTests(unittest.TestCase):
             second = Path(temporary) / "second"
             self.write(first)
             self.write(second, files=dict(reversed(list(self.FILES.items()))))
-            one = m6_frame.shader_receipt_identity(first)
-            two = m6_frame.shader_receipt_identity(second)
+            one = gfx_frame.shader_receipt_identity(first)
+            two = gfx_frame.shader_receipt_identity(second)
         self.assertEqual(one, two)
 
     def test_tampered_payload_changes_the_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             shader_dir = self.write(Path(temporary) / "shaders")
-            before = m6_frame.shader_receipt_identity(shader_dir)
+            before = gfx_frame.shader_receipt_identity(shader_dir)
             (shader_dir / "nested" / "a.metal").write_bytes(b"// altered\n")
-            after = m6_frame.shader_receipt_identity(shader_dir)
+            after = gfx_frame.shader_receipt_identity(shader_dir)
         self.assertNotEqual(before["artifacts_sha256"],
                             after["artifacts_sha256"])
         self.assertEqual(before["artifact_count"], after["artifact_count"])
@@ -459,28 +459,28 @@ class ShaderReceiptIdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             missing = Path(temporary) / "absent"
             self.assertEqual(
-                m6_frame.shader_receipt_identity(missing),
+                gfx_frame.shader_receipt_identity(missing),
                 {"shaders_json_sha256": "", "artifacts_sha256": "",
                  "artifact_count": 0})
             self.assertEqual(
-                m6_frame.shader_receipt_identity(None)["artifact_count"], 0)
+                gfx_frame.shader_receipt_identity(None)["artifact_count"], 0)
             no_report = self.write(
                 Path(temporary) / "no-report",
                 files={"nested/a.metal": b"// a\n"})
             self.assertEqual(
-                m6_frame.shader_receipt_identity(no_report)["artifact_count"],
+                gfx_frame.shader_receipt_identity(no_report)["artifact_count"],
                 0)
 
     def test_live_publication_requires_the_shader_report(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             missing = Path(temporary) / "absent"
-            with self.assertRaises(m6_frame.FrameError):
-                m6_frame.shader_receipt_identity(missing, required=True)
+            with self.assertRaises(gfx_frame.FrameError):
+                gfx_frame.shader_receipt_identity(missing, required=True)
             no_report = self.write(
                 Path(temporary) / "no-report",
                 files={"nested/a.metal": b"// a\n"})
-            with self.assertRaises(m6_frame.FrameError):
-                m6_frame.shader_receipt_identity(no_report, required=True)
+            with self.assertRaises(gfx_frame.FrameError):
+                gfx_frame.shader_receipt_identity(no_report, required=True)
 
 
 class CompareTests(unittest.TestCase):
@@ -525,8 +525,8 @@ class CompareTests(unittest.TestCase):
                 "alpha": {"ignored": False},
                 "allowed_normalizations": ["row_origin"],
             }
-            with self.assertRaises(m6_compare.CompareError):
-                m6_compare.compare(frame, replay, policy)
+            with self.assertRaises(gfx_frame_pixels.CompareError):
+                gfx_frame_pixels.compare(frame, replay, policy)
 
     def test_truncated_replay_with_correct_pixels_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -548,8 +548,8 @@ class CompareTests(unittest.TestCase):
                 "alpha": {"ignored": False},
                 "allowed_normalizations": ["row_origin"],
             }
-            with self.assertRaises(m6_compare.CompareError):
-                m6_compare.compare(frame, replay, policy)
+            with self.assertRaises(gfx_frame_pixels.CompareError):
+                gfx_frame_pixels.compare(frame, replay, policy)
 
     @staticmethod
     def _policy() -> dict:
@@ -572,8 +572,8 @@ class CompareTests(unittest.TestCase):
             value = json.loads((replay / "replay.json").read_text())
             value["frame"]["raw_file"] = str(frame / "frame-reference.bgra")
             (replay / "replay.json").write_text(json.dumps(value))
-            with self.assertRaises(m6_compare.CompareError) as raised:
-                m6_compare.compare(frame, replay, self._policy())
+            with self.assertRaises(gfx_frame_pixels.CompareError) as raised:
+                gfx_frame_pixels.compare(frame, replay, self._policy())
             self.assertIn("same file", str(raised.exception))
 
     def test_symlink_alias_is_rejected(self) -> None:
@@ -584,8 +584,8 @@ class CompareTests(unittest.TestCase):
             self._replay(replay, (frame / "frame-reference.bgra").read_bytes())
             (replay / "metal-frame.bgra").unlink()
             (replay / "metal-frame.bgra").symlink_to(frame / "frame-reference.bgra")
-            with self.assertRaises(m6_compare.CompareError) as raised:
-                m6_compare.compare(frame, replay, self._policy())
+            with self.assertRaises(gfx_frame_pixels.CompareError) as raised:
+                gfx_frame_pixels.compare(frame, replay, self._policy())
             self.assertIn("same file", str(raised.exception))
 
     def test_hard_link_alias_is_rejected(self) -> None:
@@ -596,8 +596,8 @@ class CompareTests(unittest.TestCase):
             self._replay(replay, (frame / "frame-reference.bgra").read_bytes())
             (replay / "metal-frame.bgra").unlink()
             os.link(frame / "frame-reference.bgra", replay / "metal-frame.bgra")
-            with self.assertRaises(m6_compare.CompareError) as raised:
-                m6_compare.compare(frame, replay, self._policy())
+            with self.assertRaises(gfx_frame_pixels.CompareError) as raised:
+                gfx_frame_pixels.compare(frame, replay, self._policy())
             self.assertIn("alias", str(raised.exception))
 
     def test_independent_identical_files_pass(self) -> None:
@@ -606,7 +606,7 @@ class CompareTests(unittest.TestCase):
             build_synthetic_trace(frame)
             replay = Path(tmp) / "replay"
             self._replay(replay, (frame / "frame-reference.bgra").read_bytes())
-            report = m6_compare.compare(frame, replay, self._policy())
+            report = gfx_frame_pixels.compare(frame, replay, self._policy())
             self.assertEqual(report["status"], "pass")
 
     def test_pixel_difference_fails(self) -> None:
@@ -617,7 +617,7 @@ class CompareTests(unittest.TestCase):
             image = bytearray((frame / "frame-reference.bgra").read_bytes())
             image[1] ^= 0xFF
             self._replay(replay, bytes(image))
-            report = m6_compare.compare(frame, replay, self._policy())
+            report = gfx_frame_pixels.compare(frame, replay, self._policy())
             self.assertEqual(report["status"], "fail")
             self.assertGreater(report["statistics"]["mismatched_pixels"], 0)
 
@@ -636,7 +636,7 @@ class CompareTests(unittest.TestCase):
                     "mean_abs_error": 0.0,
                 },
             }
-            report = m6_compare.compare(frame, replay, policy)
+            report = gfx_frame_pixels.compare(frame, replay, policy)
             self.assertEqual(report["status"], "pass")
             self.assertEqual(report["statistics"]["mismatched_pixels"], 0)
             self.assertEqual(
@@ -660,7 +660,7 @@ class CompareTests(unittest.TestCase):
                     "mean_abs_error": 0.0,
                 },
             }
-            report = m6_compare.compare(frame, replay, policy)
+            report = gfx_frame_pixels.compare(frame, replay, policy)
             self.assertEqual(report["status"], "fail")
             self.assertEqual(report["statistics"]["mismatched_pixels"], 1)
             self.assertIsNotNone(report["worst_region"])
@@ -675,8 +675,8 @@ class CompareTests(unittest.TestCase):
                 (frame / "frame-reference.bgra").read_bytes(),
                 failed=1,
             )
-            with self.assertRaises(m6_compare.CompareError):
-                m6_compare.compare(
+            with self.assertRaises(gfx_frame_pixels.CompareError):
+                gfx_frame_pixels.compare(
                     frame, replay, {"allowed_normalizations": ["row_origin"]}
                 )
 
@@ -696,8 +696,8 @@ class CompareTests(unittest.TestCase):
                     "raw_bytes": WIDTH * HEIGHT * 4,
                 },
             )
-            with self.assertRaises(m6_compare.CompareError):
-                m6_compare.compare(
+            with self.assertRaises(gfx_frame_pixels.CompareError):
+                gfx_frame_pixels.compare(
                     frame, replay, {"allowed_normalizations": ["row_origin"]}
                 )
 
@@ -718,8 +718,8 @@ class CompareTests(unittest.TestCase):
                     "raw_bytes": len(image),
                 },
             )
-            with self.assertRaises(m6_compare.CompareError):
-                m6_compare.compare(frame, replay, {"allowed_normalizations": []})
+            with self.assertRaises(gfx_frame_pixels.CompareError):
+                gfx_frame_pixels.compare(frame, replay, {"allowed_normalizations": []})
 
 
 class ShaderTranslationTests(unittest.TestCase):
@@ -968,10 +968,10 @@ class ReplayInputSanitizationTests(unittest.TestCase):
                 },
                 "frame": {"width": 4, "height": 4,
                           "reference": "frame-reference.bgra"},
-                "schema": m6_frame.TRACE_SCHEMA,
+                "schema": gfx_frame.TRACE_SCHEMA,
             }
             destination = _Path(temporary) / "replay-input"
-            record = m6_frame.materialize_replay_input(
+            record = gfx_frame.materialize_replay_input(
                 frame, trace, destination)
             copied = {path.name for path in (destination / "blobs").iterdir()}
             self.assertIn("input.bin", copied)
@@ -1027,7 +1027,7 @@ class ReplayInputProvenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             frame, trace, graph = self._frame(root)
-            record = m6_frame.materialize_replay_input(
+            record = gfx_frame.materialize_replay_input(
                 frame, trace, root / "replay-input", graph=graph)
             self.assertFalse(
                 (root / "replay-input" / "blobs" / "generated.bin").exists())
@@ -1039,7 +1039,7 @@ class ReplayInputProvenanceTests(unittest.TestCase):
             frame, trace, graph = self._frame(root)
             trace["_events"][1]["attributes"] = [{
                 "data": "generated.bin", "sha256": "0" * 64}]
-            m6_frame.materialize_replay_input(
+            gfx_frame.materialize_replay_input(
                 frame, trace, root / "replay-input", graph=graph)
             self.assertTrue(
                 (root / "replay-input" / "blobs" / "generated.bin").is_file())
@@ -1050,7 +1050,7 @@ class ReplayInputProvenanceTests(unittest.TestCase):
             frame, trace, graph = self._frame(root)
             graph["resources"]["tex:431"]["producers"][0].update({
                 "writes": ["depth"]})
-            record = m6_frame.materialize_replay_input(
+            record = gfx_frame.materialize_replay_input(
                 frame, trace, root / "replay-input", graph=graph)
             self.assertTrue(
                 (root / "replay-input" / "blobs" / "generated.bin").is_file())
@@ -1062,7 +1062,7 @@ class ReplayInputProvenanceTests(unittest.TestCase):
             frame, trace, graph = self._frame(root)
             seed = _write_blob(frame, "seed.bin", b"previous-frame")
             trace["_events"][1]["seed"] = seed
-            m6_frame.materialize_replay_input(
+            gfx_frame.materialize_replay_input(
                 frame, trace, root / "replay-input", graph=graph)
             self.assertTrue(
                 (root / "replay-input" / "blobs" / "seed.bin").is_file())
@@ -1078,7 +1078,7 @@ class ReplayInputProvenanceTests(unittest.TestCase):
             graph["resources"]["tex:431"]["producers"][0].update({
                 "cleared": True, "coverage": {"color_full": True},
                 "writes": ["color"]})
-            record = m6_frame.materialize_replay_input(
+            record = gfx_frame.materialize_replay_input(
                 frame, trace, root / "replay-input", graph=graph)
             self.assertFalse(
                 (root / "replay-input" / "blobs" / seed["file"]).exists())
@@ -1096,7 +1096,7 @@ class ReplayInputProvenanceTests(unittest.TestCase):
             trace["_events"].append({
                 "kind": "draw", "index": 1, "target": {"framebuffer": 0},
                 "seed": trace["_prefix"]["post_events"][0]["color"]})
-            m6_frame.materialize_replay_input(
+            gfx_frame.materialize_replay_input(
                 frame, trace, root / "replay-input", graph=graph)
             sanitized = [
                 json.loads(line) for line in
@@ -1133,7 +1133,7 @@ class ReplayInputOverlapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             frame, trace = self._frame(root, b"same-payload")
-            record = m6_frame.materialize_replay_input(
+            record = gfx_frame.materialize_replay_input(
                 frame, trace, root / "replay-input")
             self.assertTrue((root / "replay-input" / "blobs" /
                              "input.bin").is_file())
@@ -1156,7 +1156,7 @@ class ReplayInputOverlapTests(unittest.TestCase):
             trace["_events"][0]["default_checkpoint"] = {
                 "event": 0, "timing": "pre_event", "resource": "fb:0",
                 "file": "expected-other.bin", "sha256": digest}
-            overlap = m6_frame.replay_input_overlap(trace, frame)
+            overlap = gfx_frame.replay_input_overlap(trace, frame)
             roles = {(entry["kind"], entry["role"])
                      for item in overlap for entry in item["expected_by"]}
             self.assertIn(("default_checkpoint", "color"), roles)
@@ -1177,7 +1177,7 @@ class ReplayInputOverlapTests(unittest.TestCase):
             trace["frame"].update({
                 "reference": "expected-other.bin",
                 "reference_sha256": digest})
-            overlap = m6_frame.replay_input_overlap(trace, frame)
+            overlap = gfx_frame.replay_input_overlap(trace, frame)
             roles = {(entry["kind"], entry["role"], entry["timing"])
                      for item in overlap for entry in item["expected_by"]}
             self.assertIn(("observation", "color", "pre_event"), roles)
@@ -1260,7 +1260,7 @@ class ManifestWriterTests(unittest.TestCase):
             )
             self.assertEqual(ran.returncode, 0, ran.stderr)
             manifest = json.loads((output / "frame-trace.json").read_text())
-            self.assertEqual(manifest["schema"], m6_frame.TRACE_SCHEMA)
+            self.assertEqual(manifest["schema"], gfx_frame.TRACE_SCHEMA)
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the replay host needs Metal")
@@ -1377,7 +1377,7 @@ fragment FOut test_fragment(float4 position [[position]]) {
             },
         }
         manifest = {
-            "schema": m6_frame.TRACE_SCHEMA,
+            "schema": gfx_frame.TRACE_SCHEMA,
             "complete": True,
             "reason": "present",
             "truncated": False,
@@ -1431,7 +1431,7 @@ fragment FOut test_fragment(float4 position [[position]]) {
         return frame, shaders, pre
 
     def test_replay_divisor_and_constant_descriptor(self) -> None:
-        host = m6_frame.build_replay_host(force=True)
+        host = gfx_frame.build_replay_host(force=True)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             frame, shaders, pre = self._frame(root)
@@ -1507,7 +1507,7 @@ fragment FOut test_fragment(float4 position [[position]]) {
             self.assertIn("step 2 rate 2", ran2.stderr)
 
     def test_pre_image_survives_the_selected_draw(self) -> None:
-        host = m6_frame.build_replay_host(force=True)
+        host = gfx_frame.build_replay_host(force=True)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             frame, shaders, pre = self._frame(root)
@@ -1708,7 +1708,7 @@ fragment FOut test_fragment() {
             },
         }
         manifest = {
-            "schema": m6_frame.TRACE_SCHEMA,
+            "schema": gfx_frame.TRACE_SCHEMA,
             "complete": True,
             "reason": "present",
             "truncated": False,
@@ -1764,7 +1764,7 @@ fragment FOut test_fragment() {
 
     def _replay(self, root: Path, frame: Path, shaders: Path) -> subprocess.CompletedProcess:
         out = root / "replay"
-        host = m6_frame.build_replay_host(force=True)
+        host = gfx_frame.build_replay_host(force=True)
         return subprocess.run(
             [str(host), "--frame", str(frame), "--shaders", str(shaders),
              "--out", str(out), "--only-event", "0", "--seed-marked",
@@ -1821,65 +1821,65 @@ if __name__ == "__main__":
 
 class CaptureBudgetTests(unittest.TestCase):
     def test_default_event_budget_covers_the_authentic_scene(self):
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", "/tmp/frame-capture"])
         self.assertGreaterEqual(args.max_draws, 384)
         self.assertEqual(args.max_draws, 512)
 
     def test_default_checkpoint_option_is_opt_in(self):
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", "/tmp/frame-capture"])
         self.assertIsNone(args.default_checkpoint_event)
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", "/tmp/frame-capture",
              "--default-checkpoint-event", "142"])
         self.assertEqual(args.default_checkpoint_event, 142)
 
     def test_default_checkpoint_selection_is_validated(self):
-        self.assertIsNone(m6_frame.checkpoint_selection_error(142, 512))
+        self.assertIsNone(gfx_frame.checkpoint_selection_error(142, 512))
         self.assertIn("non-negative",
-                      m6_frame.checkpoint_selection_error(-1, 512))
+                      gfx_frame.checkpoint_selection_error(-1, 512))
         self.assertIn("below",
-                      m6_frame.checkpoint_selection_error(512, 512))
+                      gfx_frame.checkpoint_selection_error(512, 512))
         self.assertIn("below",
-                      m6_frame.checkpoint_selection_error(513, 512))
+                      gfx_frame.checkpoint_selection_error(513, 512))
 
     def test_multiple_default_checkpoint_option_parses_an_ordered_set(self):
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", "/tmp/frame-capture",
              "--default-checkpoint-events", "14,20,71,142"])
         self.assertEqual(args.default_checkpoint_events, [14, 20, 71, 142])
         self.assertIsNone(args.default_checkpoint_event)
         self.assertEqual(args.max_checkpoints, 4)
         self.assertEqual(args.checkpoint_max_bytes, 128 * 1024 * 1024)
-        self.assertIsNone(m6_frame.checkpoint_options_error(args))
+        self.assertIsNone(gfx_frame.checkpoint_options_error(args))
 
     def test_multiple_default_checkpoint_malformed_list_is_rejected(self):
         for value in ("", "14,,20", "14,a", ","):
             with self.subTest(value=value):
                 with self.assertRaises(SystemExit):
                     with contextlib.redirect_stderr(io.StringIO()):
-                        m6_frame._parser().parse_args(
+                        gfx_frame._parser().parse_args(
                             ["capture", "--output", "/tmp/frame-capture",
                              "--default-checkpoint-events", value])
 
     def test_multiple_default_checkpoint_selection_is_validated(self):
-        self.assertIsNone(m6_frame.checkpoint_events_selection_error(
+        self.assertIsNone(gfx_frame.checkpoint_events_selection_error(
             [14, 20, 71, 142], 512, 4))
         self.assertIn("strictly increasing",
-                      m6_frame.checkpoint_events_selection_error(
+                      gfx_frame.checkpoint_events_selection_error(
                           [20, 14], 512, 4))
         self.assertIn("strictly increasing",
-                      m6_frame.checkpoint_events_selection_error(
+                      gfx_frame.checkpoint_events_selection_error(
                           [14, 14], 512, 4))
         self.assertIn("below",
-                      m6_frame.checkpoint_events_selection_error(
+                      gfx_frame.checkpoint_events_selection_error(
                           [512], 512, 4))
         self.assertIn("exceed",
-                      m6_frame.checkpoint_events_selection_error(
+                      gfx_frame.checkpoint_events_selection_error(
                           [1, 2, 3, 4, 5], 512, 4))
         self.assertIn("empty",
-                      m6_frame.checkpoint_events_selection_error(
+                      gfx_frame.checkpoint_events_selection_error(
                           [], 512, 4))
 
     def test_checkpoint_byte_budget_is_forwarded_for_both_selection_forms(self):
@@ -1891,7 +1891,7 @@ class CaptureBudgetTests(unittest.TestCase):
                     ["--default-checkpoint-events", "14,20"])):
                 with self.subTest(selection=extra[0]):
                     output = str(Path(temporary) / f"budget-{index}")
-                    args = m6_frame._parser().parse_args(
+                    args = gfx_frame._parser().parse_args(
                         ["capture", "--output", output,
                          "--checkpoint-max-bytes", "12345", *extra])
                     seen = {}
@@ -1904,7 +1904,7 @@ class CaptureBudgetTests(unittest.TestCase):
                                            return_value={}), \
                          mock.patch.object(startup, "run_ops",
                                            side_effect=fake_run_ops):
-                        status = m6_frame.capture(args)
+                        status = gfx_frame.capture(args)
                     self.assertEqual(status, 4)
                     self.assertEqual(
                         seen["env_extra"].get(
@@ -1912,7 +1912,7 @@ class CaptureBudgetTests(unittest.TestCase):
                         "12345")
 
     def test_observe_events_selection_is_validated(self):
-        self.assertIsNone(m6_frame.observation_selection_error(
+        self.assertIsNone(gfx_frame.observation_selection_error(
             "118,120,129", 140))
         for value, message in (
                 ("118,,120", "empty"),
@@ -1921,35 +1921,35 @@ class CaptureBudgetTests(unittest.TestCase):
                 ("118,118", "strictly increasing"),
                 ("4096", "hard bound")):
             self.assertIn(message,
-                          m6_frame.observation_selection_error(value, 512))
-        args = m6_frame._parser().parse_args(
+                          gfx_frame.observation_selection_error(value, 512))
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", "/tmp/frame-capture",
              "--observe-events", "118,120,129",
              "--prefix-max-bytes", "1048576",
              "--prefix-max-ns", "1000000000"])
-        self.assertIsNone(m6_frame.checkpoint_options_error(args))
-        args = m6_frame._parser().parse_args(
+        self.assertIsNone(gfx_frame.checkpoint_options_error(args))
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", "/tmp/frame-capture",
              "--observe-events", "118", "--prefix-end", "20"])
         self.assertIn("mutually exclusive",
-                      m6_frame.checkpoint_options_error(args))
+                      gfx_frame.checkpoint_options_error(args))
 
     def test_checkpoint_options_refuse_both_selection_forms(self):
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", "/tmp/frame-capture",
              "--default-checkpoint-event", "14",
              "--default-checkpoint-events", "14,20"])
         self.assertIn("mutually exclusive",
-                      m6_frame.checkpoint_options_error(args))
+                      gfx_frame.checkpoint_options_error(args))
 
     def test_checkpoint_options_require_a_positive_byte_budget(self):
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", "/tmp/frame-capture",
              "--default-checkpoint-events", "14,20",
              "--checkpoint-max-bytes", "0"])
-        self.assertIn("positive", m6_frame.checkpoint_options_error(args))
+        self.assertIn("positive", gfx_frame.checkpoint_options_error(args))
         # An unbounded selection has no checkpoint budget to enforce.
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", "/tmp/frame-capture",
              "--checkpoint-max-bytes", "0"])
-        self.assertIsNone(m6_frame.checkpoint_options_error(args))
+        self.assertIsNone(gfx_frame.checkpoint_options_error(args))

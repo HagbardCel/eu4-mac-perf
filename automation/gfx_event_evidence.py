@@ -16,7 +16,7 @@ from pathlib import Path
 
 from automation import (gfx_frame_graph, gfx_independent_replay,
                         gfx_observation, gfx_prefix_check, gfx_replay_case,
-                        m6_frame)
+                        gfx_frame)
 
 SCHEMA = "gfx-event-evidence/v1"
 UNIFORM_LIMIT = 1
@@ -46,12 +46,12 @@ def _load_frame(frame_dir: Path):
         trusted = gfx_prefix_check.verify_adjacent_trusted_evidence(frame_dir)
     except gfx_prefix_check.PrefixCheckError as exc:
         raise EventEvidenceError("invalid_trusted_evidence", str(exc)) from exc
-    trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
+    trace = gfx_frame.load_trace(frame_dir, verify_blobs=True)
     trace["_trusted_evidence"] = trusted
     try:
-        seal = m6_frame.load_seal(frame_dir, trace=trace,
+        seal = gfx_frame.load_seal(frame_dir, trace=trace,
                                   trusted_evidence=trusted)
-    except m6_frame.FrameError as exc:
+    except gfx_frame.FrameError as exc:
         if trusted is not None or (frame_dir / "frame-seal.json").is_file():
             raise EventEvidenceError("invalid_seal",
                                      f"{frame_dir}: {exc}") from exc

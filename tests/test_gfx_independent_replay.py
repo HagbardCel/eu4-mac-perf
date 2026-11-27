@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
 
 from automation import (agent_tools, campaign_guard, gfx_independent_replay,  # noqa: E402
                         gfx_prefix_check)
-from tests.test_m7_diagnosis import DiagnosisFixture  # noqa: E402
+from tests.test_gfx_diagnosis import DiagnosisFixture  # noqa: E402
 
 
 def _recipe(**kwargs):
@@ -211,10 +211,10 @@ class ProducerReceiptEnvironmentTests(unittest.TestCase):
         with mock.patch.dict(os.environ, ambient, clear=True), \
                 mock.patch.object(campaign_guard, "require_active_from_env"), \
                 mock.patch.object(
-                    gfx_independent_replay.m6_frame, "build_replay_host",
+                    gfx_independent_replay.gfx_frame, "build_replay_host",
                     return_value=Path("/tmp/fake-replay")), \
                 mock.patch.object(
-                    gfx_independent_replay.m6_frame, "snapshot_replay_host",
+                    gfx_independent_replay.gfx_frame, "snapshot_replay_host",
                     return_value=(Path("/tmp/fake-replay"), producer)), \
                 mock.patch.object(
                     gfx_independent_replay, "analyse_frame",
@@ -326,13 +326,13 @@ class TrustedReferenceTests(unittest.TestCase):
                 diagnosis = self.analyse(self.frame)
                 self.assertEqual(diagnosis["classification"], "invalid_provenance")
                 self.assertIn(reason, diagnosis["capture"]["error"])
-                with mock.patch.object(gfx_independent_replay.m6_frame,
+                with mock.patch.object(gfx_independent_replay.gfx_frame,
                                        "build_replay_host") as build_host:
                     replay = gfx_independent_replay.replay(
                         self.frame, self.root / scenario)
                 build_host.assert_not_called()
-                self.assertEqual(replay["classification"], diagnosis["classification"])
-                self.assertFalse(replay["qualification"]["qualified"])
+                self.assertEqual(replay["diagnosis"]["classification"], diagnosis["classification"])
+                self.assertFalse(replay["diagnosis"]["qualification"]["qualified"])
                 self.assertFalse((self.root / scenario / "metal-frame.bgra").exists())
 
     def test_unsealed_fixture_keeps_its_classification(self):
@@ -394,8 +394,8 @@ class TrustedReferenceTests(unittest.TestCase):
                 stdout = io.StringIO()
                 with mock.patch.object(gfx_prefix_check, "verify_trusted_evidence",
                                        wraps=verify) as checked, \
-                        mock.patch.object(replay.m6_frame, "build_replay_host"), \
-                        mock.patch.object(replay.m6_frame, "snapshot_replay_host",
+                        mock.patch.object(replay.gfx_frame, "build_replay_host"), \
+                        mock.patch.object(replay.gfx_frame, "snapshot_replay_host",
                                           return_value=(host, {})), \
                         mock.patch.object(replay.subprocess, "run", side_effect=fake_run), \
                         contextlib.redirect_stdout(stdout):

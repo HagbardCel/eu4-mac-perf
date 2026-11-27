@@ -4,9 +4,7 @@
     python3 -m automation.live_gfx capture --target _GfxSetViewPort ...
     python3 -m automation.live_gfx replay --capture ... --output ...
 
-Live capture is authorized once by the operator: either the manual
-``--authorize-live`` flag or a campaign-launch counter initialized by the
-existing campaign runner. There is no separate authorization database.
+Live captures use pinned executable checks and the host-wide launch lease.
 """
 
 from __future__ import annotations
@@ -16,9 +14,9 @@ _MISSING_CLEANUP = object()
 
 import argparse
 import datetime as dt
-import fcntl
 import hashlib
 import json
+import math
 import os
 import sys
 import struct
@@ -34,20 +32,12 @@ sys.path.insert(0, str(ROOT / "benchmark"))
 
 import eu4_gfx_op_capture as capture_reader  # noqa: E402
 import eu4_gfx_startup_trace as startup  # noqa: E402
-from automation import launch_ledger  # noqa: E402
+from automation import launch_ledger, state  # noqa: E402
 
-LAUNCH_SCHEMA = "live-launch/v0"
 EXIT_COMPLETE = 0
 EXIT_INCOMPLETE = 2
 EXIT_LIMIT = 3
 EXIT_UNAVAILABLE = 4
-
-
-class LaunchLimit(RuntimeError):
-    def __init__(self, kind: str, detail: str = ""):
-        super().__init__(kind if not detail else f"{kind}: {detail}")
-        self.kind = kind
-        self.detail = detail
 
 
 def _rva_value(text: str) -> int:
@@ -58,228 +48,6 @@ def _rva_value(text: str) -> int:
     if not 0 < value <= 0xFFFFFFFF:
         raise argparse.ArgumentTypeError(f"RVA out of range: {text}")
     return value
-
-
-def _atomic_json(path: Path, value: dict) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2) + "\n")
-    os.replace(temporary, path)
-
-
-def _claim_launch(
-    run_root: Path,
-    output: Path,
-    targets: list[str],
-    *,
-    requested_timeout: float,
-    executable_sha256: str | None = None,
-    executable_path: str | None = None,
-    require_pinned: bool = False,
-) -> str:
-    try:
-        requested_timeout = launch_ledger.validate_timeout(
-            requested_timeout, field="requested_timeout"
-        )
-    except launch_ledger.LedgerError as exc:
-        raise LaunchLimit(exc.kind, exc.detail) from exc
-    run_root = run_root.expanduser().resolve()
-    if not run_root.is_dir():
-        raise LaunchLimit("missing", f"campaign run root does not exist: {run_root}")
-    try:
-        pointer = launch_ledger.read_pointer(run_root)
-    except launch_ledger.LedgerError as exc:
-        raise LaunchLimit("malformed", str(exc)) from exc
-    if pointer is not None:
-        try:
-            token = launch_ledger.claim(
-                Path(pointer["ledger"]),
-                campaign_id=run_root.name,
-                run_root=run_root,
-                output=output,
-                targets=targets,
-                requested_timeout=requested_timeout,
-                executable_sha256=executable_sha256,
-                executable_path=executable_path,
-                require_pinned=require_pinned,
-            )
-        except launch_ledger.LedgerError as exc:
-            raise LaunchLimit(exc.kind, exc.detail) from exc
-        _mirror_claim(run_root, token, output, targets)
-        return token
-    if require_pinned:
-        raise LaunchLimit(
-            "unauthorized",
-            "the Metal probe requires a modern pinned workflow authorization pointer",
-        )
-    lock_path = run_root / "live-launch.lock"
-    counter_path = run_root / "live-launch.json"
-    with lock_path.open("a+") as handle:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise LaunchLimit("busy", "another capture holds the launch counter") from exc
-        try:
-            if not counter_path.is_file():
-                raise LaunchLimit(
-                    "missing",
-                    f"campaign launch counter is absent: {counter_path}",
-                )
-            try:
-                data = json.loads(counter_path.read_text())
-            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                raise LaunchLimit("malformed", str(exc)) from exc
-            if data.get("schema") != LAUNCH_SCHEMA:
-                raise LaunchLimit("malformed", "unexpected launch counter schema")
-            limit = data.get("limit")
-            used = data.get("used")
-            if type(limit) is not int or type(used) is not int or limit < 0:
-                raise LaunchLimit("malformed", "invalid launch counter values")
-            if used >= limit:
-                raise LaunchLimit(
-                    "exhausted",
-                    f"{used}/{limit} campaign launches already used",
-                )
-            deadline = data.get("deadline_seconds")
-            if deadline is not None:
-                if type(deadline) not in (int, float) or deadline < 0:
-                    raise LaunchLimit("malformed", "invalid deadline_seconds")
-                if requested_timeout > float(deadline):
-                    raise LaunchLimit(
-                        "deadline",
-                        f"requested {requested_timeout:g}s exceeds campaign "
-                        f"limit {float(deadline):g}s",
-                    )
-            token = f"{time.time_ns()}-{os.getpid()}"
-            data["used"] = used + 1
-            receipts = data.setdefault("launches", [])
-            if not isinstance(receipts, list):
-                raise LaunchLimit("malformed", "launches is not a list")
-            receipts.append(
-                {
-                    "token": token,
-                    "at": dt.datetime.now(dt.timezone.utc).isoformat(),
-                    "output": str(output),
-                    "targets": list(targets),
-                    "status": "claimed",
-                }
-            )
-            _atomic_json(counter_path, data)
-            return token
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-
-def _mirror_claim(
-    run_root: Path, token: str, output: Path, targets: list[str]
-) -> None:
-    """Best-effort compatibility mirror; never a second authority."""
-    counter_path = run_root / "live-launch.json"
-    if not counter_path.is_file():
-        return
-    lock_path = run_root / "live-launch.lock"
-    try:
-        with lock_path.open("a+") as handle:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return
-            try:
-                data = json.loads(counter_path.read_text())
-                if not isinstance(data, dict):
-                    return
-                data["used"] = int(data.get("used", 0)) + 1
-                receipts = data.setdefault("launches", [])
-                if not isinstance(receipts, list):
-                    return
-                receipts.append(
-                    {
-                        "token": token,
-                        "at": dt.datetime.now(dt.timezone.utc).isoformat(),
-                        "output": str(output),
-                        "targets": list(targets),
-                        "status": "claimed",
-                    }
-                )
-                _atomic_json(counter_path, data)
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-        return
-
-
-def _mirror_finish(
-    run_root: Path, token: str, *, pid: int | None, status: str
-) -> None:
-    counter_path = run_root / "live-launch.json"
-    if not counter_path.is_file():
-        return
-    lock_path = run_root / "live-launch.lock"
-    try:
-        with lock_path.open("a+") as handle:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return
-            try:
-                data = json.loads(counter_path.read_text())
-                receipts = data.get("launches") if isinstance(data, dict) else None
-                if not isinstance(receipts, list):
-                    return
-                for receipt in receipts:
-                    if isinstance(receipt, dict) and receipt.get("token") == token:
-                        receipt["pid"] = pid
-                        receipt["status"] = status
-                        _atomic_json(counter_path, data)
-                        return
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-        return
-
-
-def _finish_launch(
-    run_root: Path, token: str, *, pid: int | None, status: str
-) -> None:
-    run_root = run_root.expanduser().resolve()
-    try:
-        pointer = launch_ledger.read_pointer(run_root)
-    except launch_ledger.LedgerError:
-        pointer = None
-    if pointer is not None:
-        ledger_status = "failed" if status.startswith("failed") else "completed"
-        try:
-            launch_ledger.finish(
-                Path(pointer["ledger"]), token, pid=pid, status=ledger_status
-            )
-        except launch_ledger.LedgerError:
-            pass
-        _mirror_finish(run_root, token, pid=pid, status=status)
-        return
-    lock_path = run_root / "live-launch.lock"
-    counter_path = run_root / "live-launch.json"
-    if not counter_path.is_file():
-        return
-    with lock_path.open("a+") as handle:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return
-        try:
-            try:
-                data = json.loads(counter_path.read_text())
-            except (OSError, UnicodeError, json.JSONDecodeError):
-                return
-            receipts = data.get("launches")
-            if not isinstance(receipts, list):
-                return
-            for receipt in receipts:
-                if isinstance(receipt, dict) and receipt.get("token") == token:
-                    receipt["pid"] = pid
-                    receipt["status"] = status
-                    _atomic_json(counter_path, data)
-                    return
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _capture_status(report: dict, *, until_target_draw: bool = False) -> tuple[str, str]:
@@ -578,16 +346,14 @@ def _gl_reference_block(
 
 
 def capture(args: argparse.Namespace) -> int:
-    if bool(args.authorize_live) == bool(args.campaign_run_root):
-        print(
-            "capture requires exactly one of --authorize-live or "
-            "--campaign-run-root",
-            file=sys.stderr,
-        )
-        return EXIT_INCOMPLETE
     output = Path(args.output).expanduser().resolve()
     if output.exists():
         print(f"capture output already exists: {output}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    try:
+        launch_ledger.validate_timeout(args.timeout, field="--timeout")
+    except launch_ledger.LedgerError as exc:
+        print(f"capture refused: {exc}", file=sys.stderr)
         return EXIT_INCOMPLETE
     until_target_draw = bool(args.until_target_draw)
     if args.gl_reference and not until_target_draw:
@@ -624,19 +390,34 @@ def capture(args: argparse.Namespace) -> int:
         print(f"capture preflight failed: {exc}", file=sys.stderr)
         return EXIT_UNAVAILABLE
 
-    token = None
-    if args.campaign_run_root:
+    ledger_path = None
+    root = Path(args.campaign_run_root).resolve() if args.campaign_run_root else None
+    if root is not None:
         try:
-            token = _claim_launch(
-                Path(args.campaign_run_root),
-                output,
-                args.target,
-                requested_timeout=args.timeout,
-                executable_sha256=evidence.get("executable_sha256"),
-            )
-        except LaunchLimit as exc:
-            print(f"campaign launch refused: {exc}", file=sys.stderr)
+            pointer = launch_ledger.read_pointer(root)
+            if pointer is None:
+                token = state.claim_capture_budget(root, output, args.target, timeout=args.timeout)
+            else:
+                ledger_path = Path(pointer["ledger"])
+                token = launch_ledger.claim(
+                    ledger_path, campaign_id=root.name, run_root=root, output=output,
+                    targets=args.target, requested_timeout=args.timeout,
+                    executable_sha256=evidence.get("executable_sha256"))
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"workflow launch refused: {exc}", file=sys.stderr)
             return EXIT_LIMIT
+
+    def finish_budget(pid, status):
+        if root is None:
+            return
+        try:
+            if ledger_path is not None:
+                launch_ledger.finish(ledger_path, token, pid=pid,
+                                     status="failed" if status.startswith("failed") else "completed")
+            else:
+                state.finish_capture_budget(root, token, pid=pid, status=status)
+        except (OSError, RuntimeError, ValueError, StopIteration) as exc:
+            print(f"workflow capture receipt could not be finalized: {exc}", file=sys.stderr)
 
     try:
         report = startup.run_ops(
@@ -652,14 +433,8 @@ def capture(args: argparse.Namespace) -> int:
             gl_reference=bool(args.gl_reference),
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
+        finish_budget(None, f"failed: {exc}")
         cleanup_errors = list(getattr(exc, "cleanup_errors", None) or [])
-        if token is not None:
-            _finish_launch(
-                Path(args.campaign_run_root),
-                token,
-                pid=None,
-                status=f"failed: {exc}",
-            )
         if cleanup_errors:
             print("capture cleanup failed: " + "; ".join(cleanup_errors),
                   file=sys.stderr)
@@ -702,13 +477,6 @@ def capture(args: argparse.Namespace) -> int:
                 "source_hashes": artifact.source_hashes,
                 "scope": "draw_probe" if until_target_draw else "function_cpu_state",
             }
-    if token is not None:
-        _finish_launch(
-            Path(args.campaign_run_root),
-            token,
-            pid=report.get("pid"),
-            status=status,
-        )
     result = {
         "status": status,
         "reason": reason,
@@ -720,13 +488,11 @@ def capture(args: argparse.Namespace) -> int:
         "draw": draw_block,
         "gl_reference": gl_reference,
         "gl_vertex": gl_vertex,
-        "launch": {
-            "mode": "campaign" if token is not None else "manual",
-        },
     }
     (output / "capture-report.json").write_text(
         json.dumps(result, indent=2) + "\n"
     )
+    finish_budget(report.get("pid"), status)
     print(json.dumps(result, indent=2))
     if status == "complete":
         return EXIT_COMPLETE
@@ -835,72 +601,12 @@ def next_blocker(args: argparse.Namespace) -> int:
     return EXIT_UNAVAILABLE
 
 
-def _authority_dir() -> Path:
-    override = os.environ.get("EU4_LAUNCH_AUTHORITY_DIR")
-    if override:
-        return Path(override).expanduser()
-    # The preferred location is outside the worktree, but a workspace-write
-    # sandbox cannot create ~/Library. .local is gitignored and outside the
-    # candidate's normal source tree; it is not a protection against malicious
-    # same-user code (the project's documented trust model).
-    return ROOT / ".local" / "launch-authority"
-
-
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def authorize(args: argparse.Namespace) -> int:
-    """Operator-only: pin an executable and grant a bounded launch budget."""
-    from reverse_engineering import paths as re_paths
-
-    run_root = Path(args.run_root).expanduser().resolve()
-    output_root = Path(args.output_root).expanduser().resolve()
-    executable = Path(
-        args.executable or re_paths.load_target()["default_executable"]
-    ).expanduser().resolve(strict=False)
-    if not executable.is_file():
-        print(f"authorize refused: executable is absent: {executable}", file=sys.stderr)
-        return EXIT_UNAVAILABLE
-    if args.limit < 0:
-        print("authorize refused: --limit must be non-negative", file=sys.stderr)
-        return EXIT_INCOMPLETE
-    deadline_seconds = None
-    if args.deadline_seconds is not None:
-        try:
-            deadline_seconds = launch_ledger.validate_timeout(
-                args.deadline_seconds, field="--deadline-seconds"
-            )
-        except launch_ledger.LedgerError as exc:
-            print(f"authorize refused: {exc}", file=sys.stderr)
-            return EXIT_INCOMPLETE
-    workflow_id = args.workflow_id or run_root.name
-    ledger = (
-        Path(args.ledger).expanduser().resolve()
-        if args.ledger
-        else (_authority_dir() / f"{workflow_id}.json").resolve()
-    )
-    try:
-        result = launch_ledger.authorize_workflow(
-            ledger,
-            run_root,
-            workflow_id=workflow_id,
-            limit=args.limit,
-            deadline_seconds=deadline_seconds,
-            executable={"path": str(executable), "sha256": _file_sha256(executable)},
-            output_root=output_root,
-        )
-    except launch_ledger.LedgerError as exc:
-        print(f"authorize refused: {exc}", file=sys.stderr)
-        return EXIT_INCOMPLETE
-    output_root.mkdir(parents=True, exist_ok=True)
-    (run_root / "authorization.json").write_text(json.dumps(result, indent=2) + "\n")
-    print(json.dumps(result, indent=2))
-    return EXIT_COMPLETE
 
 
 CHECKPOINTS = {
@@ -1764,17 +1470,9 @@ def probe(args: argparse.Namespace) -> int:
     if args.checkpoint not in CHECKPOINTS:
         print(f"unknown checkpoint: {args.checkpoint}", file=sys.stderr)
         return EXIT_INCOMPLETE
-    try:
-        timeout = launch_ledger.validate_timeout(args.timeout, field="--timeout")
-    except launch_ledger.LedgerError as exc:
-        print(f"probe refused: {exc}", file=sys.stderr)
-        return EXIT_INCOMPLETE
-    if not args.campaign_run_root:
-        print(
-            "probe requires --campaign-run-root; the unrestricted manual "
-            "--authorize-live switch is not a substitute for operator authorization",
-            file=sys.stderr,
-        )
+    timeout = args.timeout
+    if not math.isfinite(timeout) or timeout <= 0:
+        print("probe refused: --timeout must be finite and positive", file=sys.stderr)
         return EXIT_INCOMPLETE
     output = Path(args.output).expanduser().resolve()
     if output.exists():
@@ -1802,19 +1500,6 @@ def probe(args: argparse.Namespace) -> int:
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"probe preflight failed: {exc}", file=sys.stderr)
         return EXIT_UNAVAILABLE
-    try:
-        token = _claim_launch(
-            Path(args.campaign_run_root),
-            output,
-            [selector["symbol"]],
-            requested_timeout=timeout,
-            executable_sha256=identity["executable_sha256"],
-            executable_path=identity["executable"],
-            require_pinned=True,
-        )
-    except LaunchLimit as exc:
-        print(f"campaign launch refused: {exc}", file=sys.stderr)
-        return EXIT_LIMIT
     session = f"{int(time.time())}-{os.getpid()}"
     env = {
         "EU4_GFX_CHECKPOINT": args.checkpoint,
@@ -2086,11 +1771,6 @@ def probe(args: argparse.Namespace) -> int:
             "pid": None if not metadata else metadata.get("pid"),
             "game_pid": None if not status.get("checkpoint") else status["checkpoint"].get("caller", {}).get("pid"),
         },
-        "launch": {
-            "mode": "campaign",
-            "token": token,
-            "run_root": str(Path(args.campaign_run_root).resolve()),
-        },
         "artifacts": {
             "checkpoint": status.get("checkpoint"),
             "route": status.get("route"),
@@ -2106,12 +1786,6 @@ def probe(args: argparse.Namespace) -> int:
     }
     if output.is_dir():
         (output / "probe-result.json").write_text(json.dumps(result, indent=2) + "\n")
-    _finish_launch(
-        Path(args.campaign_run_root),
-        token,
-        pid=None if not metadata else metadata.get("pid"),
-        status="completed" if status.get("pixels_captured") else f"failed: {overall}",
-    )
     print(json.dumps(result, indent=2))
     if args.checkpoint == "after-present":
         if overall == "presented":
@@ -2232,8 +1906,7 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument("--gl-reference", action="store_true")
     cap.add_argument("--timeout", type=float, default=120.0)
     cap.add_argument("--output", required=True)
-    cap.add_argument("--authorize-live", action="store_true")
-    cap.add_argument("--campaign-run-root")
+    cap.add_argument("--campaign-run-root", help="account against an existing workflow budget")
     cap.set_defaults(func=capture)
 
     rep = sub.add_parser("replay", description="offline Metal differential replay")
@@ -2251,7 +1924,7 @@ def _parser() -> argparse.ArgumentParser:
     pkt.set_defaults(func=packet)
 
     prb = sub.add_parser(
-        "probe", description="bounded live Metal GPU checkpoint (operator-authorized)"
+        "probe", description="bounded live Metal GPU checkpoint"
     )
     prb.add_argument("--backend", default="metal")
     prb.add_argument("--checkpoint", required=True, choices=sorted(CHECKPOINTS))
@@ -2271,7 +1944,6 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--similarity-threshold", type=float, default=None)
     prb.add_argument("--timeout", type=float, default=120.0)
     prb.add_argument("--output", required=True)
-    prb.add_argument("--campaign-run-root")
     prb.add_argument("--reference")
     prb.add_argument("--shader-cache")
     prb.add_argument("--skip-unsupported", action="store_true")
@@ -2308,19 +1980,6 @@ def _parser() -> argparse.ArgumentParser:
     ins = sub.add_parser("inspect", description="inspect one experiment's artifacts")
     ins.add_argument("--run", required=True)
     ins.set_defaults(func=inspect)
-
-    aut = sub.add_parser(
-        "authorize",
-        description="operator: pin the executable and grant a bounded launch budget",
-    )
-    aut.add_argument("--run-root", required=True)
-    aut.add_argument("--output-root", required=True)
-    aut.add_argument("--executable")
-    aut.add_argument("--limit", type=int, required=True)
-    aut.add_argument("--deadline-seconds", type=float)
-    aut.add_argument("--workflow-id")
-    aut.add_argument("--ledger")
-    aut.set_defaults(func=authorize)
 
     nxt = sub.add_parser(
         "next-blocker", description="classify the next actionable Metal-only blocker"

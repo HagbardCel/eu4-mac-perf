@@ -54,7 +54,7 @@ _EU4_COMMAND = re.compile(
 _CAPTURE_COMMAND = re.compile(
     _COMMAND_BOUNDARY
     + r"(?:[A-Za-z0-9_./-]*/)?"
-      r"(?:python[\d.]*\s+-m\s+(?:automation\.)?m6_frame\s+capture)\b",
+      r"(?:python[\d.]*\s+-m\s+(?:automation\.)?gfx_frame\s+capture)\b",
     re.IGNORECASE | re.MULTILINE)
 _RUNNER_COMMAND = re.compile(
     _COMMAND_BOUNDARY

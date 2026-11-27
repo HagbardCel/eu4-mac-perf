@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
 import { apply, definitions, name, inject, TOOL_NAMES } from '../lib/index.js'
@@ -51,7 +53,7 @@ test('mounts exactly the eight logical tools with typed schemas', () => {
   assert.match(research.description, /sealed renderer snapshot/)
   const replay = ctx.registered.find((tool) => tool.name === 'eu4_replay')
   assert.deepEqual(replay.parameters.properties.op.enum,
-    ['case', 'frame', 'independent', 'sequence', 'diagnose', 'verify'])
+    ['case', 'frame', 'independent', 'sequence', 'diagnose', 'verify', 'qualify'])
   assert.equal(replay.parameters.properties.frame_dirs.type, 'array')
 })
 
@@ -236,4 +238,34 @@ test('a missing interpreter rejects the bridge call', async () => {
     runTool('eu4_session', { op: 'list' }, { python: '/no/such/python', cwd: process.cwd() }),
     /not executable/,
   )
+})
+
+test('qualification renders its structured decision without adding whitespace', () => {
+  const replay = definitions(() => {}).find((tool) => tool.name === 'eu4_replay')
+  const args = { op: 'qualify' }
+  const decision = { result: { schema: 'eu4-revision-qualification/v1', required_cases: ['m7-metal'] } }
+  assert.equal(replay.output.render(args, decision)[0].text, JSON.stringify(decision))
+})
+
+test('qualification launches the trusted Python core for the session workspace', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'eu4-qualification-candidate-'))
+  try {
+    const module = path.join(workspace, 'automation')
+    fs.mkdirSync(module)
+    fs.writeFileSync(path.join(module, '__init__.py'), '')
+    fs.writeFileSync(path.join(module, 'agent_tools.py'),
+      "print(" + JSON.stringify(JSON.stringify({ ok: true, qualified: true })) + ")")
+    const infra = fileURLToPath(new URL('../../../', import.meta.url))
+    const ctx = fakeContext()
+    apply(ctx, { infra, python: resolvePython('python3'),
+      env: { PYTHONPATH: workspace, EU4_QUALIFICATION_POLICY: '' } })
+    const replay = ctx.registered.find((tool) => tool.name === 'eu4_replay')
+    const value = await replay.execute({ op: 'qualify', commit: '0'.repeat(40) },
+      { agent: { session: { header: { cwd: workspace } } } })
+    assert.equal(value.status, 'refused')
+    assert.equal(value.outcome.qualified, false)
+    assert.match(value.reason, /qualification policy is unconfigured/)
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true })
+  }
 })

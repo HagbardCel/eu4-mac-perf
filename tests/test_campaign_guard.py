@@ -1,11 +1,4 @@
-"""Campaign safety enforcement: mode, one-use launch authorization and stop state.
-
-The fixed replay/correction/frame budgets and the identical-failure block are
-gone.  These tests protect what replaced them: the execution mode cannot be
-downgraded, a live launch needs an operator-issued authorization that is
-consumed once, a stop or an expired deadline refuses expensive work, and
-clearing environment variables does not disable the host-wide guard.
-"""
+"""Tests for campaign modes, host activation, stops and deadlines."""
 
 from __future__ import annotations
 
@@ -26,11 +19,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from automation import (campaign_guard, gfx_independent_replay,  # noqa: E402
-                        launch_lease, m6_frame)
+                        launch_lease, gfx_frame)
 
 AUTONOMOUS = campaign_guard.MODE_AUTONOMOUS
 CONTROLLED = campaign_guard.MODE_CONTROLLED
-TOKEN = "operator-secret"
 RATIONALE = {
     "question": "Does the sampler explain event-15?",
     "evidence": ["."],
@@ -57,21 +49,14 @@ class GuardTestCase(unittest.TestCase):
             return_value=self.markers / campaign_guard.MARKER_NAME)
         self.marker.start()
         self.addCleanup(self.marker.stop)
-        for name in ("EU4_CAMPAIGN_STATE", "EU4_CAMPAIGN_AUTHORIZATION",
-                     "EU4_CAMPAIGN_RESERVATION", "EU4_CAMPAIGN_ADMIN_TOKEN"):
-            os.environ.pop(name, None)
+        os.environ.pop("EU4_CAMPAIGN_STATE", None)
         self.guard = campaign_guard.Guard(self.path)
 
     def tearDown(self):
         self.temporary.cleanup()
 
     def init(self, mode=CONTROLLED, **kwargs):
-        kwargs.setdefault("admin_token", TOKEN)
         return self.guard.init(campaign_id="pilot", mode=mode, **kwargs)
-
-    def authorize(self, **kwargs):
-        kwargs.setdefault("operator_token", TOKEN)
-        return self.guard.authorize_launch(**kwargs)
 
 
 class GuardTests(GuardTestCase):
@@ -103,26 +88,22 @@ class GuardTests(GuardTestCase):
         self.assertEqual(raised.exception.kind, "state_exists")
 
     def test_ensure_creates_then_matches_the_same_mode(self):
-        created = self.guard.ensure(campaign_id="pilot", mode=AUTONOMOUS,
-                                    admin_token=TOKEN)
+        created = self.guard.ensure(campaign_id="pilot", mode=AUTONOMOUS,)
         self.assertTrue(created["created"])
-        again = self.guard.ensure(campaign_id="pilot", mode=AUTONOMOUS,
-                                  admin_token=TOKEN)
+        again = self.guard.ensure(campaign_id="pilot", mode=AUTONOMOUS,)
         self.assertFalse(again["created"])
 
     def test_ensure_refuses_to_change_an_active_campaign_mode(self):
         self.init(mode=AUTONOMOUS)
         with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.guard.ensure(campaign_id="pilot", mode=CONTROLLED,
-                              admin_token=TOKEN)
+            self.guard.ensure(campaign_id="pilot", mode=CONTROLLED,)
         self.assertEqual(raised.exception.kind, "mode_conflict")
         self.assertEqual(self.guard.state()["mode"], AUTONOMOUS)
 
-    def test_ensure_resumes_a_state_with_authorizations_or_stop(self):
+    def test_ensure_preserves_a_stopped_state(self):
         self.init(mode=AUTONOMOUS)
         self.guard.stop("environment_unavailable")
-        resumed = self.guard.ensure(campaign_id="pilot", mode=AUTONOMOUS,
-                                    admin_token=TOKEN)
+        resumed = self.guard.ensure(campaign_id="pilot", mode=AUTONOMOUS,)
         self.assertFalse(resumed["created"])
         self.assertEqual(resumed["stop"]["reason"], "environment_unavailable")
 
@@ -153,7 +134,7 @@ class GuardTests(GuardTestCase):
             worker = threading.Thread(target=run_ensure)
             worker.start()
             # An unlocked read/check/write would finish while the lock is held
-            # and could overwrite a reservation written in the meantime.
+            # and could overwrite concurrent state updates.
             self.assertFalse(finished.wait(0.2))
         finally:
             release.set()
@@ -165,11 +146,11 @@ class GuardTests(GuardTestCase):
     def test_the_deadline_starts_at_launch_and_is_not_extended_by_resume(self):
         self.init(mode=AUTONOMOUS)
         first = self.guard.ensure(campaign_id="pilot", mode=AUTONOMOUS,
-                                  admin_token=TOKEN, deadline_seconds=600)
+                                  deadline_seconds=600)
         epoch = first["deadline_epoch"]
         time.sleep(0.01)
         second = self.guard.ensure(campaign_id="pilot", mode=AUTONOMOUS,
-                                   admin_token=TOKEN, deadline_seconds=600)
+                                   deadline_seconds=600)
         self.assertEqual(second["deadline_epoch"], epoch)
 
     def test_status_names_the_policy_and_deadline(self):
@@ -179,7 +160,6 @@ class GuardTests(GuardTestCase):
         self.assertEqual(status["mode"], AUTONOMOUS)
         self.assertFalse(status["live_capture"])
         self.assertIsNone(status["stop"])
-        self.assertEqual(status["open_authorizations"], [])
 
     def test_a_corrupt_state_is_refused(self):
         self.path.write_text("{not json", encoding="utf-8")
@@ -199,164 +179,17 @@ class GuardTests(GuardTestCase):
 
     def test_an_operator_resume_clears_only_the_stop(self):
         self.init()
-        self.authorize()
         self.guard.stop("environment_unavailable", "no Metal device")
         state = self.guard.resume(detail="device restored")
         self.assertIsNone(state["stop"])
-        self.assertEqual(len(state["launch_authorizations"]), 1)
         self.assertEqual(state["history"][-1]["action"], "resume")
 
     def test_an_expired_deadline_refuses_new_work(self):
         self.init(deadline_seconds=0.05)
         time.sleep(0.1)
         with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.authorize()
-        self.assertEqual(raised.exception.kind, "deadline")
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
             campaign_guard.Guard(self.path).require()
         self.assertEqual(raised.exception.kind, "deadline")
-
-    def test_a_stopped_campaign_refuses_an_authorization(self):
-        self.init()
-        self.guard.stop("environment_unsafe")
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.authorize()
-        self.assertEqual(raised.exception.kind, "stopped")
-
-
-class ModeTests(GuardTestCase):
-    def test_autonomous_mode_cannot_authorize_a_live_launch(self):
-        self.init(mode=AUTONOMOUS)
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.guard.authorize_launch()
-        self.assertEqual(raised.exception.kind, "live_capture_disabled")
-
-    def test_controlled_mode_also_requires_an_operator_authorization(self):
-        self.init(mode=CONTROLLED)
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.guard.authorize_launch()
-        self.assertEqual(raised.exception.kind,
-                         "operator_authorization_required")
-
-    def test_autonomous_mode_refuses_live_authorization_even_with_the_token(self):
-        self.init(mode=AUTONOMOUS)
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.guard.authorize_launch(operator_token=TOKEN)
-        self.assertEqual(raised.exception.kind, "live_capture_disabled")
-
-    def test_controlled_mode_requires_the_token_then_authorizes(self):
-        self.init(mode=CONTROLLED)
-        with self.assertRaises(campaign_guard.CampaignRefusal):
-            self.guard.authorize_launch(operator_token="wrong")
-        authorization = self.authorize()
-        self.assertTrue(self.guard.validate_authorization(authorization))
-
-    def test_autonomous_mode_refuses_a_forged_authorization_claim(self):
-        self.init(mode=AUTONOMOUS)
-        state = self.guard.state()
-        state["launch_authorizations"]["forged"] = {
-            "state": "authorized", "created_at": 1.0,
-            "campaign_id": state["campaign_id"], "launch_claim": None,
-        }
-        self.guard._write(state)
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.guard.claim_launch("forged")
-        self.assertEqual(raised.exception.kind, "live_capture_disabled")
-
-
-class LaunchAuthorizationTests(GuardTestCase):
-    def setUp(self):
-        super().setUp()
-        self.init()
-        self.authorization = self.authorize()
-
-    def test_one_authorization_authorizes_one_claim(self):
-        claim = self.guard.claim_launch(self.authorization)
-        self.assertEqual(claim["action"], "eu4_launches")
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.guard.claim_launch(self.authorization)
-        self.assertEqual(raised.exception.kind, "launch_already_claimed")
-
-    def test_concurrent_claims_produce_exactly_one_success(self):
-        outcomes = []
-
-        def contend():
-            guard = campaign_guard.Guard(self.path)
-            try:
-                guard.claim_launch(self.authorization)
-                outcomes.append("claimed")
-            except campaign_guard.CampaignRefusal:
-                outcomes.append("refused")
-
-        threads = [threading.Thread(target=contend) for _ in range(6)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        self.assertEqual(outcomes.count("claimed"), 1)
-        self.assertEqual(outcomes.count("refused"), 5)
-
-    def test_invalid_and_missing_authorizations_are_rejected(self):
-        for identifier in ("", "no-such-authorization"):
-            with self.assertRaises(campaign_guard.CampaignRefusal):
-                self.guard.claim_launch(identifier)
-
-    def test_a_foreign_campaign_authorization_is_rejected(self):
-        state = self.guard.state()
-        state["launch_authorizations"][self.authorization]["campaign_id"] = (
-            "another-campaign")
-        self.guard._write(state)
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.guard.claim_launch(self.authorization)
-        self.assertEqual(raised.exception.kind, "authorization_campaign")
-
-    def test_a_completed_authorization_cannot_claim(self):
-        self.guard.complete(self.authorization, outcome="ok")
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.guard.claim_launch(self.authorization)
-        self.assertEqual(raised.exception.kind, "authorization_closed")
-
-    def test_a_failed_launch_keeps_its_authorization(self):
-        self.guard.claim_launch(self.authorization)
-        self.guard.complete(self.authorization, outcome="failed",
-                            detail="spawn failed")
-        state = self.guard.state()
-        record = state["launch_authorizations"][self.authorization]
-        self.assertEqual(record["state"], "failed")
-        self.assertEqual(record["detail"], "spawn failed")
-        self.assertIsNotNone(record["launch_claim"])
-        with self.assertRaises(campaign_guard.CampaignRefusal):
-            self.guard.claim_launch(self.authorization)
-
-    def test_double_completion_is_refused(self):
-        self.guard.complete(self.authorization, outcome="ok")
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.guard.complete(self.authorization, outcome="ok")
-        self.assertEqual(raised.exception.kind, "authorization_closed")
-
-    def test_abandoned_authorizations_are_never_reusable(self):
-        self.guard.claim_launch(self.authorization)
-        self.guard.abandon_stale(max_age_seconds=0)
-        record = self.guard.state()["launch_authorizations"][self.authorization]
-        self.assertEqual(record["state"], "abandoned")
-        with self.assertRaises(campaign_guard.CampaignRefusal):
-            self.guard.claim_launch(self.authorization)
-        with self.assertRaises(campaign_guard.CampaignRefusal):
-            self.guard.complete(self.authorization, outcome="ok")
-
-    def test_a_stopped_campaign_cannot_claim(self):
-        self.guard.stop("invalid_evidence", "fabricated pixels")
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            self.guard.claim_launch(self.authorization)
-        self.assertEqual(raised.exception.kind, "stopped")
-
-    def test_each_authorization_is_independent(self):
-        second = self.authorize()
-        self.guard.claim_launch(self.authorization)
-        self.assertTrue(self.guard.validate_authorization(second))
-        self.guard.claim_launch(second)
-        status = self.guard.status()
-        self.assertEqual(status["authorization_counts"]["claimed"], 2)
 
 
 def _marker_file(markers: Path) -> Path:
@@ -375,16 +208,16 @@ class ActivationTests(GuardTestCase):
         self.assertEqual(value["state"], str(self.path))
 
     def test_clearing_the_environment_does_not_disable_the_guard(self):
-        self.init()
+        self.init(mode=AUTONOMOUS)
         os.environ.pop("EU4_CAMPAIGN_STATE", None)
         self.assertIsNotNone(campaign_guard.from_env())
         with self.assertRaises(campaign_guard.CampaignRefusal):
-            campaign_guard.require_launch_authorization("")
+            campaign_guard.require_live_campaign()
 
     def test_an_explicit_environment_path_cannot_override_the_active_policy(self):
         other = self.root / "other-state.json"
         other_guard = campaign_guard.Guard(other)
-        other_guard.init(mode=CONTROLLED, admin_token=TOKEN)
+        other_guard.init(mode=CONTROLLED)
         other_guard.deactivate()
         self.init()
         with mock.patch.dict(os.environ, {"EU4_CAMPAIGN_STATE": str(other)}):
@@ -399,7 +232,7 @@ class ActivationTests(GuardTestCase):
         self.init(mode=AUTONOMOUS)
         other = campaign_guard.Guard(self.root / "other-state.json")
         with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            other.init(mode=CONTROLLED, admin_token=TOKEN)
+            other.init(mode=CONTROLLED)
         self.assertEqual(raised.exception.kind, "campaign_active")
         self.assertEqual(
             campaign_guard.Guard(self.path).state()["mode"], AUTONOMOUS)
@@ -411,14 +244,14 @@ class ActivationTests(GuardTestCase):
         guard = campaign_guard.from_env()
         self.assertIsNotNone(guard)
         with self.assertRaises(campaign_guard.CampaignRefusal):
-            campaign_guard.require_launch_authorization("")
+            campaign_guard.require_live_campaign()
 
     def test_a_malformed_marker_fails_closed(self):
         self.markers.mkdir(parents=True, exist_ok=True)
         self.marker_file().write_text("{broken", encoding="utf-8")
         self.assertIsNotNone(campaign_guard.from_env())
         with self.assertRaises(campaign_guard.CampaignRefusal):
-            campaign_guard.require_launch_authorization("")
+            campaign_guard.require_live_campaign()
 
     def test_the_marker_path_ignores_the_launch_lease_override(self):
         from automation import launch_lease
@@ -445,14 +278,14 @@ class ActivationTests(GuardTestCase):
             os.environ.pop("EU4_CAMPAIGN_STATE", None)
             self.assertIsNotNone(campaign_guard.from_env())
             with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-                campaign_guard.require_launch_authorization("")
+                campaign_guard.require_live_campaign()
         self.assertEqual(raised.exception.kind, "stopped")
 
     def test_concurrent_activation_admits_exactly_one_campaign(self):
         paths = [self.root / "campaign-a.json", self.root / "campaign-b.json"]
         for path in paths:
             guard = campaign_guard.Guard(path)
-            guard.init(mode=AUTONOMOUS, admin_token=TOKEN)
+            guard.init(mode=AUTONOMOUS)
             guard.deactivate()
         marker = _marker_file(self.markers)
         self.assertFalse(marker.exists())
@@ -482,7 +315,7 @@ class ActivationTests(GuardTestCase):
         self.assertTrue(self.guard.deactivate())
         self.assertIsNone(campaign_guard.from_env())
         other = campaign_guard.Guard(self.root / "other-state.json")
-        other.init(mode=CONTROLLED, admin_token=TOKEN)
+        other.init(mode=CONTROLLED)
         self.assertFalse(self.guard.deactivate())
         self.assertIsNotNone(campaign_guard.from_env())
 
@@ -509,14 +342,14 @@ class ActivationTests(GuardTestCase):
 class LegacyStateTests(GuardTestCase):
     def test_a_v1_state_is_refused_with_a_fresh_campaign_hint(self):
         self.path.write_text(json.dumps({
-            "schema": campaign_guard.LEGACY_SCHEMA,
+            "schema": "eu4-campaign-state/v1",
             "budgets": {"replays": 2},
             "counts": {"replays": 2},
         }), encoding="utf-8")
         with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
             self.guard.status()
-        self.assertEqual(raised.exception.kind, "legacy_state")
-        self.assertIn("new campaign state", raised.exception.detail)
+        self.assertEqual(raised.exception.kind, "state_invalid")
+        self.assertIn("fresh campaign", raised.exception.detail)
 
 
 class _FakeLease:
@@ -621,7 +454,7 @@ class ActionSiteTests(GuardTestCase):
         frame = self.root / "frame"
         frame.mkdir()
         out = self.root / "out"
-        args = m6_frame._parser().parse_args([
+        args = gfx_frame._parser().parse_args([
             "replay", "--frame", str(frame), "--out", str(out)])
         guard = self.guard
 
@@ -633,12 +466,12 @@ class ActionSiteTests(GuardTestCase):
 
         with mock.patch.dict(os.environ,
                              {"EU4_CAMPAIGN_STATE": str(self.path)}), \
-             mock.patch.object(m6_frame, "build_replay_host",
+             mock.patch.object(gfx_frame, "build_replay_host",
                                return_value=self.root / "host"), \
              mock.patch.object(launch_lease, "gpu_execution", lock), \
-             mock.patch.object(m6_frame.subprocess, "run",
+             mock.patch.object(gfx_frame.subprocess, "run",
                                side_effect=AssertionError("must not execute")):
-            self.assertEqual(m6_frame._replay_command_body(args), 3)
+            self.assertEqual(gfx_frame._replay_command_body(args), 3)
 
     def test_a_stopped_campaign_refuses_a_replay(self):
         self.init(mode=AUTONOMOUS)
@@ -653,7 +486,7 @@ class ActionSiteTests(GuardTestCase):
 
     def test_autonomous_capture_refuses_before_spawning_any_child(self):
         self.init(mode=AUTONOMOUS)
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", str(self.root / "capture"), "--shadow"])
         fake_startup = types.SimpleNamespace(
             StartupError=RuntimeError,
@@ -665,18 +498,16 @@ class ActionSiteTests(GuardTestCase):
              mock.patch.dict(sys.modules,
                              {"eu4_gfx_startup_trace": fake_startup}), \
              mock.patch.object(
-                 m6_frame.subprocess, "Popen",
+                 gfx_frame.subprocess, "Popen",
                  side_effect=AssertionError("coordinator must not spawn")):
-            status = m6_frame.capture(args)
+            status = gfx_frame.capture(args)
         self.assertEqual(status, 3)
         self.assertFalse((self.root / "capture").exists())
-        self.assertEqual(self.guard.state()["launch_authorizations"], {})
 
     def test_a_stopped_campaign_refuses_capture_before_preflight(self):
         self.init(mode=CONTROLLED)
-        self.authorize()
         self.guard.stop("operator_stop", "operator cancelled")
-        args = m6_frame._parser().parse_args(
+        args = gfx_frame._parser().parse_args(
             ["capture", "--output", str(self.root / "capture")])
         fake_startup = types.SimpleNamespace(
             StartupError=RuntimeError,
@@ -688,74 +519,32 @@ class ActionSiteTests(GuardTestCase):
                              {"EU4_CAMPAIGN_STATE": str(self.path)}), \
              mock.patch.dict(sys.modules,
                              {"eu4_gfx_startup_trace": fake_startup}):
-            self.assertEqual(m6_frame.capture(args), 3)
+            self.assertEqual(gfx_frame.capture(args), 3)
 
-    def test_controlled_capture_cannot_mint_its_own_authorization(self):
-        self.init(mode=CONTROLLED)
-        args = m6_frame._parser().parse_args(
-            ["capture", "--output", str(self.root / "capture"), "--shadow"])
-        fake_startup = types.SimpleNamespace(
-            StartupError=RuntimeError,
-            preflight_ops=lambda *a, **k: (_ for _ in ()).throw(
-                AssertionError("preflight/build must not run")),
-            run_ops=lambda *a, **k: (_ for _ in ()).throw(
-                AssertionError("EU4 must not launch")))
-        with mock.patch.dict(os.environ,
-                             {"EU4_CAMPAIGN_STATE": str(self.path)}), \
-             mock.patch.dict(sys.modules,
-                             {"eu4_gfx_startup_trace": fake_startup}), \
-             mock.patch.object(
-                 m6_frame.subprocess, "Popen",
-                 side_effect=AssertionError("coordinator must not spawn")):
-            status = m6_frame.capture(args)
-        self.assertEqual(status, 3)
-        self.assertEqual(self.guard.state()["launch_authorizations"], {})
-
-    def test_controlled_capture_runs_with_an_operator_authorization(self):
-        self.init(mode=CONTROLLED)
-        authorization = self.authorize()
-        args = m6_frame._parser().parse_args(
-            ["capture", "--output", str(self.root / "capture")])
-
-        def no_launch(*_a, **_k):
-            raise RuntimeError("scripted launch refusal")
-
-        fake_startup = types.SimpleNamespace(
-            StartupError=RuntimeError,
-            preflight_ops=lambda *a, **k: {}, run_ops=no_launch)
-        with mock.patch.dict(os.environ, {
-                "EU4_CAMPAIGN_STATE": str(self.path),
-                "EU4_CAMPAIGN_AUTHORIZATION": authorization}), \
-             mock.patch.dict(sys.modules,
-                             {"eu4_gfx_startup_trace": fake_startup}):
-            status = m6_frame.capture(args)
-        self.assertEqual(status, 4)
-        record = self.guard.state()["launch_authorizations"][authorization]
-        self.assertEqual(record["state"], "failed")
 
     def test_direct_replay_respects_a_campaign_stop(self):
         self.init(mode=AUTONOMOUS)
         self.guard.stop("operator_stop", "operator cancelled")
-        args = m6_frame._parser().parse_args([
+        args = gfx_frame._parser().parse_args([
             "replay", "--frame", str(self.root / "frame"),
             "--out", str(self.root / "out"),
             "--rationale", json.dumps(RATIONALE)])
         with mock.patch.dict(os.environ,
                              {"EU4_CAMPAIGN_STATE": str(self.path)}), \
-             mock.patch.object(m6_frame, "_replay_command_body",
+             mock.patch.object(gfx_frame, "_replay_command_body",
                                side_effect=AssertionError("must not run")):
-            self.assertEqual(m6_frame.replay_command(args), 3)
+            self.assertEqual(gfx_frame.replay_command(args), 3)
 
     def test_direct_replay_requires_a_rationale(self):
         self.markers.mkdir(parents=True, exist_ok=True)
-        args = m6_frame._parser().parse_args([
+        args = gfx_frame._parser().parse_args([
             "replay", "--frame", str(self.root / "frame"),
             "--out", str(self.root / "out")])
-        with mock.patch.object(m6_frame, "_replay_command_body",
+        with mock.patch.object(gfx_frame, "_replay_command_body",
                                side_effect=AssertionError("must not run")):
-            self.assertEqual(m6_frame.replay_command(args), 3)
+            self.assertEqual(gfx_frame.replay_command(args), 3)
 
-    def run_ops(self, name: str, popen, *, authorization):
+    def run_ops(self, name: str, popen, *, before_spawn=None):
         import eu4_gfx_startup_trace as startup
         from automation import test_profiles
 
@@ -767,20 +556,19 @@ class ActionSiteTests(GuardTestCase):
             "ops": ["_GfxDraw"],
         }
         with mock.patch.dict(os.environ, {
-                "EU4_CAMPAIGN_STATE": str(self.path),
-                "EU4_CAMPAIGN_RESERVATION": authorization}), \
+                "EU4_CAMPAIGN_STATE": str(self.path)}), \
                 mock.patch.object(test_profiles, "ensure_live_launch",
                                   return_value=None), \
                 mock.patch.object(startup.base, "GOG_LAUNCHER", launcher), \
                 mock.patch.object(startup.launch_lease, "acquire",
-                                  return_value=_FakeLease()), \
+                                  side_effect=before_spawn, return_value=_FakeLease()), \
                 mock.patch.object(startup.subprocess, "Popen", popen):
             return startup.run_ops(
                 targets=["_GfxDraw"], max_events=8, duration_s=1.0,
                 timeout_s=5, output=self.root / name, authorize_live=True,
                 evidence=evidence)
 
-    def spawn(self, name: str, popen, *, authorization, enabled=True):
+    def spawn(self, name: str, popen, *, enabled=True):
         from automation import gfx_launch, test_profiles
 
         def prepare(role, config, run_dir, libraries=None, backend=None):
@@ -796,81 +584,13 @@ class ActionSiteTests(GuardTestCase):
                 mock.patch.object(gfx_launch.subprocess, "Popen", popen):
             if not enabled:
                 os.environ.pop("EU4_CAMPAIGN_STATE", None)
-                os.environ.pop("EU4_CAMPAIGN_RESERVATION", None)
             config = types.SimpleNamespace(args=[], executable=Path("/tmp/eu4"))
             return gfx_launch.spawn(
                 "reference", config, self.root / name,
-                lease=_FakeLease(), session=_FakeSession(),
-                campaign_reservation=authorization)
+                lease=_FakeLease(), session=_FakeSession())
 
-    def test_autonomous_mode_refuses_the_shared_launch_preflight(self):
+    def test_autonomous_mode_refuses_a_direct_spawn(self):
         self.init(mode=AUTONOMOUS)
-        state = self.guard.state()
-        state["launch_authorizations"]["injected"] = {
-            "state": "authorized", "created_at": 1.0,
-            "campaign_id": state["campaign_id"], "launch_claim": None,
-        }
-        self.guard._write(state)
-        with mock.patch.dict(os.environ, {
-                "EU4_CAMPAIGN_STATE": str(self.path),
-                "EU4_CAMPAIGN_AUTHORIZATION": "injected"}):
-            with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-                campaign_guard.require_launch_authorization()
-        self.assertEqual(raised.exception.kind, "live_capture_disabled")
-
-    def test_a_direct_unreserved_launch_is_prohibited(self):
-        self.init(mode=CONTROLLED)
-        with mock.patch.dict(os.environ, {
-                "EU4_CAMPAIGN_STATE": str(self.path)}):
-            os.environ.pop("EU4_CAMPAIGN_RESERVATION", None)
-            with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-                campaign_guard.require_launch_authorization()
-        self.assertEqual(raised.exception.kind, "launch_authorization")
-
-    def test_run_ops_claims_once_and_a_failed_spawn_keeps_the_authorization(self):
-        self.init(mode=CONTROLLED)
-        authorization = self.authorize()
-        calls = []
-
-        def popen(*args, **kwargs):
-            calls.append(args)
-            raise RuntimeError("controlled spawn failure")
-
-        with self.assertRaises(RuntimeError):
-            self.run_ops("first", popen, authorization=authorization)
-        record = self.guard.state()["launch_authorizations"][authorization]
-        self.assertTrue(record["launch_claim"])
-        self.assertEqual(record["state"], "claimed")
-
-        with self.assertRaises(RuntimeError) as raised:
-            self.run_ops("second", popen, authorization=authorization)
-        self.assertIn("already", str(raised.exception))
-        self.assertEqual(len(calls), 1)
-
-    def test_both_launch_paths_share_the_same_entitlement(self):
-        self.init(mode=CONTROLLED)
-        authorization = self.authorize()
-        calls = []
-
-        def popen(*args, **kwargs):
-            calls.append(args)
-            raise RuntimeError("controlled spawn failure")
-
-        with self.assertRaises(RuntimeError):
-            self.run_ops("shared-first", popen, authorization=authorization)
-        with self.assertRaises(RuntimeError) as raised:
-            self.spawn("shared-second", popen, authorization=authorization)
-        self.assertIn("already", str(raised.exception))
-        self.assertEqual(len(calls), 1)
-
-    def test_autonomous_mode_refuses_a_direct_spawn_with_a_forged_authorization(self):
-        self.init(mode=AUTONOMOUS)
-        state = self.guard.state()
-        state["launch_authorizations"]["injected"] = {
-            "state": "authorized", "created_at": 1.0,
-            "campaign_id": state["campaign_id"], "launch_claim": None,
-        }
-        self.guard._write(state)
         calls = []
 
         def popen(*args, **kwargs):
@@ -880,35 +600,29 @@ class ActionSiteTests(GuardTestCase):
         from automation import gfx_launch
 
         with self.assertRaises(gfx_launch.LaunchError) as raised:
-            self.spawn("autonomous-direct", popen, authorization="injected")
+            self.spawn("autonomous-direct", popen)
         self.assertIn("live_capture_disabled", str(raised.exception))
         self.assertEqual(calls, [])
 
     def test_a_stopped_campaign_is_refused_immediately_before_popen(self):
         self.init(mode=CONTROLLED)
-        authorization = self.authorize()
-        self.guard.stop("blocked", "environment unsafe")
         calls = []
 
         def popen(*args, **kwargs):
             calls.append(args)
             return types.SimpleNamespace(pid=4242)
 
+        def stop_after_preflight(*args, **kwargs):
+            self.guard.stop("blocked", "environment unsafe")
+            return _FakeLease()
+
         with self.assertRaises(RuntimeError) as raised:
-            self.run_ops("stopped", popen, authorization=authorization)
+            self.run_ops("stopped", popen, before_spawn=stop_after_preflight)
         self.assertIn("stopped", str(raised.exception))
         self.assertEqual(calls, [])
 
-    def test_a_legacy_launch_tool_is_refused_under_a_campaign(self):
-        self.init(mode=AUTONOMOUS)
-        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
-            campaign_guard.refuse_unmanaged_launch("eu4_metal_boot.launch_session")
-        self.assertEqual(raised.exception.kind, "launch_authorization")
 
-    def test_a_legacy_launch_tool_is_allowed_without_a_campaign(self):
-        campaign_guard.refuse_unmanaged_launch("eu4_metal_boot.launch_session")
-
-    def test_an_unreserved_spawn_keeps_its_existing_behavior(self):
+    def test_standalone_spawn_keeps_its_existing_behavior(self):
         calls = []
 
         def popen(*args, **kwargs):
@@ -916,8 +630,7 @@ class ActionSiteTests(GuardTestCase):
             return types.SimpleNamespace(pid=4242)
 
         self.assertIsNone(campaign_guard.from_env())
-        launched = self.spawn("unguarded", popen, authorization="",
-                              enabled=False)
+        launched = self.spawn("unguarded", popen, enabled=False)
         self.assertEqual(launched.process.pid, 4242)
         self.assertEqual(len(calls), 1)
 

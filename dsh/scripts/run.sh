@@ -164,7 +164,7 @@ export EU4_DSH_PYTHON
 
 # Optional campaign safety policy enforced by the action sites independently of
 # the model.  There is no replay or validation quota: the mode decides whether a
-# live EU4 launch may be authorized, and every launch is one-use.
+# live EU4 launch is compatible with the active campaign.
 : "${CAMPAIGN_MODE:=autonomous_reconstruction}"
 if [ -n "$CAMPAIGN_STATE" ]; then
   EU4_CAMPAIGN_STATE=$(CDPATH= cd -- "$(dirname -- "$CAMPAIGN_STATE")" 2>/dev/null && pwd)/$(basename -- "$CAMPAIGN_STATE") || EU4_CAMPAIGN_STATE=$CAMPAIGN_STATE
@@ -199,14 +199,6 @@ print("" if value is None else value)' "$CAMPAIGN" 2>/dev/null || true)
     }
   fi
   echo "run: campaign state=$EU4_CAMPAIGN_STATE mode=$CAMPAIGN_MODE deadline=${CAMPAIGN_DEADLINE:-none}" >&2
-  # The operator token issues one live-launch authorization; it is never
-  # inherited by the agent session.
-  if [ -n "${EU4_CAMPAIGN_ADMIN_TOKEN:-}" ]; then
-    echo "run: operator token present; issue each live launch with authorize-launch" >&2
-  else
-    echo "run: no EU4_CAMPAIGN_ADMIN_TOKEN; live launches are impossible" >&2
-  fi
-  unset EU4_CAMPAIGN_ADMIN_TOKEN
   echo "run: deactivate with \`python3 -m automation.campaign_guard deactivate --state \$EU4_CAMPAIGN_STATE\` when the campaign ends" >&2
 fi
 echo "run: Python interpreter: $EU4_DSH_PYTHON" >&2

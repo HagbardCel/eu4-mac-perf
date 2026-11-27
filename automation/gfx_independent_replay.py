@@ -25,12 +25,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from automation import gfx_frame_graph, m6_compare, m6_frame
+from automation import gfx_frame_graph, gfx_frame_pixels, gfx_frame
 from automation.gfx_artifacts import sha256_file as _sha
+from automation.gfx_frame_pixels import exact_comparison_statistics
 
 SCHEMA = "gfx-independent-replay/v1"
 DIAGNOSIS_SCHEMA = "gfx-frame-diagnosis/v1"
-DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "analysis" / "m6" / "comparison-policy.json"
+DEFAULT_POLICY = Path(__file__).with_name("frame-pixel-policy.json")
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_MARKER = ".gfx-replay-output.json"
 
@@ -786,7 +787,7 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             if not alpha_applicable:
                 reference = _opaque_alpha(reference)
                 candidate = _opaque_alpha(candidate)
-            statistics = m6_compare.compare_images(
+            statistics = gfx_frame_pixels.compare_images(
                 reference, candidate, width, height)
         entry = {
             "event": event,
@@ -987,49 +988,6 @@ _FINAL_STATISTICS = (
 )
 
 
-def exact_comparison_statistics(statistics: dict, width: int,
-                                height: int) -> tuple[bool | None, str]:
-    """Return raw four-channel exactness for a comparison statistics block.
-
-    A policy pass is not exactness.  Exact equality requires a complete,
-    dimensionally consistent BGRA8 measurement with zero mismatched pixels,
-    zero alpha differences and zero maximum channel error on all four
-    channels.  Missing or inconsistent statistics return ``(None, reason)`` so
-    callers fail closed instead of advertising a match.
-
-    The function deliberately consumes the raw statistics rather than the
-    policy verdict: a caller-supplied threshold must never be able to promote
-    a one-byte difference into an exact match.
-    """
-    if not isinstance(statistics, dict):
-        return None, "comparison statistics are absent"
-    try:
-        pixels = int(statistics["pixels"])
-        mismatched = int(statistics["mismatched_pixels"])
-        max_error = int(statistics["max_channel_error"])
-        alpha = int(statistics["alpha_different_pixels"])
-    except (KeyError, TypeError, ValueError) as exc:
-        return None, f"comparison statistics are incomplete: {exc}"
-    mean_abs = statistics.get("mean_abs_error")
-    if not isinstance(mean_abs, (list, tuple)) or len(mean_abs) != 4:
-        return None, "comparison did not measure all four BGRA channels"
-    if pixels <= 0 or width <= 0 or height <= 0:
-        return None, "comparison extent is missing or empty"
-    if pixels != width * height:
-        return None, (f"comparison pixel count {pixels} disagrees with "
-                      f"{width}x{height}")
-    if mismatched < 0 or mismatched > pixels:
-        return None, f"comparison mismatch count is out of range: {mismatched}"
-    if alpha < 0 or alpha > mismatched:
-        return None, f"comparison alpha count is out of range: {alpha}"
-    if max_error < 0 or max_error > 255:
-        return None, f"comparison maximum error is out of range: {max_error}"
-    if (mismatched == 0 and max_error == 0
-            and alpha == 0 and all(float(value) == 0.0 for value in mean_abs)):
-        return True, ""
-    return False, ""
-
-
 def _exact_report_status(report: dict) -> tuple[str, bool | None, str]:
     """Status for a full comparison report, ignoring policy tolerances."""
     reference = report.get("reference") or {}
@@ -1048,7 +1006,7 @@ def final_comparison_report(frame_dir: Path, out_dir: Path,
                             policy_path: Path | str | None = None) -> dict:
     """Full-frame differential through the shared comparison engine.
 
-    The complete ``m6_compare`` report (statistics, worst region and draw
+    The complete ``gfx_frame_pixels`` report (statistics, worst region and draw
     attribution) is retained under ``detail`` so the diagnostic does not
     duplicate the comparison engine or discard region evidence.
 
@@ -1063,8 +1021,8 @@ def final_comparison_report(frame_dir: Path, out_dir: Path,
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         return {"status": "invalid", "reason": f"comparison policy: {exc}"}
     try:
-        report = m6_compare.compare(Path(frame_dir), Path(out_dir), policy)
-    except (m6_compare.CompareError, OSError, ValueError) as exc:
+        report = gfx_frame_pixels.compare(Path(frame_dir), Path(out_dir), policy)
+    except (gfx_frame_pixels.CompareError, OSError, ValueError) as exc:
         return {"status": "invalid", "reason": str(exc)}
     statistics = report.get("statistics") or {}
     status, exact, exact_reason = _exact_report_status(report)
@@ -1090,56 +1048,6 @@ def final_comparison_report(frame_dir: Path, out_dir: Path,
         "detail": report,
     }
     return value
-
-
-def final_comparison(frame_dir: Path, out_dir: Path,
-                     policy_path: Path | str | None = None) -> dict:
-    """Backward-compatible exact final comparison.
-
-    The shared engine is used when the replay result is available; the direct
-    BGRA path remains as the offline fallback for synthetic result directories
-    that do not contain ``replay.json``.
-    """
-    report = final_comparison_report(frame_dir, out_dir, policy_path)
-    if report.get("status") in ("match", "divergent"):
-        return report
-    manifest = json.loads((frame_dir / "frame-trace.json").read_text())
-    frame = manifest.get("frame") or {}
-    width = int(frame.get("width") or 0)
-    height = int(frame.get("height") or 0)
-    reference = frame_dir / str(frame.get("reference") or "")
-    candidate = out_dir / "metal-frame.bgra"
-    if not candidate.is_file():
-        return {"status": "invalid", "reason": "Metal final readback is absent"}
-    statistics = m6_compare.compare_images(
-        reference.read_bytes(), candidate.read_bytes(), width, height)
-    exact, exact_reason = exact_comparison_statistics(statistics, width, height)
-    if exact is None:
-        return {"status": "invalid", "reason": exact_reason}
-    policy = json.loads(Path(policy_path or DEFAULT_POLICY).read_text())
-    thresholds = policy.get("thresholds") or {}
-    max_channel = int(thresholds.get("max_channel_error", 0))
-    max_fraction = float(thresholds.get("mismatched_fraction", 0.0))
-    max_mean = float(thresholds.get("mean_abs_error", 0.0))
-    mean_total = sum(float(value) for value in statistics["mean_abs_error"])
-    policy_pass = (
-        statistics["max_channel_error"] <= max_channel
-        and statistics["mismatched_fraction"] <= max_fraction
-        and mean_total <= max_mean
-    )
-    return {
-        "status": "match" if exact else "divergent",
-        "exact": exact,
-        "policy_status": "pass" if policy_pass else "fail",
-        "policy_pass": policy_pass,
-        "width": width,
-        "height": height,
-        "reference_sha256": _sha(reference),
-        "candidate_sha256": _sha(candidate),
-        "statistics": {key: statistics[key] for key in _FINAL_STATISTICS},
-        "worst_regions": statistics["regions"][:4],
-        "policy": str(policy_path or DEFAULT_POLICY),
-    }
 
 
 def _event_index(row: dict) -> int:
@@ -1926,8 +1834,8 @@ def state_coverage(frame_dir: Path, *, trace: dict | None = None,
     """
     try:
         if trace is None:
-            trace = m6_frame.load_trace(Path(frame_dir))
-    except m6_frame.FrameError as exc:
+            trace = gfx_frame.load_trace(Path(frame_dir))
+    except gfx_frame.FrameError as exc:
         return {
             "schema": "gfx-state-coverage/v1",
             "status": "invalid",
@@ -2813,8 +2721,8 @@ def _load_reference(frame_dir: Path, trace: dict | None = None
         raise ReplayError("invalid_provenance", str(exc)) from exc
     if trace is None:
         try:
-            trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
-        except m6_frame.FrameError as exc:
+            trace = gfx_frame.load_trace(frame_dir, verify_blobs=True)
+        except gfx_frame.FrameError as exc:
             kind = ("invalid_provenance" if trusted is not None
                     or _capture_error_class(str(exc)) == "invalid"
                     else "incomplete_capture")
@@ -2823,9 +2731,9 @@ def _load_reference(frame_dir: Path, trace: dict | None = None
     seal_path = frame_dir / "frame-seal.json"
     if trusted is not None or seal_path.exists() or seal_path.is_symlink():
         try:
-            seal = m6_frame.load_seal(frame_dir, trace=trace,
+            seal = gfx_frame.load_seal(frame_dir, trace=trace,
                                       trusted_evidence=trusted)
-        except m6_frame.FrameError as exc:
+        except gfx_frame.FrameError as exc:
             raise ReplayError("invalid_provenance", f"frame seal: {exc}") from exc
     return trace, seal, trusted
 
@@ -3536,83 +3444,6 @@ def full_frame_completion_problems(replay: dict) -> list[str]:
     return problems
 
 
-def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
-                    pixels: str, checkpoints: list[dict],
-                    checkpoint_validation: dict, faults: dict | None,
-                    state_cov: str = "complete",
-                    identity: str = "unverified_session",
-                    capture_validity: str = "incomplete",
-                    provenance: str = "incomplete",
-                    ) -> tuple[str, dict]:
-    """Pure qualification classification used by replay() and its tests.
-
-    Invalid or unknown required evidence is always an instrumentation failure.
-    It can never fall through to a merely nonqualifying or qualified result.
-    Qualification additionally requires an explicit positive identity,
-    capture validity and resource provenance; a legacy caller that supplies
-    none of them can still receive a completed *diagnostic* result but never a
-    qualified equivalence claim.
-    """
-    intermediate_divergent = any(
-        item.get("status") == "divergent" and item.get("authoritative")
-        for item in checkpoints)
-    checkpoint_invalid = (
-        (checkpoint_validation or {}).get("status") not in ("ok",)
-        or any(item.get("status") == "invalid" for item in checkpoints))
-    fault_injection = bool(faults)
-    invalid_verdict = (
-        not execution_ok
-        or identity == "mismatch" or capture_validity == "invalid"
-        or provenance == "invalid"
-        or coverage not in ("complete", "partial")
-        or pixels not in ("match", "divergent")
-        or semantic not in ("match", "divergent")
-        or state_cov not in ("complete", "partial")
-        or checkpoint_invalid
-    )
-    positive_identity = (
-        identity == "verified" and capture_validity == "valid"
-        and provenance == "verified")
-    qualified = bool(
-        not invalid_verdict
-        and coverage == "complete" and state_cov == "complete"
-        and semantic == "match" and pixels == "match"
-        and not intermediate_divergent
-        and not fault_injection
-        and positive_identity
-    )
-    if invalid_verdict:
-        status = "invalid"
-    elif semantic == "divergent":
-        status = "semantic_divergence"
-    elif pixels == "divergent" or intermediate_divergent:
-        status = ("confirmed_rendering_difference" if coverage == "complete"
-                  else "partial_rendering_difference")
-    elif coverage == "partial" or state_cov == "partial":
-        status = "partial"
-    elif not qualified:
-        # A deliberate fault experiment, for example, is a valid nonqualifying
-        # outcome.  It must never be labelled qualified while qualified=false.
-        status = "partial"
-    else:
-        status = "qualified"
-    return status, {
-        "execution": "ok" if execution_ok else "failed",
-        "coverage": coverage,
-        "pixels": pixels,
-        "semantic": semantic,
-        "semantic_scope": "binding_audit",
-        "state_coverage": state_cov,
-        "checkpoints": "invalid" if checkpoint_invalid else "ok",
-        "identity": identity,
-        "capture_validity": capture_validity,
-        "provenance": provenance,
-        "qualified": qualified,
-        "intermediate_divergence": intermediate_divergent,
-        "fault_injection": fault_injection,
-    }
-
-
 def qualification_exit_code(report: dict) -> int:
     """Stable CLI policy for replay qualification.
 
@@ -3621,10 +3452,22 @@ def qualification_exit_code(report: dict) -> int:
     3  deliberate fault injection executed; qualification is expected to fail
     1  invalid execution, invalid checkpoint evidence or unusable report
     """
+    diagnosis = report.get("diagnosis") or report
+    if diagnosis.get("classification"):
+        outcome = classification_outcome(diagnosis)
+        axes = outcome["axes"] or {}
+        if (outcome["diagnostic"] in ("invalid", "failed")
+                or axes.get("gpu_execution") != "ok"
+                or axes.get("operation_coverage") not in ("complete", "partial")
+                or axes.get("pixel_comparison") not in ("match", "divergent")
+                or axes.get("rendering_state_coverage") not in ("complete", "partial")):
+            return 1
+        if outcome["qualified"]:
+            return 0
+        return 3 if outcome["classification"] == "fault_experiment" else 2
+
+    # Historical replay reports without a canonical diagnosis.
     outcome = report.get("outcome") or {}
-    canonical = classification_outcome(report) if report.get("classification") else {}
-    if canonical.get("diagnostic") in ("invalid", "failed"):
-        return 1
     execution = outcome.get("execution")
     if execution != "ok":
         return 1
@@ -3638,7 +3481,7 @@ def qualification_exit_code(report: dict) -> int:
         return 1
     if outcome.get("state_coverage") not in ("complete", "partial"):
         return 1
-    if outcome.get("qualified") and canonical.get("qualified", True):
+    if outcome.get("qualified"):
         return 0
     if outcome.get("fault_injection"):
         return 3
@@ -3675,6 +3518,7 @@ def classification_outcome(report: dict) -> dict:
     experiments remain explicit and non-qualifying. A returned report means
     the tool ran; the Metal host's outcome is in ``axes.gpu_execution``.
     """
+    report = report.get("diagnosis") or report
     classification = str(report.get("classification")
                          or report.get("status") or "")
     qualification = report.get("qualification") or {}
@@ -3813,34 +3657,36 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
     outcome = report.get("outcome")
-    diagnostic_outcome = classification_outcome(report)
+    diagnosis = report.get("diagnosis") or report
+    final = (diagnosis.get("pixels") or {}).get("final") or report.get("final") or {}
+    diagnostic_outcome = classification_outcome(diagnosis)
     print(json.dumps({
         "status": report.get("status"),
-        "classification": report.get("classification"),
+        "classification": diagnosis.get("classification"),
         # Preserve the standalone CLI's Metal execution and qualification fields.
         "outcome": outcome,
         "diagnostic_outcome": diagnostic_outcome,
         "qualified": (outcome or {}).get("qualified") and diagnostic_outcome["qualified"],
         "graph": (report.get("graph") or {}).get("status"),
-        "evaluation": (report.get("evaluation") or {}).get("status"),
-        "final": (report.get("final") or {}).get("status"),
-        "mismatched_pixels": ((report.get("final") or {}).get("statistics") or {}).get(
+        "evaluation": (diagnosis.get("evaluation") or {}).get("status"),
+        "final": final.get("status"),
+        "mismatched_pixels": (final.get("statistics") or {}).get(
             "mismatched_pixels"),
         "checkpoints": [
             {"event": item["event"], "target": item["target"],
              "status": item["status"],
              "mismatched_pixels": (item.get("statistics") or {}).get(
                  "mismatched_pixels")}
-            for item in report.get("checkpoints") or []
+            for item in diagnosis.get("checkpoints") or []
         ],
-        "checkpoint_validation": report.get("checkpoint_validation"),
-        "state_coverage": report.get("state_coverage"),
+        "checkpoint_validation": diagnosis.get("checkpoint_validation"),
+        "state_coverage": diagnosis.get("state_coverage"),
         "binding_audit": {
-            "ok": (report.get("binding_audit") or {}).get("ok"),
-            "mismatched": (report.get("binding_audit") or {}).get("mismatched_bindings"),
-            "earliest_event": (report.get("binding_audit") or {}).get("earliest_event"),
+            "ok": (diagnosis.get("binding_audit") or {}).get("ok"),
+            "mismatched": (diagnosis.get("binding_audit") or {}).get("mismatched_bindings"),
+            "earliest_event": (diagnosis.get("binding_audit") or {}).get("earliest_event"),
         },
-        "first_divergence": report.get("first_divergence"),
+        "first_divergence": diagnosis.get("first_divergence"),
         "report": str(Path(args.out) / "replay-report.json"),
     }, indent=2))
     return qualification_exit_code(report)
@@ -4125,9 +3971,9 @@ def replay_recipe(*, env: dict | None = None,
                        "artifact_count": 0}
     if shaders is not None:
         try:
-            shader_identity = m6_frame.shader_receipt_identity(
+            shader_identity = gfx_frame.shader_receipt_identity(
                 Path(shaders), required=False)
-        except (OSError, m6_frame.FrameError):
+        except (OSError, gfx_frame.FrameError):
             shader_identity = {"shaders_json_sha256": "", "artifacts_sha256": "",
                                "artifact_count": 0}
     # ``analyse_frame`` consumes DEFAULT_POLICY when no explicit policy is
@@ -4303,19 +4149,16 @@ def _replay_locked(
     check is repeated after the host-wide GPU lock is acquired: a stop or an
     expired deadline while this execution waited must not start a replay.
     """
-    from automation import campaign_guard, launch_lease
+    from automation import campaign_guard
 
     frame_dir = Path(frame_dir).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
-    with launch_lease.gpu_execution():
-        try:
-            campaign_guard.require_active_from_env()
-        except campaign_guard.CampaignRefusal as exc:
-            raise ReplayError("campaign_refused",
-                              f"{exc.kind}: {exc.detail}") from exc
-        return _replay_locked_serialized(
-            frame_dir, out_dir, shaders, faults=faults, policy=policy,
-            timeout=timeout)
+    try:
+        with gfx_frame.frame_execution_lease():
+            return _replay_locked_serialized(
+                frame_dir, out_dir, shaders, faults=faults, policy=policy, timeout=timeout)
+    except campaign_guard.CampaignRefusal as exc:
+        raise ReplayError("campaign_refused", f"{exc.kind}: {exc.detail}") from exc
 
 
 def _replay_locked_serialized(
@@ -4348,25 +4191,21 @@ def _replay_locked_serialized(
                                       classification=exc.kind)
         return _write_replay_report(out_dir, {
             "schema": SCHEMA, "frame_dir": str(frame_dir), "out_dir": str(out_dir),
-            "status": "invalid", "classification": diagnosis["classification"],
-            "qualification": diagnosis["qualification"], "diagnosis": diagnosis,
-            "first_divergence": diagnosis["first_divergence"],
+            "status": "invalid", "diagnosis": diagnosis,
         })
     shader_dir = _shader_dir(frame_dir, shaders)
     out_dir = prepare_replay_output(out_dir, [frame_dir, shader_dir])
     request = gfx_frame_graph.write_checkpoint_request(
         graph, out_dir / "checkpoint-request.json")
-    host = m6_frame.build_replay_host()
+    host = gfx_frame.build_replay_host()
     result_path = out_dir / "replay.json"
     receipt_error: str | None = None
     try:
-        with m6_frame.replay_host_snapshot(host) as (snapshot, producer):
-            command = m6_frame.replay_host_command(
+        with gfx_frame.replay_host_snapshot(host) as (snapshot, producer):
+            ran, replay_result, execution = gfx_frame.execute_frame(
                 snapshot, frame=frame_dir, shaders=shader_dir, out=out_dir,
-                checkpoints=out_dir / "checkpoint-request.json")
-            ran = subprocess.run(
-                command, capture_output=True, text=True, check=False, env=env,
-                timeout=timeout)
+                checkpoints=out_dir / "checkpoint-request.json", env=env, timeout=timeout,
+                locked=True)
             if result_path.is_file():
                 try:
                     write_producer_receipt(
@@ -4375,13 +4214,13 @@ def _replay_locked_serialized(
                         env=env, ambient=ambient)
                 except ReplayError as exc:
                     receipt_error = f"{exc.kind}: {exc.detail or exc}"
-    except m6_frame.FrameError as exc:
+    except gfx_frame.FrameError as exc:
         raise ReplayError("producer_identity", str(exc)) from exc
     diagnosis = analyse_frame(
         frame_dir, out_dir, policy, trace=trace, seal=seal, graph=graph,
         request=request, request_source="published", faults=faults,
         host_returncode=ran.returncode, receipt_error=receipt_error)
-    replay_result = _optional_json(result_path) or {}
+    replay_result = replay_result or {}
     evaluation = diagnosis.get("evaluation") or {}
     checkpoints = diagnosis.get("checkpoints") or []
     checkpoint_validation = diagnosis.get("checkpoint_validation") or {}
@@ -4394,17 +4233,31 @@ def _replay_locked_serialized(
         coverage = "partial"
     semantic = "match" if audit.get("ok") else "divergent"
     pixels = final.get("status", "invalid")
-    status, outcome = classify_replay(
-        execution_ok=execution_ok, coverage=coverage, semantic=semantic,
-        pixels=pixels, checkpoints=checkpoints,
-        checkpoint_validation=checkpoint_validation, faults=faults,
-        state_cov=str(states.get("status") or "invalid"),
-        identity=str((diagnosis.get("identity") or {}).get("status")
-                     or "unverified_session"),
-        capture_validity=str(
-            (diagnosis.get("capture") or {}).get("validity") or "incomplete"),
-        provenance=str((diagnosis.get("provenance") or {}).get("status")
-                       or "incomplete"))
+    public = classification_outcome(diagnosis)
+    invalid = public["diagnostic"] in ("failed", "invalid") or not execution_ok
+    intermediate = any(row.get("status") == "divergent" and row.get("authoritative")
+                       for row in checkpoints)
+    if invalid:
+        status = "invalid"
+    elif public["qualified"]:
+        status = "qualified"
+    elif public["verdict"] == "different" and not faults:
+        status = ("semantic_divergence" if semantic == "divergent" else
+                  "confirmed_rendering_difference" if coverage == "complete"
+                  else "partial_rendering_difference")
+    else:
+        status = "partial"
+    outcome = {
+        "execution": "ok" if execution_ok else "failed",
+        "coverage": coverage, "pixels": pixels, "semantic": semantic,
+        "semantic_scope": "binding_audit", "state_coverage": states.get("status", "invalid"),
+        "checkpoints": checkpoint_validation.get("status", "invalid"),
+        "identity": (diagnosis.get("identity") or {}).get("status", "unverified_session"),
+        "capture_validity": (diagnosis.get("capture") or {}).get("validity", "incomplete"),
+        "provenance": (diagnosis.get("provenance") or {}).get("status", "incomplete"),
+        "qualified": public["qualified"], "intermediate_divergence": intermediate,
+        "fault_injection": bool(faults),
+    }
     report = {
         "schema": SCHEMA,
         "frame_dir": str(frame_dir),
@@ -4412,21 +4265,12 @@ def _replay_locked_serialized(
         "status": status,
         "outcome": outcome,
         "receipt_error": receipt_error,
-        "execution": diagnosis.get("execution"),
-        "command": command,
+        "command": execution["command"],
+        "execution_identity": execution,
         "returncode": ran.returncode,
         "stderr": (ran.stderr or "")[-4000:],
-        "classification": diagnosis.get("classification"),
-        "qualification": diagnosis.get("qualification"),
         "faults": faults,
         "graph": diagnosis.get("graph") or graph,
-        "evaluation": evaluation,
-        "checkpoints": checkpoints,
-        "checkpoint_validation": checkpoint_validation,
-        "binding_audit": audit,
-        "state_coverage": states,
-        "final": final,
-        "first_divergence": diagnosis.get("first_divergence"),
         "diagnosis": diagnosis,
         "replay": {
             key: replay_result.get(key) for key in (

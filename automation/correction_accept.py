@@ -49,8 +49,8 @@ from automation import (
     gfx_frame_graph,
     gfx_independent_replay,
     gfx_replay_case,
-    m6_compare,
-    m6_frame,
+    gfx_frame_pixels,
+    gfx_frame,
 )
 
 SCHEMA = "gfx-correction-acceptance/v1"
@@ -182,12 +182,12 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
     if not replay_dir.is_dir():
         raise AcceptanceError("replay_missing", str(replay_dir))
     try:
-        trace = m6_frame.load_trace(capture_dir, verify_blobs=True)
-    except m6_frame.FrameError as exc:
+        trace = gfx_frame.load_trace(capture_dir, verify_blobs=True)
+    except gfx_frame.FrameError as exc:
         raise AcceptanceError("capture_invalid", str(exc)) from exc
     try:
-        seal = m6_frame.load_seal(capture_dir, trace=trace)
-    except m6_frame.FrameError as exc:
+        seal = gfx_frame.load_seal(capture_dir, trace=trace)
+    except gfx_frame.FrameError as exc:
         raise AcceptanceError("seal_invalid", str(exc)) from exc
     replay = _json(replay_dir / "replay.json")
     if not replay:
@@ -214,8 +214,8 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
     if not policy_value:
         raise AcceptanceError("policy_missing", str(policy))
     try:
-        comparison = m6_compare.compare(capture_dir, replay_dir, policy_value)
-    except (m6_compare.CompareError, OSError) as exc:
+        comparison = gfx_frame_pixels.compare(capture_dir, replay_dir, policy_value)
+    except (gfx_frame_pixels.CompareError, OSError) as exc:
         raise AcceptanceError("pixels_unverified", str(exc)) from exc
     graph = gfx_frame_graph.build(capture_dir, trace=trace)
     # The published request is only a plan.  Reuse the independent replay's

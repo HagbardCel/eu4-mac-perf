@@ -189,7 +189,7 @@ python3 -m automation.agent_tools eu4_capture frames --run <session-dir> --frame
 python3 -m automation.agent_tools eu4_capture frames --run <session-dir> --frame 74 --full
 python3 -m automation.agent_tools eu4_capture request --run <session-dir> --role candidate --frame 42
 python3 -m automation.agent_tools eu4_capture probe --checkpoint after-present \
-  --output <dir> --campaign-run-root <authorized-root>
+  --output <dir>
 python3 -m automation.agent_tools eu4_capture gl-control --run <capture-root>
 python3 -m automation.agent_tools eu4_capture gl-control-qualify \
   --live-image <sealed-checkpoint.bgra> --control-image <control.bgra> \
@@ -435,6 +435,52 @@ Routine tools run under the offline profile; see
 launch guards and the explicit live opt-in.
 
 ### `eu4_replay`
+
+The revision qualifier uses an operator-supplied policy from outside the
+candidate worktree. Set `EU4_QUALIFICATION_POLICY` to that document and
+`EU4_QUALIFICATION_POLICY_SHA256` to its approved SHA-256 in the trusted
+launcher environment. The policy names the approved validator revision,
+protected output root, evidence roots and locations for the
+[versioned protected policy](../automation/qualification-policy-v1.json).
+The reviewed policy pins case requirements and stable evidence identities.
+Deployment supplies paths and the newly sealed authentic reference. An evidence
+root can be marked optional for an archive that may be disconnected. It binds `receipt_public_key` to the 32-byte Ed25519
+seed in the operator-owned file named by `receipt_signing_key`. The seed file
+must grant access to its owner only. The DSH adapter takes the workspace from
+the session and imports the Python core from the configured trusted checkout.
+
+```sh
+python3.14 -m automation.agent_tools eu4_replay qualify \
+  --workspace /path/to/candidate --commit <full-git-commit>
+```
+
+Use `--case <id>` for one focused execution and `--full` for the expanded
+report. Focused runs never qualify a revision. The validator writes execution
+receipts at their actual revisions. A function case can name a protected
+earlier receipt through `reuse_receipt`; the validator verifies applicability
+and referenced output bytes before the qualification record can link to it.
+The signed decision carries the digests of the case receipts. The
+`dsh_receipts.verify_revision` operation verifies the revision, policy
+identities, mandatory case receipts and the exact artifact bytes. Ed25519
+authenticates the trusted validator's issuance. The operator controls the
+key file and deployment identity, and only the verifier receives the seed.
+
+The selected-draw path accepts the reviewed synthetic fixture and verified
+original color-only RGBA8 texture attachments through the same candidate
+executor. It compares effective vertex data, float uniforms, relevant
+two-dimensional texture and sampler state, raster state, submission and
+pre/post attachment bytes. Other resource formats require further coverage.
+The GL candidate and observer share a native address space. Seatbelt protects
+the process boundary and the verifier's files. In-process manipulation by
+arbitrary hostile native code lies outside the observation trust boundary.
+
+The retained M7 window draw lacks drawable equivalence and lossless depth.
+The event 273 offscreen draw lacks sealed texture lifetime evidence for its
+later readback. A separately authorized
+`gfx_frame capture --seal --observe-caller <rva> --observe-depth-stencil`
+records the uniquely selected caller's pre- and post-draw attachment.
+Qualification verifies its shader identities and attachment contract against
+the selected semantic workload. [R3 capture preparation](../plans/repository-refactor/r3-capture-preparation.md)
 
 ```sh
 # v1 single-frame and v2 ordered-prefix Strategy B cases are recognized by the
@@ -715,3 +761,15 @@ reuse `EU4_DSH_WORKSPACE`, which the campaign bridge reserves for its candidate
 workspace assertion. `run-campaign.sh` mounts the plugin in its headless
 overlay with `infra` pinned to the trusted checkout. Plugin tests:
 `npm test --prefix dsh/eu4-tools-plugin` (Node `--test`, no EU4).
+
+
+### Receipt verification and applicability
+
+Historical execution verification checks the signed receipt and retained
+artifacts. It requires no candidate rebuild. Reuse is a separate trusted
+applicability decision for the current candidate. It matches the source
+closure, toolchain recipe, environment and evidence identity, and preserves
+the actual execution revision. Aggregate verification checks the signed
+case records against the protected rules, including the pinned function
+corpus digest and its 414 observations. An aggregate can verify successfully
+and still record open qualification requirements.

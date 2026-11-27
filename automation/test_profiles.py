@@ -63,7 +63,7 @@ MANDATORY_OFFLINE_MODULES = (
     "tests.test_gfx_replay_case",
     "tests.test_gfx_replay_case_sequence",
     "tests.test_m7_checkpoint_provenance",
-    "tests.test_m7_diagnosis",
+    "tests.test_gfx_diagnosis",
     "tests.test_m7_evidence_identity",
     "tests.test_p2_workflow",
     "tests.test_replay_host_dependencies",

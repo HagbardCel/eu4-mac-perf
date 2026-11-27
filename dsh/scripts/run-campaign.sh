@@ -91,12 +91,6 @@ print("" if value is None else value)' "$EU4_DSH_SIDECAR" 2>/dev/null || true)
     }
   fi
   echo "$(basename "$0"): campaign state=$EU4_CAMPAIGN_STATE mode=$CAMPAIGN_MODE deadline=${CAMPAIGN_DEADLINE:-none}" >&2
-  if [ -n "${EU4_CAMPAIGN_ADMIN_TOKEN:-}" ]; then
-    echo "$(basename "$0"): operator token present; issue each live launch with authorize-launch" >&2
-  else
-    echo "$(basename "$0"): no EU4_CAMPAIGN_ADMIN_TOKEN; live launches are impossible" >&2
-  fi
-  unset EU4_CAMPAIGN_ADMIN_TOKEN
 fi
 echo "run-campaign: python=$EU4_DSH_PYTHON" >&2
 PLUGIN=$INFRA/dsh/eu4-goal-plugin/lib/index.js

@@ -93,10 +93,10 @@ existing Metal shadow worker. There is no new agent framework, no MCP server,
 and no second Metal execution engine.
 
 ```sh
-# L1: one operator-authorized live capture (opens the original game briefly)
+# L1: one bounded live capture (opens the original game briefly)
 python3 -m automation.live_gfx capture \
   --target _GfxSetViewPort --max-events 16 --duration 5 --timeout 120 \
-  --output .local/gfx-captures/viewport-01 --authorize-live
+  --output .local/gfx-captures/viewport-01
 
 # L2: offline replay through the existing worker; no EU4 launch
 python3 -m automation.live_gfx replay \
@@ -104,9 +104,7 @@ python3 -m automation.live_gfx replay \
   --output .local/gfx-diffs/viewport-01
 ```
 
-`capture` requires exactly one of `--authorize-live` (manual experiment) or
-`--campaign-run-root` (campaign mode). The launcher verifies the pinned
-executable SHA, refuses an existing output directory or another running EU4,
+`capture` verifies the pinned executable SHA and refuses an existing output directory or another running EU4,
 records at most `--max-events` completed observations, keeps observing for
 `--duration` seconds after the first matching invocation, and terminates only
 the process it launched. `--timeout` is the total launch and capture deadline.
@@ -121,7 +119,7 @@ duration or event quota:
 python3 -m automation.live_gfx capture \
   --target _GfxDraw --target _GfxSetPrimitiveType \
   --until-target-draw --caller-rva 0xedfcd1 --timeout 120 \
-  --output .local/gfx-captures/simple-draw-probe --authorize-live
+  --output .local/gfx-captures/simple-draw-probe
 
 python3 -m automation.live_gfx packet \
   --capture .local/gfx-captures/simple-draw-probe \
@@ -291,18 +289,12 @@ output directories. The game inherits the lease descriptor, so the lock survives
 a launcher crash until the game exits. Existing launchers acquire it immediately
 before `Popen`; manually started games are detected with libproc.
 
-Grant a bounded budget once, then consume it through the existing launcher:
+Run a bounded probe directly:
 
 ```sh
-python3 -m automation.live_gfx authorize \
-  --run-root .local/gfx-experiments/simple-01 \
-  --output-root .local/gfx-experiments \
-  --limit 3 --deadline-seconds 180 --workflow-id simple-01
-
 python3 -m automation.live_gfx probe --backend metal --checkpoint after-draw \
   --caller-rva 0xedfcd1 --occurrence 1 \
-  --output .local/gfx-experiments/simple-01/after-draw-01 \
-  --campaign-run-root .local/gfx-experiments/simple-01
+  --output .local/gfx-experiments/simple-01/after-draw-01
 
 python3 -m automation.live_gfx inspect \
   --run .local/gfx-experiments/simple-01/after-draw-01

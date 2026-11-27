@@ -69,7 +69,8 @@ static GLuint make_texture_internal(GLenum internal, GLenum format,
 }
 
 static int record_blob_name(const char *record, char *out, size_t size) {
-    const char *key = "\"color\":{\"file\":\"";
+    const char *key = strstr(record, "\"pre_image\"") != NULL
+                          ? "\"file\":\"" : "\"color\":{\"file\":\"";
     const char *start = strstr(record, key);
     if (start == NULL) {
         return -1;
@@ -98,8 +99,170 @@ static int blob_equals(const char *directory, const char *name,
     return got == bytes && memcmp(buffer, expected, bytes) == 0;
 }
 
+static GLuint fixture_shader(GLenum type, const char *source) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+    GLint compiled = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    return compiled ? shader : 0;
+}
+
+/* Match the original x86-64 tail jump through a lazy-bound OpenGL import. */
+__attribute__((noinline))
+static void dispatch_arrays(GLenum mode, GLint first, GLsizei count) {
+    __attribute__((musttail)) return glDrawArrays(mode, first, count);
+}
+
+static void selected_state(GLint *values) {
+    const GLenum fields[] = {
+        GL_DRAW_FRAMEBUFFER_BINDING, GL_READ_FRAMEBUFFER_BINDING,
+        GL_DRAW_BUFFER, GL_READ_BUFFER, GL_CURRENT_PROGRAM, GL_ACTIVE_TEXTURE,
+        GL_TEXTURE_BINDING_2D, GL_ARRAY_BUFFER_BINDING, GL_PACK_ALIGNMENT,
+        GL_PIXEL_PACK_BUFFER_BINDING,
+    };
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i)
+        glGetIntegerv(fields[i], &values[i]);
+    glGetIntegerv(GL_VIEWPORT, values + 10);
+}
+
+static int selected_fixture(const char *directory) {
+    GLuint fbo = 0, texture = make_texture(GL_TEXTURE_2D);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 864, 558, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glViewport(0, 0, 864, 558);
+    glDisable(GL_DITHER);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    char record[8192];
+    GLint before[14], after[14];
+    selected_state(before);
+    if (eu4_gfx_frame_trace_test_observe(
+            directory, 0, "selected_pre_draw", "draw", -1, record, sizeof(record)) != 0)
+        return 1;
+    selected_state(after);
+    if (memcmp(before, after, sizeof(before)) || glGetError() != GL_NO_ERROR) return 1;
+    puts(record);
+    /* A resolve immediately precedes the selected draw in the retained trace.
+       Observe the entry hook and the imported copy in the real legacy context. */
+    eu4_gfx_capture_frame resolve_frame = {0};
+    eu4_gfx_frame_trace_resolve_entry(&resolve_frame, NULL);
+    GLenum resolve_error = glGetError();
+    GLuint copy_texture = make_texture(GL_TEXTURE_2D);
+    uint8_t copy_pixels[] = {61, 97, 163, 255};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, copy_pixels);
+    char destination[32], copy_log[4096];
+    snprintf(destination, sizeof(destination), "%u", copy_texture);
+    snprintf(copy_log, sizeof(copy_log), "%s/copy-observer.jsonl", directory);
+    setenv("EU4_GFX_COPY_TRACE_DEST", destination, 1);
+    setenv("EU4_GFX_COPY_TRACE_PATH", copy_log, 1);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 1, 1);
+    GLenum copy_error = glGetError();
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, copy_pixels);
+    glDeleteTextures(1, &copy_texture);
+    if (resolve_error != GL_NO_ERROR || copy_error != GL_NO_ERROR ||
+        glGetError() != GL_NO_ERROR || memcmp(copy_pixels, (uint8_t[4]){0}, 4)) {
+        fprintf(stderr, "resolve entry GL error 0x%x, copy observer GL error 0x%x\n",
+                resolve_error, copy_error);
+        return 1;
+    }
+    GLuint vertex = fixture_shader(GL_VERTEX_SHADER,
+        "#version 120\nattribute vec4 in_POSITION; uniform vec4 UNIFORM1[9]; varying vec2 uv; "
+        "void main(){ gl_Position=in_POSITION+UNIFORM1[8]; uv=in_POSITION.xy*.5+.5; }\n");
+    GLuint fragment = fixture_shader(GL_FRAGMENT_SHADER,
+        "#version 120\nvarying vec2 uv; uniform sampler2D tex0; "
+        "void main(){ gl_FragColor=texture2D(tex0,uv); }\n");
+    if (!vertex || !fragment) return 1;
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+    glBindAttribLocation(program, 0, "in_POSITION");
+    glLinkProgram(program);
+    glUseProgram(program);
+    const GLshort vertices[] = {-1,-1,0,1, 1,-1,0,1, -1,1,0,1, 1,1,0,1};
+    GLuint buffer = 0;
+    glGenBuffers(1, &buffer);
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 4, GL_SHORT, GL_FALSE, 8, 0);
+    glEnableVertexAttribArray(0);
+    make_texture(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    uint8_t *pixels = malloc(1728 * 1117 * 4);
+    if (!pixels) return 1;
+    for (size_t i = 0; i < 1728 * 1117 * 4; i += 4) {
+        memcpy(pixels + i, (const uint8_t[]){61, 97, 163, 255}, 4);
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1728, 1117, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    free(pixels);
+    /* The second observation reuses the texture inventory and must leave the
+       original error state clear even without a fresh texture readback. */
+    FILE *cached_draw = tmpfile();
+    if (!cached_draw || !eu4_gfx_frame_trace_test_write_cached_draw(cached_draw) ||
+        glGetError() != GL_NO_ERROR || !eu4_gfx_frame_trace_test_write_cached_draw(cached_draw))
+        return 1;
+    fclose(cached_draw);
+    GLenum cached_error = glGetError();
+    if (cached_error != GL_NO_ERROR) {
+        fprintf(stderr, "cached draw observation GL error 0x%x\n", cached_error);
+        return 1;
+    }
+    selected_state(before);
+    GLuint query = 0, samples = 0;
+    glGenQueries(1, &query);
+    glBeginQuery(GL_SAMPLES_PASSED, query);
+    eu4_gfx_frame_trace_test_begin_arrays(GL_TRIANGLE_STRIP, 0, 4);
+    dispatch_arrays(GL_TRIANGLE_STRIP, 0, 4);
+    fputs("{\"kind\":\"draw\",\"index\":0", stdout);
+    int observed = eu4_gfx_frame_trace_test_write_arrays(stdout);
+    glEndQuery(GL_SAMPLES_PASSED);
+    glGetQueryObjectuiv(query, GL_QUERY_RESULT, &samples);
+    glDeleteQueries(1, &query);
+    selected_state(after);
+    if (!observed || samples != 864 * 558 || memcmp(before, after, sizeof(before)) ||
+        glGetError() != GL_NO_ERROR) {
+        puts("}");
+        return 1;
+    }
+    printf(",\"fixture_samples\":%u,\"failed_event\":{\"kind\":\"draw\",\"index\":1", samples);
+    eu4_gfx_frame_trace_test_begin_arrays(GL_TRIANGLE_STRIP, 0, 4);
+    glEnable((GLenum)0xffffffffu);
+    dispatch_arrays(GL_TRIANGLE_STRIP, 0, 0);
+    if (eu4_gfx_frame_trace_test_write_arrays(stdout) || glGetError() != GL_INVALID_ENUM) return 1;
+    fputs("},\"missing_event\":{\"kind\":\"draw\",\"index\":2", stdout);
+    eu4_gfx_frame_trace_test_begin_arrays(GL_TRIANGLE_STRIP, 0, 4);
+    if (eu4_gfx_frame_trace_test_write_arrays(stdout)) return 1;
+    fputs("},\"error_event\":{\"kind\":\"draw\",\"index\":3", stdout);
+    glEnable((GLenum)0xffffffffu);
+    eu4_gfx_frame_trace_test_begin_arrays(GL_TRIANGLE_STRIP, 0, 4);
+    if (eu4_gfx_frame_trace_test_write_arrays(stdout)) return 1;
+    fputs("},\"target_event\":{\"kind\":\"draw\",\"index\":4", stdout);
+    eu4_gfx_frame_trace_test_begin_arrays(GL_TRIANGLE_STRIP, 0, 0);
+    dispatch_arrays(GL_TRIANGLE_STRIP, 0, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    if (eu4_gfx_frame_trace_test_write_arrays(stdout)) return 1;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    puts("}}");
+    selected_state(before);
+    if (eu4_gfx_frame_trace_test_observe(
+            directory, 0, "post_event", "draw", -1, record, sizeof(record)) != 0)
+        return 1;
+    selected_state(after);
+    if (memcmp(before, after, sizeof(before)) || glGetError() != GL_NO_ERROR) return 1;
+    puts(record);
+    printf("{\"vendor\":\"%s\",\"renderer\":\"%s\",\"version\":\"%s\","
+           "\"cgl\":{\"profile\":\"legacy\"}}\n",
+           glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    if (argc != 2) {
+    if (argc != 2 && argc != 3) {
         fprintf(stderr, "usage: %s <dir>\n", argv[0]);
         return 2;
     }
@@ -143,6 +306,7 @@ int main(int argc, char **argv) {
     [context setView:view];
     [context update];
     [context makeCurrentContext];
+    if (argc == 3 && strcmp(argv[2], "selected") == 0) return selected_fixture(argv[1]);
 
     GLuint a = make_texture(GL_TEXTURE_2D);
     GLuint b = make_texture(GL_TEXTURE_2D);
@@ -595,6 +759,50 @@ int main(int argc, char **argv) {
         obs_read_buffer_after != GL_COLOR_ATTACHMENT0 ||
         texture_binding != (GLint)b) {
         observation = 0;
+    }
+
+    /* Caller-selected readback uses a complete color-only FBO, a direct
+       pre-draw BGRA8 seed and a separate original RGBA8 post observation. */
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "selected_pre_draw", "draw", -1, record, sizeof(record)) != 0 ||
+        strstr(record, "\"pre_image\"") == NULL ||
+        strstr(record, "\"internal_format\":32856") == NULL ||
+        strstr(record, "\"pixel_format\":\"BGRA8\"") == NULL) {
+        observation = 0;
+        fprintf(stderr, "selected pre-draw readback: %s\n", record);
+    }
+    {
+        const uint8_t expected[4] = {0, 0, 255, 255};
+        if (record_blob_name(record, blob, sizeof(blob)) != 0 ||
+            !blob_equals(argv[1], blob, expected, sizeof(expected))) {
+            observation = 0;
+        }
+    }
+    glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (eu4_gfx_frame_trace_test_observe(
+            argv[1], 0, "post_event", "draw", -1, record, sizeof(record)) != 0 ||
+        strstr(record, "\"pixel_format\":\"RGBA8\"") == NULL ||
+        strstr(record, "\"depth_present\":false") == NULL ||
+        strstr(record, "\"stencil_present\":false") == NULL) {
+        observation = 0;
+        fprintf(stderr, "selected post-draw readback: %s\n", record);
+    }
+    {
+        const uint8_t expected[4] = {0, 0, 255, 255};
+        if (record_blob_name(record, blob, sizeof(blob)) != 0 ||
+            !blob_equals(argv[1], blob, expected, sizeof(expected))) {
+            observation = 0;
+        }
+    }
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_bound);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture_binding);
+    GLenum selected_error = glGetError();
+    if (pack_bound != (GLint)pack_buffer || texture_binding != (GLint)b ||
+        selected_error != GL_NO_ERROR) {
+        observation = 0;
+        fprintf(stderr, "selected readback state PBO=%d texture=%d GL error=0x%x\n",
+                pack_bound, texture_binding, selected_error);
     }
 
     /* RGB8 has no stored alpha; the readback is BGRA8 and alpha is out of

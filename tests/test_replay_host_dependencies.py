@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from automation import case_baseline, m6_frame, replay_host_dependencies
+from automation import case_baseline, gfx_frame, replay_host_dependencies
 
 
 class DependencyClosureTests(unittest.TestCase):
@@ -161,9 +161,9 @@ class SnapshotIdentityTests(unittest.TestCase):
                     "executable_sha256": second,
                     "build_fingerprint": "b" * 64}
 
-        with mock.patch.object(m6_frame, "replay_host_producer",
+        with mock.patch.object(gfx_frame, "replay_host_producer",
                                side_effect=producer):
-            snapshot, value = m6_frame.snapshot_replay_host(self.host)
+            snapshot, value = gfx_frame.snapshot_replay_host(self.host)
         try:
             self.assertEqual(value["executable_sha256"],
                              hashlib.sha256(snapshot.read_bytes()).hexdigest())
@@ -177,10 +177,10 @@ class SnapshotIdentityTests(unittest.TestCase):
                  "executable_sha256": hashlib.sha256(b"binary-a").hexdigest(),
                  "build_fingerprint": "a" * 64}
         self.host.write_bytes(b"binary-b")
-        with mock.patch.object(m6_frame, "replay_host_producer",
+        with mock.patch.object(gfx_frame, "replay_host_producer",
                                return_value=stale):
-            with self.assertRaises(m6_frame.FrameError):
-                m6_frame.snapshot_replay_host(self.host, attempts=2)
+            with self.assertRaises(gfx_frame.FrameError):
+                gfx_frame.snapshot_replay_host(self.host, attempts=2)
 
 
 class BuildEnvironmentTests(unittest.TestCase):
@@ -227,12 +227,12 @@ class IncrementalBuildTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, "", "")
 
         self.patches = [
-            mock.patch.object(m6_frame, "ROOT", self.root),
-            mock.patch.object(m6_frame, "BENCH", self.bench),
-            mock.patch.object(m6_frame, "REPLAY_HOST_SOURCE", self.replay),
-            mock.patch.object(m6_frame, "REPLAY_HOST_CLI_SOURCE", self.cli),
-            mock.patch.object(m6_frame, "REPLAY_HOST", self.output),
-            mock.patch.object(m6_frame.subprocess, "run", side_effect=fake_run),
+            mock.patch.object(gfx_frame, "ROOT", self.root),
+            mock.patch.object(gfx_frame, "BENCH", self.bench),
+            mock.patch.object(gfx_frame, "REPLAY_HOST_SOURCE", self.replay),
+            mock.patch.object(gfx_frame, "REPLAY_HOST_CLI_SOURCE", self.cli),
+            mock.patch.object(gfx_frame, "REPLAY_HOST", self.output),
+            mock.patch.object(gfx_frame.subprocess, "run", side_effect=fake_run),
             mock.patch.object(
                 replay_host_dependencies, "compiler_identity",
                 return_value={"path": "/usr/bin/clang", "version": "test"}),
@@ -261,13 +261,13 @@ class IncrementalBuildTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_header_change_triggers_rebuild_and_unchanged_does_not(self):
-        m6_frame.build_replay_host()
+        gfx_frame.build_replay_host()
         self.assertEqual(len(self.calls), 1)
         self.assertTrue(self.stamp.is_file())
-        m6_frame.build_replay_host()
+        gfx_frame.build_replay_host()
         self.assertEqual(len(self.calls), 1)
         self.semantics.write_text("changed semantics\n")
-        m6_frame.build_replay_host()
+        gfx_frame.build_replay_host()
         self.assertEqual(len(self.calls), 2)
         stamp = json.loads(self.stamp.read_text())
         self.assertEqual(stamp["schema"], "gfx-replay-host-build/v1")
@@ -275,34 +275,34 @@ class IncrementalBuildTests(unittest.TestCase):
                       stamp["dependencies"])
 
     def test_producer_identity_exposes_the_source_revision_field(self):
-        m6_frame.build_replay_host()
-        producer = m6_frame.replay_host_producer()
+        gfx_frame.build_replay_host()
+        producer = gfx_frame.replay_host_producer()
         self.assertIn("source_revision", producer)
 
     def test_stamp_records_binary_digest_and_tampering_rebuilds(self):
-        m6_frame.build_replay_host()
+        gfx_frame.build_replay_host()
         stamp = json.loads(self.stamp.read_text())
         digest = hashlib.sha256(self.output.read_bytes()).hexdigest()
         self.assertEqual(stamp["binary_sha256"], digest)
         self.assertEqual(len(self.calls), 1)
         self.output.write_bytes(b"tampered")
-        m6_frame.build_replay_host()
+        gfx_frame.build_replay_host()
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(
             json.loads(self.stamp.read_text())["binary_sha256"],
             hashlib.sha256(self.output.read_bytes()).hexdigest())
 
     def test_timeout_removes_outputs_and_receipt(self):
-        m6_frame.build_replay_host()
+        gfx_frame.build_replay_host()
         def timeout_run(command, **kwargs):
             if "-MM" in command:
                 return self._dependency_result(command)
             raise subprocess.TimeoutExpired(cmd="clang", timeout=180)
 
         with mock.patch.object(
-                m6_frame.subprocess, "run", side_effect=timeout_run):
-            with self.assertRaises(m6_frame.FrameError):
-                m6_frame.build_replay_host(force=True)
+                gfx_frame.subprocess, "run", side_effect=timeout_run):
+            with self.assertRaises(gfx_frame.FrameError):
+                gfx_frame.build_replay_host(force=True)
         self.assertFalse(self.output.exists())
         self.assertFalse(self.stamp.exists())
         self.assertFalse(list(self.output.parent.glob(".*.tmp-*")))
@@ -325,11 +325,11 @@ class IncrementalBuildTests(unittest.TestCase):
 
         def build():
             try:
-                results.append(m6_frame.build_replay_host())
+                results.append(gfx_frame.build_replay_host())
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
-        with mock.patch.object(m6_frame.subprocess, "run",
+        with mock.patch.object(gfx_frame.subprocess, "run",
                                side_effect=slow_run):
             threads = [threading.Thread(target=build) for _ in range(2)]
             for thread in threads:
@@ -341,15 +341,15 @@ class IncrementalBuildTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
 
     def test_build_flag_change_triggers_rebuild(self):
-        m6_frame.build_replay_host()
+        gfx_frame.build_replay_host()
         self.assertEqual(len(self.calls), 1)
         with mock.patch.object(replay_host_dependencies, "BUILD_FLAGS",
                                ("-O0",)):
-            m6_frame.build_replay_host()
+            gfx_frame.build_replay_host()
         self.assertEqual(len(self.calls), 2)
 
     def test_failed_build_removes_binary_and_stamp(self):
-        m6_frame.build_replay_host()
+        gfx_frame.build_replay_host()
         self.assertTrue(self.output.is_file())
         self.assertTrue(self.stamp.is_file())
         self.semantics.write_text("failing semantics\n")
@@ -360,10 +360,10 @@ class IncrementalBuildTests(unittest.TestCase):
             self.calls.append(list(command))
             return subprocess.CompletedProcess(command, 1, "", "compile failed")
 
-        with mock.patch.object(m6_frame.subprocess, "run",
+        with mock.patch.object(gfx_frame.subprocess, "run",
                                side_effect=failing_run):
-            with self.assertRaises(m6_frame.FrameError):
-                m6_frame.build_replay_host(force=True)
+            with self.assertRaises(gfx_frame.FrameError):
+                gfx_frame.build_replay_host(force=True)
         self.assertFalse(self.output.exists())
         self.assertFalse(self.stamp.exists())
 

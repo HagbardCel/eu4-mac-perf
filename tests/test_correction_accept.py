@@ -34,7 +34,7 @@ from automation import (  # noqa: E402
     gfx_independent_replay,
     gfx_replay_case,
 )
-from tests.test_m7_diagnosis import WIDTH, HEIGHT, DiagnosisFixture, sha  # noqa: E402
+from tests.test_gfx_diagnosis import WIDTH, HEIGHT, DiagnosisFixture, sha  # noqa: E402
 
 REVISION = "d" * 40
 OTHER_REVISION = "e" * 40

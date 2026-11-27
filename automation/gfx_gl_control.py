@@ -27,7 +27,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from automation import m6_compare
+from automation import gfx_frame_pixels
 
 SCHEMA = "gfx-gl-control/v1"
 
@@ -525,7 +525,7 @@ def control_frame(frame_dir: Path | str) -> dict:
             _swap_red_blue(destination_region)
             if normalization in ("bgra_to_rgba", "rgba_to_bgra")
             else destination_region)
-        statistics = m6_compare.compare_images(
+        statistics = gfx_frame_pixels.compare_images(
             source_region, candidate, region["width"], region["height"])
         status = "match" if statistics["mismatched_pixels"] == 0 else "different"
         checks.append({

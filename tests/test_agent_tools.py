@@ -82,6 +82,74 @@ class ToolTests(unittest.TestCase):
         self.assertTrue(value["ok"])
         self.assertEqual(value["status"], "ok")
 
+    def test_mandatory_qualification_summary_fits_governed_dsh_output(self):
+        from automation import gfx_revision
+
+        case_ids = list(json.loads(gfx_revision.POLICY_CONTRACT.read_text())["cases"])
+        artifact = "candidate-output/" + "a" * 130
+        rows = [{
+            "case_id": case, "category": "diagnostic", "verdict": "different",
+            "requirement_satisfied": False, "receipt": artifact,
+            "candidate": {"source_digests": {str(i): "a" * 64 for i in range(90)}},
+            "scope": {"through": 1, "unbounded_scope": list(range(360))},
+            "problems": ["state differs", "required checkpoint missing"],
+            "evidence_tier": "original-eu4", "execution": "completed",
+            "reference": {"key": "sealed-reference", "manifest_sha256": "b" * 64},
+            "earliest_observed_divergence": {
+                "event": 1, "phase": "post", "field": "attachment",
+                "statistics": {"mismatched_pixels": 23, "max_channel_error": 1},
+            },
+        } for case in case_ids]
+        report = {
+            "schema": gfx_revision.SCHEMA, "mode": "mandatory", "revision": "a" * 40,
+            "qualified": False, "required_cases": case_ids, "executed_cases": case_ids,
+            "cases": rows, "receipt": artifact,
+        }
+        argv = ["eu4_replay", "qualify", "--workspace", str(self.root), "--commit", "a" * 40]
+        with mock.patch.object(gfx_revision, "qualify", side_effect=lambda *args: dict(report)):
+            _, compact = self.call(argv)
+            _, full = self.call([*argv, "--full"])
+        result = compact["result"]
+        self.assertLess(len(agent_tools._json_text(compact).encode()), 8192)
+        self.assertEqual([row["case_id"] for row in result["cases"]], case_ids)
+        self.assertFalse(result["qualified"])
+        self.assertEqual(result["receipt"], artifact)
+        self.assertEqual(result["cases"][-1]["earliest_observed_divergence"], {
+            "event": 1, "phase": "post", "field": "attachment",
+            "mismatched_pixels": 23, "max_channel_error": 1,
+        })
+        self.assertEqual(result["cases"][-1]["problems"], rows[-1]["problems"])
+        self.assertEqual(full["result"]["cases"], rows)
+
+    def test_qualification_compact_preserves_small_state_values_and_refuses_oversize(self):
+        from automation import gfx_revision
+
+        locator = "runs/case/receipt.json"
+        divergence = {"phase": "restore", "field": "uniforms",
+                      "expected": [0, 1], "actual": ["é" * 200]}
+        report = {
+            "schema": gfx_revision.SCHEMA, "mode": "focused", "qualified": False,
+            "receipt": locator, "cases": [{
+                "case_id": "selected-draw", "verdict": "different", "receipt": locator,
+                "earliest_observed_divergence": divergence,
+            }],
+        }
+        argv = ["eu4_replay", "qualify", "--workspace", str(self.root), "--commit", "a" * 40]
+        with mock.patch.object(gfx_revision, "qualify", side_effect=lambda *args: dict(report)):
+            _, compact = self.call(argv)
+            report["receipt"] = "runs/" + "é" * 9000
+            _, oversized = self.call(argv)
+        row = compact["result"]["cases"][0]
+        self.assertEqual(row["receipt"], locator)
+        self.assertEqual(row["earliest_observed_divergence"], {
+            "phase": "restore", "field": "uniforms", "expected": [0, 1],
+            "actual_in_receipt": True,
+        })
+        self.assertFalse(oversized["ok"])
+        self.assertEqual(oversized["result"]["error"], "essential_fields_exceed_cap")
+        self.assertNotIn("receipt", oversized["result"])
+        self.assertLessEqual(agent_tools._utf8_len(oversized), agent_tools.COMPACT_OUTPUT_CAP)
+
     def test_re_query_decompile_is_dispatched(self):
         code, value = self.call(["eu4_re_query", "decompile", "0x2000",
                                  "--index", str(self.index), "--max-bytes", "32"])
@@ -510,16 +578,13 @@ class ToolTests(unittest.TestCase):
         size = tools._utf8_len(bounded)
         self.assertLessEqual(size, tools.COMPACT_OUTPUT_CAP)
         self.assertEqual(bounded["result"]["output_bytes"], size)
-        self.assertTrue(bounded["result"]["report"].startswith("report/"))
-        first = bounded["result"]["first_divergence"]
-        self.assertEqual(first["event"], 15)
-        self.assertEqual(first["kind"], "pixel")
-        self.assertEqual(first["resource"], "fb:0")
+        self.assertEqual(bounded["result"]["error"], "essential_fields_exceed_cap")
+        self.assertNotIn("report", bounded["result"])
 
     def test_nested_metadata_still_preserves_core_evidence(self):
         # A legal nested outcome value must not force the evidence-free stub.
         from automation import agent_tools as tools
-        huge = "report/" + "z" * 20_000
+        locator = "report/" + "ä" * 1_000
         nested = {
             f"a{index}": {f"b{item}": "value-0123456789" for item in range(64)}
             for index in range(64)
@@ -529,7 +594,7 @@ class ToolTests(unittest.TestCase):
                 "schema": "gfx-independent-replay/v1",
                 "classification": "qualified_difference",
                 "qualified": False,
-                "report": huge,
+                "report": locator,
                 "first_divergence": {
                     "kind": "pixel", "event": 15, "target": "0",
                     "resource": "fb:0", "operation": "draw",
@@ -544,7 +609,7 @@ class ToolTests(unittest.TestCase):
         self.assertLessEqual(size, tools.COMPACT_OUTPUT_CAP)
         self.assertIn("result", bounded)
         self.assertEqual(bounded["result"]["output_bytes"], size)
-        self.assertTrue(bounded["result"]["report"].startswith("report/"))
+        self.assertEqual(bounded["result"]["report"], locator)
         first = bounded["result"]["first_divergence"]
         self.assertEqual(first["event"], 15)
         self.assertIsInstance(first["event"], int)
@@ -2447,7 +2512,7 @@ class SubprocessDiagnosticTests(unittest.TestCase):
                     return_value=self.completed(body, code=code, stderr=stderr)) as run:
                 code_value, value = self.call([
                     "eu4_capture", "probe", "--checkpoint", "after-present",
-                    "--output", str(root), "--campaign-run-root", str(root),
+                    "--output", str(root),
                     "--timeout", "5",
                 ])
         return code_value, value, run
@@ -2509,7 +2574,7 @@ class SubprocessDiagnosticTests(unittest.TestCase):
         self.assertEqual(value["outcome"]["diagnostic"], "complete")
         self.assertEqual(value["outcome"]["verdict"], "different")
         command = run.call_args.args[0]
-        self.assertEqual(command[1:4], ["-m", "automation.m6_frame", "replay"])
+        self.assertEqual(command[1:4], ["-m", "automation.gfx_frame", "replay"])
         self.assertEqual(value["result"]["subprocess"]["exit_code"], 2)
 
     def test_frame_replay_without_explicit_shaders_omits_the_argument(self):
@@ -2527,7 +2592,7 @@ class SubprocessDiagnosticTests(unittest.TestCase):
         self.assertEqual(code_value, 0)
         self.assertTrue(value["ok"], value.get("reason"))
         command = run.call_args.args[0]
-        self.assertEqual(command[1:4], ["-m", "automation.m6_frame", "replay"])
+        self.assertEqual(command[1:4], ["-m", "automation.gfx_frame", "replay"])
         self.assertNotIn("--shaders", command)
         self.assertIn(str(root / "frame"), command)
 

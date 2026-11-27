@@ -219,119 +219,41 @@ class CliExitContractTests(unittest.TestCase):
 
 
 class QualificationClassificationTests(unittest.TestCase):
-    def outcome(self, **overrides):
-        value = {
-            "execution_ok": True, "coverage": "complete",
-            "semantic": "match", "pixels": "match",
-            "checkpoints": [], "checkpoint_validation": {"status": "ok"},
-            "faults": None,
-            "identity": "verified", "capture_validity": "valid",
-            "provenance": "verified",
+    def test_canonical_diagnosis_and_exit_code(self):
+        exact = {
+            "capture_validity": "valid", "identity": "verified",
+            "execution": "ok", "provenance": "verified",
+            "operation_coverage": "complete", "state_cov": "complete",
+            "pixels": "match", "divergence": "none",
+            "checkpoint_validation": {"status": "ok"},
         }
-        value.update(overrides)
-        status, outcome = gfx_independent_replay.classify_replay(**value)
-        report = {"status": status, "outcome": outcome}
-        return status, outcome, gfx_independent_replay.qualification_exit_code(report)
-
-    def test_invalid_checkpoint_blocks_qualified_match(self):
-        status, outcome, code = self.outcome(
-            checkpoint_validation={"status": "invalid",
-                                   "problems": [{"kind": "missing_result"}]})
-        self.assertEqual(status, "invalid")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(outcome["checkpoints"], "invalid")
-        self.assertEqual(code, 1)
-
-    def test_complete_exact_match_is_qualified(self):
-        status, outcome, code = self.outcome()
-        self.assertEqual(status, "qualified")
-        self.assertTrue(outcome["qualified"])
-        self.assertEqual(code, 0)
-
-    def test_invalid_coverage_is_invalid(self):
-        status, outcome, code = self.outcome(coverage="invalid")
-        self.assertEqual(status, "invalid")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(code, 1)
-
-    def test_invalid_pixel_evidence_is_invalid(self):
-        status, outcome, code = self.outcome(pixels="invalid")
-        self.assertEqual(status, "invalid")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(code, 1)
-
-    def test_invalid_state_coverage_is_invalid(self):
-        status, outcome, code = self.outcome(state_cov="invalid")
-        self.assertEqual(status, "invalid")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(code, 1)
-
-    def test_partial_state_coverage_is_nonqualifying(self):
-        status, outcome, code = self.outcome(state_cov="partial")
-        self.assertEqual(status, "partial")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(code, 2)
-
-    def test_unknown_verdict_is_invalid(self):
-        status, outcome, code = self.outcome(coverage="unknown")
-        self.assertEqual(status, "invalid")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(code, 1)
-        status, outcome, code = self.outcome(pixels="unknown")
-        self.assertEqual(status, "invalid")
-        self.assertEqual(code, 1)
-
-    def test_successful_fault_experiment_keeps_exit_three(self):
-        status, outcome, code = self.outcome(
-            pixels="divergent", faults={"disable_render_target_vflip": True})
-        self.assertEqual(status, "confirmed_rendering_difference")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(code, 3)
-
-    def test_fault_with_invalid_evidence_is_invalid(self):
-        status, outcome, code = self.outcome(
-            pixels="divergent", checkpoints=[{"status": "invalid"}],
-            faults={"disable_render_target_vflip": True})
-        self.assertEqual(status, "invalid")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(code, 1)
-
-    def test_fault_without_divergence_is_never_qualified(self):
-        status, outcome, code = self.outcome(
-            faults={"disable_render_target_vflip": True})
-        self.assertEqual(status, "partial")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(code, 3)
-
-    def test_authoritative_divergence_is_not_qualified(self):
-        status, outcome, code = self.outcome(checkpoints=[{
-            "status": "divergent", "authoritative": True,
-            "event": 5, "target": "10"}])
-        self.assertEqual(status, "confirmed_rendering_difference")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(code, 2)
-
-    def test_diagnostic_only_difference_can_qualify(self):
-        status, outcome, code = self.outcome(checkpoints=[{
-            "status": "divergent_diagnostic", "authoritative": False,
-            "event": 5, "target": "433"}])
-        self.assertEqual(status, "qualified")
-        self.assertTrue(outcome["qualified"])
-        self.assertEqual(code, 0)
-
-    def test_unverified_identity_can_never_qualify(self):
-        status, outcome, _code = self.outcome(
-            identity="unverified_session", capture_validity="incomplete",
-            provenance="incomplete")
-        self.assertEqual(status, "partial")
-        self.assertFalse(outcome["qualified"])
-        self.assertEqual(outcome["identity"], "unverified_session")
-        # A completed divergence is still a diagnostic result, not invalid.
-        status, outcome, _code = self.outcome(
-            pixels="divergent", identity="unverified_session",
-            capture_validity="incomplete", provenance="incomplete")
-        self.assertEqual(status, "confirmed_rendering_difference")
-        self.assertFalse(outcome["qualified"])
+        for updates, expected, code in (
+            ({}, "qualified_match", 0),
+            ({"checkpoint_validation": {"status": "invalid"}}, "invalid_provenance", 1),
+            ({"operation_coverage": "unknown"}, "incomplete_capture", 1),
+            ({"pixels": "invalid"}, "incomplete_diagnostics", 1),
+            ({"pixels": "unknown"}, "incomplete_diagnostics", 1),
+            ({"state_cov": "invalid"}, "unsupported_state", 1),
+            ({"state_cov": "partial"}, "unsupported_state", 2),
+            ({"divergence": "diagnostic_only"}, "qualified_match", 0),
+            ({"divergence": "intermediate"}, "qualified_difference", 2),
+            ({"pixels": "divergent", "state_cov": "partial"},
+             "difference_with_partial_state_coverage", 2),
+            ({"pixels": "divergent", "identity": "unverified_session"},
+             "incomplete_diagnostics", 2),
+            ({"identity": "unverified_session"}, "incomplete_diagnostics", 2),
+            ({"fault_experiment": True}, "fault_experiment", 3),
+            ({"fault_experiment": True, "pixels": "divergent"}, "fault_experiment", 3),
+            ({"fault_experiment": True, "checkpoint_validation": {"status": "invalid"}},
+             "invalid_provenance", 1),
+        ):
+            with self.subTest(updates=updates):
+                classification, qualification = gfx_independent_replay.classify_diagnosis(
+                    **{**exact, **updates})
+                report = {"classification": classification, "qualification": qualification}
+                self.assertEqual(classification, expected)
+                self.assertIs(qualification["qualified"], code == 0)
+                self.assertEqual(gfx_independent_replay.qualification_exit_code(report), code)
 
 
 if __name__ == "__main__":

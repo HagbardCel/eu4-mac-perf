@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 /* Complete-frame original-GL trace for differential Metal validation.
  *
@@ -93,6 +94,7 @@ int eu4_gfx_frame_trace_texture_probe(unsigned target, unsigned name);
 int eu4_gfx_frame_trace_readback_probe(void);
 /* Host-test only: returns 1 when the trace writer's mutex is not held by the
  * calling thread (the callback contract). */
+void eu4_gfx_frame_trace_submit_arrays(unsigned mode, int first, int count);
 int eu4_gfx_frame_trace_lock_probe(void);
 /* Host-test only: clears the seal registry and counters. */
 void eu4_gfx_frame_trace_test_reset_seal(void);
@@ -107,6 +109,10 @@ int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
                                         char *out_file, size_t out_size);
 /* Host-test only: run one real observation (shared guarded readback and
    writer) and return its single record. */
+/* Exercise the same submission and target observations in a GL test context. */
+void eu4_gfx_frame_trace_test_begin_arrays(unsigned mode, int first, int count);
+int eu4_gfx_frame_trace_test_write_arrays(FILE *output);
+int eu4_gfx_frame_trace_test_write_cached_draw(FILE *output);
 int eu4_gfx_frame_trace_test_observe(const char *directory, int event,
                                      const char *timing, const char *kind,
                                      int texture_name, char *out_record,

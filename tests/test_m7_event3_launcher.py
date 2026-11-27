@@ -99,8 +99,7 @@ assert flags[-1] == campaign_guard.MODE_AUTONOMOUS
 assert os.environ['EU4_CAMPAIGN_STATE'] == str(state)
 assert os.environ['EU4_OFFLINE_ONLY'] == '1' and os.environ['EU4_TEST_PROFILE'] == 'offline'
 assert str(Path.cwd()) == os.environ['EU4_DSH_INFRA_ROOT']
-assert not any(key in os.environ for key in ('EU4_CAMPAIGN_ADMIN_TOKEN',
-    'EU4_CAMPAIGN_AUTHORIZATION', 'EU4_CAMPAIGN_RESERVATION', 'EU4_M7_CANDIDATE_SIDECAR', 'EU4_M7_EVENT20_TRUSTED_ROOT',
+assert not any(key in os.environ for key in ('EU4_M7_CANDIDATE_SIDECAR', 'EU4_M7_EVENT20_TRUSTED_ROOT',
     'EU4_DSH_WORKSPACE', 'EU4_DSH_SIDECAR'))
 if os.environ.get('TEST_OPERATOR_INPUT'):
     assert sys.stdin.readline().strip() == os.environ['TEST_OPERATOR_INPUT']
@@ -119,8 +118,7 @@ print('authoritative goal from run.sh')
                         TEST_ROOT=str(self.root),
                         TEST_REPO=str(self.repo), EU4_DSH_PYTHON=sys.executable,
                         EU4_CAMPAIGN_STATE='/stale/shell/state.json',
-                        EU4_CAMPAIGN_ADMIN_TOKEN='stale', EU4_CAMPAIGN_AUTHORIZATION='stale',
-                        EU4_CAMPAIGN_RESERVATION='stale',
+
                         EU4_M7_CANDIDATE_SIDECAR='stale', EU4_M7_EVENT20_TRUSTED_ROOT='stale',
                         EU4_DSH_WORKSPACE='stale', EU4_DSH_SIDECAR='stale',
                         EU4_DSH_INFRA_ROOT='stale', RUN='stale', PY='stale', FRAME='stale', OUT='stale')

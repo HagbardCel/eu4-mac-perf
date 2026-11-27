@@ -20,7 +20,7 @@ ROOT = EVID.parents[3]
 CAPTURES = ROOT / ".local/m7/goal-round1"
 
 sys.path.insert(0, str(ROOT))
-from automation import m6_frame  # noqa: E402
+from automation import gfx_frame  # noqa: E402
 
 CASES = {
     "present-904": {
@@ -54,15 +54,15 @@ def fresh_process_trace_load(frame: Path, reps: int = 3) -> dict:
     script = (
         "import sys, time\n"
         "sys.path.insert(0, %r)\n"
-        "from automation import m6_frame\n"
+        "from automation import gfx_frame\n"
         "started = time.perf_counter()\n"
-        "trace = m6_frame.load_trace(%r)\n"
+        "trace = gfx_frame.load_trace(%r)\n"
         "loaded = time.perf_counter()\n"
-        "identity = m6_frame._shader_source_identity(trace)\n"
+        "identity = gfx_frame._shader_source_identity(trace)\n"
         "done = time.perf_counter()\n"
         "seen = {}\n"
         "for event in trace['_events']:\n"
-        "    members = list(m6_frame._iter_blob_members(event))\n"
+        "    members = list(gfx_frame._iter_blob_members(event))\n"
         "    for attribute in event.get('attributes') or []:\n"
         "        if isinstance(attribute, dict) and attribute.get('data'):\n"
         "            members.append({'file': attribute['data']})\n"
@@ -103,7 +103,7 @@ def command_baseline(reps: int = 5) -> dict:
     samples = []
     for _ in range(reps):
         started = time.perf_counter()
-        subprocess.run([sys.executable, "-m", "automation.m6_frame"],
+        subprocess.run([sys.executable, "-m", "automation.gfx_frame"],
                        cwd=str(ROOT), capture_output=True, check=False)
         samples.append(time.perf_counter() - started)
     return {"reps": reps,
@@ -120,8 +120,8 @@ def main() -> int:
         measurement = json.loads(
             (EVID / f"measurements-{label}.json").read_text())
         seal = json.loads((frame / "frame-seal.json").read_text())
-        trace = m6_frame.load_trace(frame)
-        identity = m6_frame._shader_source_identity(trace)
+        trace = gfx_frame.load_trace(frame)
+        identity = gfx_frame._shader_source_identity(trace)
         entry = {
             "frame_dir": str(frame),
             "sealed": seal.get("sealed"),

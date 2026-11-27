@@ -492,8 +492,7 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                             "submission_experiment.run")
                     except test_profiles.LiveProfileError as exc:
                         raise base.BenchmarkError(str(exc)) from exc
-                    campaign_guard.refuse_unmanaged_launch(
-                        "submission_experiment.run")
+                    campaign_guard.require_live_campaign()
                     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
                     try:
                         game = subprocess.Popen(
@@ -695,8 +694,7 @@ def run_border_mode_census(output_root: Path) -> Path:
                             "submission_experiment.run")
                     except test_profiles.LiveProfileError as exc:
                         raise base.BenchmarkError(str(exc)) from exc
-                    campaign_guard.refuse_unmanaged_launch(
-                        "submission_experiment.run")
+                    campaign_guard.require_live_campaign()
                     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
                     try:
                         game = subprocess.Popen(
@@ -881,8 +879,7 @@ def run_experiment(
                             "submission_experiment.run")
                     except test_profiles.LiveProfileError as exc:
                         raise base.BenchmarkError(str(exc)) from exc
-                    campaign_guard.refuse_unmanaged_launch(
-                        "submission_experiment.run")
+                    campaign_guard.require_live_campaign()
                     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
                     try:
                         game = subprocess.Popen(

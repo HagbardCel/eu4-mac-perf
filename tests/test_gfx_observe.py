@@ -585,107 +585,22 @@ class RegistryTests(unittest.TestCase):
             )
 
 
-class CampaignLaunchTests(unittest.TestCase):
-    def _root(self, limit: int = 3, used: int = 0, deadline=120) -> Path:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
-        (root / "live-launch.json").write_text(
-            json.dumps(
-                {
-                    "schema": state.LAUNCH_SCHEMA,
-                    "campaign_id": "test",
-                    "limit": limit,
-                    "deadline_seconds": deadline,
-                    "used": used,
-                    "launches": [],
-                }
-            )
-            + "\n"
-        )
-        (root / "state.json").write_text('{"sentinel": true}\n')
-        return root
-
-    def test_claim_works_while_runner_lock_is_held(self):
-        root = self._root()
-        before = (root / "state.json").read_text()
-        with state.campaign_lock(root / "campaign.lock"):
-            token = live_gfx._claim_launch(
-                root,
-                root / "capture",
-                ["_GfxSetViewPort"],
-                requested_timeout=120.0,
-            )
-        counter = json.loads((root / "live-launch.json").read_text())
-        self.assertEqual(counter["used"], 1)
-        self.assertEqual(counter["launches"][0]["token"], token)
-        self.assertEqual((root / "state.json").read_text(), before)
-
-    def test_exhausted_counter_refuses(self):
-        root = self._root(limit=1, used=1)
-        with self.assertRaises(live_gfx.LaunchLimit) as caught:
-            live_gfx._claim_launch(
-                root,
-                root / "capture",
-                ["_GfxSetViewPort"],
-                requested_timeout=120.0,
-            )
-        self.assertEqual(caught.exception.kind, "exhausted")
-
-    def test_campaign_deadline_is_enforced(self):
-        root = self._root(limit=3, used=0, deadline=120)
-        with self.assertRaises(live_gfx.LaunchLimit) as caught:
-            live_gfx._claim_launch(
-                root,
-                root / "capture",
-                ["_GfxSetViewPort"],
-                requested_timeout=600.0,
-            )
-        self.assertEqual(caught.exception.kind, "deadline")
-        counter = json.loads((root / "live-launch.json").read_text())
-        self.assertEqual(counter["used"], 0)
-        token = live_gfx._claim_launch(
-            root,
-            root / "capture",
-            ["_GfxSetViewPort"],
-            requested_timeout=120.0,
-        )
-        self.assertTrue(token)
-        counter = json.loads((root / "live-launch.json").read_text())
-        self.assertEqual(counter["used"], 1)
-
-    def test_campaign_without_deadline_allows_request(self):
-        root = self._root(limit=3, used=0, deadline=None)
-        token = live_gfx._claim_launch(
-            root,
-            root / "capture",
-            ["_GfxSetViewPort"],
-            requested_timeout=600.0,
-        )
-        self.assertTrue(token)
-        counter = json.loads((root / "live-launch.json").read_text())
-        self.assertEqual(counter["used"], 1)
-
-    def test_initialization_preserves_used_count(self):
-        root = self._root(used=2)
-        state.initialize_launch_counter(root, "test", 3, 120)
-        counter = json.loads((root / "live-launch.json").read_text())
-        self.assertEqual(counter["used"], 2)
-
-    def test_capture_requires_authorization(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            output = Path(tmp) / "capture"
-            result = live_gfx.main(
-                [
-                    "capture",
-                    "--target",
-                    "_GfxSetViewPort",
-                    "--output",
-                    str(output),
-                ]
-            )
-            self.assertEqual(result, live_gfx.EXIT_INCOMPLETE)
-            self.assertFalse(output.exists())
+class WorkflowCaptureBudgetTests(unittest.TestCase):
+    def test_existing_runner_counter_records_failed_capture_and_exhaustion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            counter = state.initialize_launch_counter(root, "workflow", 1, 30)
+            arguments = ["capture", "--target", "_GfxSetViewPort", "--timeout", "20",
+                         "--campaign-run-root", str(root), "--output", str(root / "capture")]
+            with (patch.object(startup, "preflight_ops", return_value={}),
+                  patch.object(startup, "run_ops", side_effect=startup.StartupError("startup failed")) as run):
+                self.assertEqual(live_gfx.main(arguments), live_gfx.EXIT_UNAVAILABLE)
+                state.initialize_launch_counter(root, "workflow", 1, 30)
+                self.assertEqual(live_gfx.main(arguments), live_gfx.EXIT_LIMIT)
+                run.assert_called_once()
+            record = json.loads(counter.read_text())
+            self.assertEqual(record["used"], 1)
+            self.assertEqual(record["launches"][0]["status"], "failed: startup failed")
 
 
 if __name__ == "__main__":

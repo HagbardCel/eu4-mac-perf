@@ -20,6 +20,8 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from automation.state import trusted_git
+
 SCHEMA = "eu4-candidate-snapshot/v1"
 KINDS = ("add", "modify", "delete", "rename", "typechange")
 MODE_FILE = "100644"
@@ -240,6 +242,43 @@ def build_candidate(
         "tree": tree,
         "paths": touched,
     }
+
+
+def materialize_commit(repo: Path, revision: str, destination: Path,
+                       paths: tuple[str, ...]) -> dict[str, str]:
+    """Stage only approved regular files from the pinned Git tree."""
+    entries = trusted_git(repo, "ls-tree", "-z", revision, "--", *paths)
+    files = {}
+    for row in filter(None, entries.split("\0")):
+        metadata, name = row.split("\t", 1)
+        mode, kind, object_id = metadata.split()
+        if name not in paths or mode not in (MODE_FILE, MODE_EXEC) or kind != "blob":
+            raise SnapshotError(f"ineligible source in candidate tree: {name}")
+        files[name] = object_id
+    if files.keys() != set(paths):
+        raise SnapshotError(f"candidate source is missing: {sorted(set(paths) - files.keys())}")
+    destination.mkdir()
+    result = {}
+    for name, object_id in files.items():
+        content = trusted_git(repo, "cat-file", "blob", object_id, text=False)
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        result[name] = hashlib.sha256(content).hexdigest()
+    return result
+
+
+def stage_trusted_sources(repo: Path, destination: Path, names, closure: dict) -> None:
+    """Stage reviewed harness sources beside an immutable candidate closure."""
+    for name in names:
+        source = repo / name
+        if source.is_symlink() or name in closure:
+            raise SnapshotError(f"ineligible reviewed source: {name}")
+        content = source.read_bytes()
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        closure[name] = hashlib.sha256(content).hexdigest()
 
 
 def raw_diff(repo: Path, base: str, candidate: str) -> list[dict]:

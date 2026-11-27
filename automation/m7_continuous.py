@@ -25,7 +25,7 @@ import threading
 import time
 from pathlib import Path
 
-from automation import gfx_frame_graph, gfx_independent_replay, gfx_replay_case, m6_frame
+from automation import gfx_frame_graph, gfx_independent_replay, gfx_replay_case, gfx_frame
 from automation.gfx_artifacts import sha256_file as _sha
 
 SCHEMA = "m7-continuous-campaign/v1"
@@ -157,8 +157,8 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
         seal = None
         if seal_path.is_file():
             try:
-                seal = m6_frame.load_seal(frame)
-            except m6_frame.FrameError as exc:
+                seal = gfx_frame.load_seal(frame)
+            except gfx_frame.FrameError as exc:
                 raise ContinuousError(
                     "invalid_seal", f"{frame}: {exc}") from exc
             if seal.get("capture_frame_id") != capture_id:
@@ -381,8 +381,8 @@ def prepare_sequence_checkpoints(frames: list[Path], out_dir: Path,
         seal = None
         if (frame / "frame-seal.json").is_file():
             try:
-                seal = m6_frame.load_seal(frame)
-            except m6_frame.FrameError as exc:
+                seal = gfx_frame.load_seal(frame)
+            except gfx_frame.FrameError as exc:
                 raise ContinuousError(
                     "invalid_seal", f"{frame}: {exc}") from exc
         sequence = _read_json(frame / "frame-sequence.json")
@@ -408,7 +408,7 @@ def prepare_sequence_checkpoints(frames: list[Path], out_dir: Path,
         receipt = {
             "schema": "m7-shadow-shader-receipt/v1",
             **identity,
-            **m6_frame.shader_receipt_identity(shader_dir),
+            **gfx_frame.shader_receipt_identity(shader_dir),
             "checkpoint_request_file": request_path.name,
             "checkpoint_request_sha256": request_sha,
             "checkpoint_count": len(request.get("checkpoints") or []),
@@ -512,13 +512,13 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
     validation = validate_sequence(
         frames, max_frames=max_frames, max_bytes=max_bytes,
         require_engine_identity=require_engine_identity)
-    host_path = Path(host).expanduser() if host else m6_frame.build_replay_host()
+    host_path = Path(host).expanduser() if host else gfx_frame.build_replay_host()
     control_dir = out_dir / "control"
     control_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_setup = prepare_sequence_checkpoints(
         frames, out_dir, validation, shaders=shaders)
     shader_dir = Path(shaders).expanduser().resolve()
-    command = m6_frame.replay_host_command(
+    command = gfx_frame.replay_host_command(
         host_path, frames=frames, shaders=shader_dir, out=out_dir)
     command += [
         "--control-dir", str(control_dir),

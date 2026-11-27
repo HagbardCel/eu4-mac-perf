@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_shader_translate, m6_frame  # noqa: E402
+from automation import gfx_shader_translate, gfx_frame  # noqa: E402
 
 
 def sha(payload: bytes) -> str:
@@ -149,31 +149,31 @@ class TranslationCacheTests(unittest.TestCase):
         }))
 
     def identity(self) -> dict:
-        return m6_frame._shader_source_identity(
-            m6_frame.load_trace(self.frame))
+        return gfx_frame._shader_source_identity(
+            gfx_frame.load_trace(self.frame))
 
     def test_source_identity_is_frame_independent(self):
-        trace = m6_frame.load_trace(self.frame)
-        identity = m6_frame._shader_source_identity(trace)
+        trace = gfx_frame.load_trace(self.frame)
+        identity = gfx_frame._shader_source_identity(trace)
         other = dict(trace)
         other["_events"] = [dict(trace["_events"][0], index=99)]
         self.assertEqual(
-            m6_frame._shader_source_identity(other),
+            gfx_frame._shader_source_identity(other),
             identity)
 
     def test_swapped_attribute_locations_change_the_cache_identity(self):
-        trace = m6_frame.load_trace(self.frame)
+        trace = gfx_frame.load_trace(self.frame)
         event = trace["_events"][0]
         event["attributes"] = [
             {"name": "in_POSITION", "location": 0},
             {"name": "in_TEXCOORD", "location": 1},
         ]
-        first = m6_frame._shader_source_identity(trace)
+        first = gfx_frame._shader_source_identity(trace)
         event["attributes"] = [
             {"name": "in_POSITION", "location": 1},
             {"name": "in_TEXCOORD", "location": 0},
         ]
-        second = m6_frame._shader_source_identity(trace)
+        second = gfx_frame._shader_source_identity(trace)
         self.assertNotEqual(first["sha256"], second["sha256"])
         self.assertEqual(
             first["programs"]["7"]["attribute_locations"],
@@ -183,7 +183,7 @@ class TranslationCacheTests(unittest.TestCase):
             {"in_POSITION": 1, "in_TEXCOORD": 0})
 
     def test_translator_identity_hashes_content_and_tools(self):
-        identity = m6_frame._translator_identity()
+        identity = gfx_frame._translator_identity()
         self.assertEqual(identity["schema"], "gfx-translator-identity/v2")
         self.assertEqual(len(identity["sha256"]), 64)
         self.assertIn("glslang", identity["tools"])
@@ -196,12 +196,12 @@ class TranslationCacheTests(unittest.TestCase):
         with mock.patch.object(gfx_shader_translate,
                                "translate_trace",
                                side_effect=fake_translate) as translate:
-            self.assertEqual(m6_frame.translate_command(self.args()), 0)
+            self.assertEqual(gfx_frame.translate_command(self.args()), 0)
             self.assertEqual(translate.call_count, 1)
             first = json.loads(
                 (self.out / "translation-cache.json").read_text())
             self.assertFalse(first["hit"])
-            self.assertEqual(m6_frame.translate_command(self.args()), 0)
+            self.assertEqual(gfx_frame.translate_command(self.args()), 0)
             self.assertEqual(translate.call_count, 1)
             second = json.loads(
                 (self.out / "translation-cache.json").read_text())
@@ -244,30 +244,30 @@ class TranslationCacheTests(unittest.TestCase):
     def test_missing_cached_stage_is_rebuilt_not_adopted(self):
         with mock.patch.object(gfx_shader_translate, "translate_trace",
                                side_effect=lambda frame_dir, out_dir: self.write_translation(out_dir)) as translate:
-            self.assertEqual(m6_frame.translate_command(self.args()), 0)
+            self.assertEqual(gfx_frame.translate_command(self.args()), 0)
             cache_root, identity = self._cache_root()
-            self.assertTrue(m6_frame._translation_cache_valid(
+            self.assertTrue(gfx_frame._translation_cache_valid(
                 cache_root, identity))
             (cache_root / "program.metal").unlink()
-            self.assertEqual(m6_frame.translate_command(self.args()), 0)
+            self.assertEqual(gfx_frame.translate_command(self.args()), 0)
             self.assertEqual(translate.call_count, 2)
             self.assertFalse(json.loads(
                 (self.out / "translation-cache.json").read_text())["hit"])
-            self.assertTrue(m6_frame._translation_cache_valid(
+            self.assertTrue(gfx_frame._translation_cache_valid(
                 cache_root, identity))
             self.assertTrue((self.out / "program.metal").is_file())
 
     def test_corrupted_cached_stage_is_rebuilt_not_adopted(self):
         with mock.patch.object(gfx_shader_translate, "translate_trace",
                                side_effect=lambda frame_dir, out_dir: self.write_translation(out_dir)) as translate:
-            self.assertEqual(m6_frame.translate_command(self.args()), 0)
+            self.assertEqual(gfx_frame.translate_command(self.args()), 0)
             cache_root, identity = self._cache_root()
             (cache_root / "program.metal").write_text("// corrupt\n")
-            self.assertEqual(m6_frame.translate_command(self.args()), 0)
+            self.assertEqual(gfx_frame.translate_command(self.args()), 0)
             self.assertEqual(translate.call_count, 2)
             self.assertFalse(json.loads(
                 (self.out / "translation-cache.json").read_text())["hit"])
-            self.assertTrue(m6_frame._translation_cache_valid(
+            self.assertTrue(gfx_frame._translation_cache_valid(
                 cache_root, identity))
             self.assertEqual((cache_root / "program.metal").read_text(),
                              "// msl\n")
@@ -278,13 +278,13 @@ class TranslationCacheTests(unittest.TestCase):
         self.write_translation(cache_root, text="// stale but valid\n")
         (cache_root / "program.metal").write_text("// corrupt\n")
         self.write_cache_metadata(cache_root, identity)
-        self.assertFalse(m6_frame._translation_cache_valid(
+        self.assertFalse(gfx_frame._translation_cache_valid(
             cache_root, identity))
         with mock.patch.object(gfx_shader_translate, "translate_trace",
                                side_effect=lambda frame_dir, out_dir: self.write_translation(out_dir)) as translate:
-            self.assertEqual(m6_frame.translate_command(self.args()), 0)
+            self.assertEqual(gfx_frame.translate_command(self.args()), 0)
             self.assertEqual(translate.call_count, 1)
-        self.assertTrue(m6_frame._translation_cache_valid(cache_root, identity))
+        self.assertTrue(gfx_frame._translation_cache_valid(cache_root, identity))
         self.assertEqual((cache_root / "program.metal").read_text(),
                          "// msl\n")
         leftovers = sorted(path.name for path in self.cache.iterdir()
@@ -310,7 +310,7 @@ class TranslationCacheTests(unittest.TestCase):
         def publish(source: Path) -> None:
             barrier.wait(timeout=10)
             outcomes.append(
-                m6_frame._publish_translation_cache(
+                gfx_frame._publish_translation_cache(
                     source, cache_root, identity))
 
         threads = [threading.Thread(target=publish, args=(source,))
@@ -320,7 +320,7 @@ class TranslationCacheTests(unittest.TestCase):
         for thread in threads:
             thread.join(timeout=30)
         self.assertFalse(any(thread.is_alive() for thread in threads))
-        self.assertTrue(m6_frame._translation_cache_valid(cache_root, identity))
+        self.assertTrue(gfx_frame._translation_cache_valid(cache_root, identity))
         self.assertTrue(outcomes)
         self.assertIn((cache_root / "program.metal").read_text(),
                       {"// source-a\n", "// source-b\n"})
@@ -343,7 +343,7 @@ class TranslationCacheTests(unittest.TestCase):
                                "translate_trace",
                                side_effect=fake_translate) as translate:
             self.assertEqual(
-                m6_frame.translate_command(self.args(force=True)), 0)
+                gfx_frame.translate_command(self.args(force=True)), 0)
             self.assertEqual(translate.call_count, 1)
             value = json.loads(
                 (self.out / "translation-cache.json").read_text())

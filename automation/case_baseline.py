@@ -35,8 +35,8 @@ ROOT = Path(__file__).resolve().parents[1]
 RENDERER_ROOTS = replay_host_dependencies.REPLAY_SOURCES
 # Non-header implementation that participates in the comparison or replay.
 IMPLEMENTATION_SOURCES = (
-    "automation/m6_frame.py",
-    "automation/m6_compare.py",
+    "automation/gfx_frame.py",
+    "automation/gfx_frame_pixels.py",
     "automation/gfx_artifacts.py",
     "automation/replay_host_dependencies.py",
     "automation/gfx_independent_replay.py",
@@ -126,10 +126,10 @@ _PAYLOAD_PROBLEM_PREFIXES = (
 
 def _current_producer() -> dict:
     """Identity of the candidate replay host that should produce this result."""
-    from automation import m6_frame
+    from automation import gfx_frame
 
     identity = replay_host_dependencies.build_identity()
-    host = m6_frame.REPLAY_HOST
+    host = gfx_frame.REPLAY_HOST
     binary_sha = _sha256(host)
     if not binary_sha:
         raise BaselineError(

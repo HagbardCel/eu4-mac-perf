@@ -3,7 +3,29 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
-## Current navigation — 21 November 2026
+## Current capability and qualification
+
+- The governed R3 gate satisfied all nine protected requirements at
+  the fully tested implementation `165d431b`. The final immutable check
+  and retained receipts are indexed in the private evidence record. The aggregate verifier checked every case signature and
+  output artifact. The gate retains the 414 emulated-original function
+  scenarios, synthetic controls and established Metal scopes and diagnostics.
+  [Retention and recovery](evidence-retention.md#r3-authentic-opengl-selected-draw) ·
+  [R3 draft and final revision](https://github.com/HagbardCel/eu4-mac-perf/pull/305)
+- The original draw at caller `0xed7ba9` now has a verified seal and an exact
+  independently executed OpenGL result for its 864×558 RGBA8 level-0
+  attachment. The paired omission preserved initialization, submitted zero
+  draws and differed at every pixel. The result is scoped to that transaction
+  and its verified x86-64 legacy Apple GL environment.
+  [Scientific result and receipts](../plans/repository-refactor/r3-capture-preparation.md#authenticated-selected-draw-qualification)
+- November 14 passes as a retained raw-pair diagnostic. The original
+  complete-manifest bytes remain unavailable and the digest remains
+  recorded. [Approved retention disposition](../plans/repository-refactor/r3-consolidation.md#november-14-approved-retention-disposition)
+- OpenCode remains the supported transitional campaign runtime. Native DSH
+  operates authorized experiments. R4 owns broader autonomous continuation
+  and checkpoint integration. [Permanent strategy](eu4_recommended_strategy.md)
+
+## Archived navigation — 21 November 2026
 
 This section is the starting point. Everything below it is retained as dated
 history and must be read with its original run/seal identity.
@@ -1237,7 +1259,7 @@ Evidence: [qualification report](../analysis/m6/qualification-report.md),
   captured-state replay; it does not independently reconstruct the upstream
   terrain pass. A synthetic capture-format/replay regression now covers a
   sparse 16-bit index list with a nonzero signed base vertex and a nonzero
-  captured `vertex_origin` (`tests.test_m6_frame.SparseIndexReplayTests`). It
+  captured `vertex_origin` (`tests.test_gfx_frame.SparseIndexReplayTests`). It
   builds a frame-trace document in the captured format and does not exercise
   the OpenGL capture writer; the historical canonical frame's origins are zero,
   so it does not exercise that path either. A negative case omits the origin and

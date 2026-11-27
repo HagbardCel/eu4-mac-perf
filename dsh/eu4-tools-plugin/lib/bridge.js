@@ -1,6 +1,6 @@
 // Thin bridge from a DSH tool call to the stable Python tool core.
 import { spawn } from 'node:child_process'
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, realpathSync } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
 
 export const TOOL_NAMES = [
@@ -54,6 +54,7 @@ const ENV_ALLOW = new Set([
   'EU4_RE_EXPORT', 'EU4_RE_INDEX', 'EU4_RE_REVISION',
   'EU4_GFX_SESSION_ROOT', 'EU4_LAUNCH_LEASE_DIR',
   'EU4_EVIDENCE_ROOT',
+  'EU4_QUALIFICATION_POLICY', 'EU4_QUALIFICATION_POLICY_SHA256',
   'GHIDRA_INSTALL', 'JAVA_HOME',
 ])
 
@@ -122,7 +123,6 @@ export function buildArgs(tool, args = {}) {
     add('--checkpoint', 'checkpoint')
     add('--occurrence', 'occurrence')
     add('--output', 'output')
-    add('--campaign-run-root', 'campaign_run_root')
     add('--caller-rva', 'caller_rva')
     add('--shader-cache', 'shader_cache')
     add('--timeout', 'timeout')
@@ -165,6 +165,10 @@ export function buildArgs(tool, args = {}) {
     add('--temporal-artifact-dir', 'temporal_artifact_dir')
   } else if (tool === 'eu4_replay') {
     output.push(String(args.op || 'case'))
+    if (args.op === 'qualify') {
+      add('--workspace', 'workspace')
+      add('--commit', 'commit')
+    }
     add('--case', 'case')
     add('--frame', 'frame')
     for (const frame of args.frame_dirs || []) output.push('--frame-dir', String(frame))
@@ -228,10 +232,14 @@ export function runTool(tool, args, options = {}) {
       return
     }
     const cwd = options.cwd || process.cwd()
-    const argv = ['-m', 'automation.agent_tools', ...buildArgs(tool, args)]
+    const qualify = tool === 'eu4_replay' && args.op === 'qualify'
+    const env = sanitizedEnv(process.env, options.env)
+    if (qualify) env.PYTHONPATH = realpathSync(cwd)
+    const argv = [...(qualify ? ['-s', '-P'] : []),
+      '-m', 'automation.agent_tools', ...buildArgs(tool, args)]
     const child = spawn(python, argv, {
       cwd,
-      env: sanitizedEnv(process.env, options.env),
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let stdout = ''

@@ -8,13 +8,12 @@ for recovery status.
 ## Components and backends
 
 - [Original EU4 renderer](eu4_renderer.md) covers original OpenGL observation, draw and resource lifecycles, and the limits of static and captured evidence.
-- **Faithful OpenGL** is a reviewed selected-draw control for the supported
-  default-framebuffer route. Qualification requires same-seal inputs,
-  live-drawable equivalence and exact output. M7 event 1 uses offscreen
-  framebuffer 6 and remains outside this route.
-  [Driver](../../automation/gfx_gl_control_renderer.py) ·
-  [Native executor](../../renderer/gl/eu4_gfx_draw_control.c) ·
-  [Qualification and limitations](metal.md#selected-draw-opengl-control)
+- **Faithful OpenGL** independently qualifies one captured-state 864×558
+  offscreen RGBA8 draw, including actual submission, exact attachment bytes
+  and a paired draw omission. The verified scope uses x86-64 legacy CGL on
+  the recorded macOS and Apple GL implementation. [Qualification interface,
+  scope and limitations](metal.md#selected-draw-opengl-control) ·
+  [Native executor](../../renderer/gl/eu4_gfx_draw_control.c)
 - [Faithful Metal](metal.md) covers captured-state replay and exact attachment comparison.
 - [Optimized Metal](metal_optimized.md) records the proposed workload, measurement and qualification requirements.
 
@@ -61,6 +60,11 @@ The six dossier families describe 92 functions at the static semantic level.
   `pr-d-gfx-live-20261025T155406Z`.
   [Recovery status](../evidence-retention.md#protected-collections-and-recovery-status) ·
   [Archive identity](../../results/20261025T155406Z-gfx-live-publication/publication-summary.md#operator-archive)
+
+  The revision validator's `constant-buffer` case builds the selected Git
+  implementation and compares its memory and return-register effects over
+  414 frozen P-code inputs. This is emulated-original qualification.
+  [Validator interface](../agent-tools.md#eu4_replay)
 
 - **`_GfxForceWireframe` · RVA `0x15ed175`.** The static contract establishes
   the single store of `SIL` to `[RDI + 0x194]` and preservation of `RAX`.

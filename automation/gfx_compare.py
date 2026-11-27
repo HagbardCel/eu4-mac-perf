@@ -21,9 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import struct
 import sys
-import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -31,7 +29,8 @@ from typing import Any, Iterable
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from automation.m6_compare import measure_pixel_deltas
+from automation import gfx_frame_pixels
+from automation.gfx_frame_pixels import measure_pixel_deltas
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
@@ -406,55 +405,9 @@ def load_capture(path: Path, role: str) -> Capture:
 
 
 def _canonical_rgba(capture: Capture) -> bytes:
-    """Decode a declared payload into top-left RGBA using its recorded origin.
-
-    The origin is metadata, not a transformation chosen to make a comparison
-    pass: a lower-left capture is row-reversed, a top-left capture is not.
-    """
-    data = capture.payload
-    fmt = capture.pixel_format
-    width, height, stride = capture.width, capture.height, capture.row_stride
-    rows = []
-    for y in range(height):
-        row = data[y * stride:(y + 1) * stride]
-        out = bytearray(width * 4)
-        if fmt == "RGBA8":
-            out[:] = row
-        else:  # BGRA8
-            for x in range(width):
-                i = x * 4
-                out[i] = row[i + 2]
-                out[i + 1] = row[i + 1]
-                out[i + 2] = row[i]
-                out[i + 3] = row[i + 3]
-        rows.append(bytes(out))
-    if capture.origin == "lower_left":
-        rows.reverse()
-    return b"".join(rows)
-
-
-def _png_rgb(path: Path, width: int, height: int, rgba: bytes) -> None:
-    rows = []
-    for y in range(height):
-        row = rgba[y * width * 4:(y + 1) * width * 4]
-        rows.append(b"\x00" + bytes(row[i] for i in range(len(row)) if i % 4 != 3))
-    raw = b"".join(rows)
-
-    def chunk(kind: bytes, payload: bytes) -> bytes:
-        return (
-            struct.pack(">I", len(payload))
-            + kind
-            + payload
-            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
-        )
-
-    png = (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(raw, 9))
-        + chunk(b"IEND", b"")
-    )
-    path.write_bytes(png)
+    """Decode a declared packed payload into top-left RGBA."""
+    return gfx_frame_pixels.canonical_rgba(
+        capture.payload, capture.width, capture.height, capture.pixel_format, capture.origin)
 
 
 def _stats(reference: bytes, candidate: bytes, width: int, height: int,
@@ -483,22 +436,6 @@ def _stats(reference: bytes, candidate: bytes, width: int, height: int,
         "failure_grid": [{"row": index // 8, "column": index % 8, "pixels": count}
                          for index, count in enumerate(deltas["grid_counts"]) if count],
     }
-
-
-def _difference_rgba(reference: bytes, candidate: bytes, width: int, height: int,
-                     tolerance: int) -> bytes:
-    out = bytearray(width * height * 4)
-    for index in range(width * height):
-        base = index * 4
-        deltas = [abs(reference[base + c] - candidate[base + c]) for c in range(4)]
-        if max(deltas[:3]) <= tolerance and deltas[3] <= tolerance:
-            out[base:base + 4] = bytes((0, 0, 0, 255))
-            continue
-        amplified = [min(255, value * 4) for value in deltas[:3]]
-        if amplified == [0, 0, 0] and deltas[3]:
-            amplified = [255, 0, 255]
-        out[base:base + 4] = bytes((*amplified, 255))
-    return bytes(out)
 
 
 def _expected_mismatch(policy: dict, capture: Capture, role: str) -> list[str]:
@@ -668,16 +605,12 @@ def _write_report(out: Path, report: dict, reference: Capture | None,
     if reference is not None and candidate is not None and report["status"] in ("pass", "fail"):
         reference_rgba = _canonical_rgba(reference)
         candidate_rgba = _canonical_rgba(candidate)
-        _png_rgb(out / "reference.png", reference.width, reference.height, reference_rgba)
-        _png_rgb(out / "candidate.png", candidate.width, candidate.height, candidate_rgba)
-        difference = _difference_rgba(
-            reference_rgba,
-            candidate_rgba,
-            reference.width,
-            reference.height,
-            tolerance,
-        )
-        _png_rgb(out / "difference.png", reference.width, reference.height, difference)
+        width, height = reference.width, reference.height
+        difference = gfx_frame_pixels.amplified_difference(
+            reference_rgba, candidate_rgba, amplification=4, tolerance=tolerance, mark_alpha=True)
+        for name, data in (("reference", reference_rgba), ("candidate", candidate_rgba),
+                           ("difference", difference)):
+            gfx_frame_pixels.write_png_bytes(out / f"{name}.png", data, width, height, alpha=False)
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 

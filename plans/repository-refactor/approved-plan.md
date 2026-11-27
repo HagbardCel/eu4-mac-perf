@@ -74,6 +74,18 @@ flowchart TD
 
 The diagram expresses logical responsibilities, not a new mandatory abstraction. Low-level replay feeds the maintained backends without claiming to execute reconstructed engine semantics; function-level reconstruction feeds the same backend where feasible. Runtime dependencies flow from integration and engine code into backend-specific operations, not from production renderer code into diagnostic, orchestration or experiment machinery.
 
+### Milestone independence
+
+Maintained reusable code has functional ownership and naming. This rule
+covers modules, imports, CLI commands, native targets, environment overrides,
+tests and runtime configuration. The permanent qualification path may consume
+protected evidence and policy by their reviewed identities. It must not
+depend on milestone wrappers, experimental acceptance scripts or planning
+documents. Historical milestone identifiers remain valid in evidence, reports,
+protected case IDs and thin reproduction entry points. Consolidate implementations
+before renaming them. Pure moves carry zero LOC credit. R4 owns session
+lifecycle, continuation and checkpoint migration.
+
 ### 3.1 Proposed working-tree structure
 
 ```text
@@ -266,13 +278,13 @@ Adapt the workstream label and validation contract for Metal migration and optim
 4. Reconstruct or correct code. Run focused tests and independently validate meaningful changes against protected scope.
 5. Record findings and unresolved gaps; preserve code and notes in Git. Move to the next useful task until the deadline or a genuine blocker.
 
-A disproved hypothesis, an inconclusive experiment or one blocked function is not a reason to stop if independent meaningful work remains. A genuine blocker specifies the affected scope, missing evidence or capability, attempted alternatives, the smallest requested observation and the consequence. Live original EU4 acquisition is an operator-authorized workflow, separate from the offline session. Do not give the agent an operator launch token.
+A disproved hypothesis, an inconclusive experiment or one blocked function is not a reason to stop if independent meaningful work remains. A genuine blocker specifies the affected scope, missing evidence or capability, attempted alternatives, the smallest requested observation and the consequence. Live original EU4 acquisition uses the maintained capture tools and stays outside offline qualification. Unattended campaign constraints belong at the orchestration boundary.
 
 ### 6.3 Minimal lifecycle and trust model
 
 Reuse the existing non-campaign DSH mode (`dsh/scripts/run.sh --workspace ...`) as the first candidate, not a proven finished solution. Investigate the pinned DSH version's actual goal lifecycle, deadline/cancellation hooks and child process behavior. Native goal continuation owns repeated rounds. If a hard deadline or round hook is absent, extract the smallest existing lifecycle primitive required; no replacement goal driver or second scheduler.
 
-Enforce the deadline externally, including terminal commands and GPU workers where applicable. Reserve enough of the time budget for orderly finalization; do not renew the deadline on resume. At expiry or cancellation stop owned execution, preserve work and report unvalidated changes separately. Reuse process identity checking, host-wide EU4 lease, GPU serialization, offline launch refusal and authorized capture mechanisms. Keep explicit protection if a simpler design cannot yet enforce the same invariants. Avoid fixed quotas on replays, goal rounds or corrections.
+Enforce the deadline externally, including terminal commands and GPU workers where applicable. Reserve enough of the time budget for orderly finalization; do not renew the deadline on resume. At expiry or cancellation stop owned execution, preserve work and report unvalidated changes separately. Reuse process identity checking, host-wide EU4 lease, GPU serialization, offline launch refusal and bounded controlled live capture. Keep explicit protection if a simpler design cannot yet enforce the same invariants. Avoid fixed quotas on replays, goal rounds or corrections.
 
 The existing experiment rationale should be reduced to useful scientific information (question/hypothesis, intervention, expected discriminator, actual result) where possible. Do not require form-filling for read-only inspection or routine focused tests. Preserve useful provenance and independent verdict semantics. Avoid another progress/telemetry service.
 
@@ -315,7 +327,7 @@ Review M1–M6 and later campaigns using the same policy, not an age cutoff. Rem
 | Focused native backend | Real Apple GL/Metal behavior and integration at API boundaries | Affected backend change |
 | Authentic qualification | Exact original observations and protected regressions | Promotion of renderer behavior |
 | Full maintained offline gate | Integrated correctness and safety, no real EU4 launches | Once before merge on retained changes |
-| Live EU4 | Missing original observation, end-to-end integration | Explicit operator authorization |
+| Live EU4 | Missing original observation, end-to-end integration | Pinned executable, bounded capture, host lease and evidence checks |
 
 Git checkpointing does not trigger a full suite. Keep existing `automation/test_runner.py` or its consolidated owner; do not add a test cache. Reuse valid build products when source/toolchain identity is verified, including exact rollbacks. Do not run multiple equivalent validations through wrappers or repeatedly after documentation-only edits. Keep skip vs failure semantics explicit, including native prerequisites unavailable on CI. A portable gate does not substitute for actual macOS GPU qualification.
 
@@ -354,7 +366,7 @@ The phases below combine repository simplification with the enabling work in the
 4. Audit all OpenGL control and Metal replay code, actual resource/state representation, capture/restore/observe/compare coverage, function oracle and ABI paths. For one authentic case record the state field, original observation availability, definedness, losslessness, candidate source of state, comparator and gap. Determine the smallest real missing discriminator before planning new code.
 5. Audit evidence retention, corpus identity, case locators, trusted reference and independent execution paths. Verify whether required local payloads exist on the host; a repository locator is not proof of recoverability.
 6. Audit DSH runtime and installed lifecycle hooks, deadline, cancellation, round checkpoint opportunity, child containment, permissions, Git isolation and campaign plugin dependencies. Determine whether `--workspace` mode can provide all required native lifecycle functionality. Record unresolved capabilities rather than assuming support.
-7. Trace safety dependencies of `campaign_guard`, host lease, launch authorization, GPU lock, offline profile, trusted execution and finalization. Distinguish indispensable invariants from obsolete campaign plumbing.
+7. Trace safety dependencies of `campaign_guard`, host lease, campaign deadline, GPU lock, offline profile, trusted execution and finalization. Distinguish indispensable invariants from obsolete campaign plumbing.
 8. Profile current tests and agent traces as specified in §8. Rank actual time sinks by cumulative wall time and repeated cost. Map each proposed test deletion to the invariant it protects and the retained alternative, if any.
 9. Produce a disposition map for historical milestone code, generated artifacts and findings, including M1–M6 and M7. Inspect actual evidence and negative conclusions before deletion recommendations.
 
@@ -396,7 +408,9 @@ The phases below combine repository simplification with the enabling work in the
 - Reuse the function oracle and RE contracts for engine-level qualification. Establish at least one usable independent function validation route; distinguish original-code execution, P-code/emulated evidence and recorded fixtures. Do not represent command replay or emulator agreement as full native engine equivalence.
 - Extend compact agent diagnostics with actual state/field difference, producing event and reference/candidate identities. Preserve existing receipt and fail-closed semantics. Remove campaign-specific acceptance wrappers as their replacement becomes available, but not before runtime callers are migrated.
 
-**Gate R3:** independent validation rejects a state-only seeded defect even when color matches, rejects missing state and tampered/stale outputs, catches a regression to a previously qualified scope, and accepts a correct independently executed known fixture within its real evidence tier. Demonstrate a function-level comparator that detects incorrect memory effects or generated commands. Record authentic-case blockers accurately if evidence is incomplete; no false pass.
+**Gate R3:** the independent validator executes the selected candidate revision and qualifies one complete original EU4 draw transaction exactly. On the same trusted path, an omission control establishes the correct initial state, omits submission, and produces a verified attachment mismatch. The validator also rejects state-only defects, earlier semantic regressions, missing observations, stale or altered evidence, and loss of protected exact or diagnostic coverage. The function route independently detects incorrect memory effects at its stated evidence tier. Accurate authentic-case blockers remain visible and hold this gate open until the positive transaction passes.
+
+Freeze the eligible authentic workload and its observation contract in operator-owned policy before evaluating a candidate. Check the retained M7 window draw first. The event 273 offscreen draw is an approved alternative only for verified reference inapplicability or an original observation gap. A candidate mismatch or execution failure does not change the selected workload. Preserve historical executions at their tested revisions, issue qualification against the current revision and policy, and physically execute the authentic positive on the retained R3 implementation.
 
 ### R4 — Replace campaign-driven execution with native time-bounded sessions
 
@@ -404,12 +418,12 @@ The phases below combine repository simplification with the enabling work in the
 
 - Make the ordinary native DSH goal path the default. Reuse existing provisioning, interpreter pinning, workspace registration, skill loading and tool mounting. Expose a minimal operator start flow with default 120-minute duration and optional workstream; exact command/interface determined by audit. Do not create a launcher family for milestones.
 - Load compact permanent project context and discover the applicable references and current qualified baseline automatically. Use native continuation after individual successful tasks. No new objective file, sidecar, event range or acceptance script per session.
-- Extract or reuse minimal externally enforced deadline, cancellation and process containment. Separate routine offline execution from controlled live capture. Maintain operator-owned launch authorization and host-wide lease, GPU serialization and cleanup.
+- Extract or reuse minimal externally enforced deadline, cancellation and process containment. Separate routine offline execution from controlled live capture. Maintain the host-wide lease, GPU serialization and cleanup.
 - Implement mandatory changed-round Git checkpoints through the verified native lifecycle or minimal trusted boundary. Preserve the starting and latest qualified revisions, newly authored eligible files, negative findings and recovery history. Finalize on interruption after owned processes quiesce. Protect Git metadata, refs, evidence and trusted infrastructure from candidate execution. Use actual enforceable controls, not just instructions.
 - Make independent qualification callable throughout a session without campaign binding, while preserving immutable inputs, receipt verification and required regression policy. End-of-session reporting must distinguish qualified changes, WIP and evidence blockers.
 - Update `AGENTS.md`, shared reconstruction skill, README, governance and operator docs. Remove duplicated instructions and simplify experiment rationale requirements while preserving evidence value.
 
-**Gate R4:** on the pinned runtime, a changed round automatically checkpoints before the next round; an unchanged round does not create unnecessary commits; an interruption/deadline preserves recoverable work and prevents further execution; a failed checkpoint cannot silently continue. Prove protected refs and validation/evidence cannot be altered through candidate execution, offline launch is denied, and no operator token is visible. Native DSH remains sole continuation owner. A session starts without selecting an event or reference and resumes from retained state. If hook or isolation capabilities are unavailable, report the blocker and retain necessary existing protections until an independently reviewed minimal solution exists.
+**Gate R4:** on the pinned runtime, a changed round automatically checkpoints before the next round; an unchanged round does not create unnecessary commits; an interruption/deadline preserves recoverable work and prevents further execution; a failed checkpoint cannot silently continue. Prove that candidate execution cannot alter protected Git recovery state, trusted validation or original evidence. Verify that routine offline execution cannot launch EU4 and controlled live execution remains bounded. Native DSH remains sole continuation owner. A session starts without selecting an event or reference and resumes from retained state. If hook or isolation capabilities are unavailable, report the blocker and retain necessary existing protections until an independently reviewed minimal solution exists.
 
 ### R5 — Test optimization and legacy reduction
 
@@ -419,6 +433,16 @@ The phases below combine repository simplification with the enabling work in the
 - Consolidate reusable profiling and experiment helpers; remove stale experiment-specific code, configs, fixtures and launchers with a justified disposition. Move bulk data out of the working tree only after verifying retained evidence or explicitly documenting why it is disposable.
 - Remove legacy milestone docs/paths that duplicate canonical knowledge. Remove superseded tests together with their mechanisms; ensure the replacement invariant is covered.
 - Inventory candidate orchestration deletions (`campaigns/`, DSH sidecars, custom plugin, bridge, OpenCode runner and related tests); delete only portions no longer required. Maintain CLI/skill interoperability if inexpensive, but not a second full orchestration stack by default.
+
+- The GL qualification owner retains signed-authority execution until its
+  active default-drawable, depth and receipt consumers migrate to the maintained
+  qualifier with equivalent coverage, or to an approved pinned historical
+  deployment. The validator and evidence owners coordinate any package-format
+  consolidation. Preserve published package and receipt identities.
+- The DSH lifecycle and prefix-check owners retain the mutable worktree
+  verifier and cached candidate build. Retire them after R4 implements and R6
+  verifies checkpointed continuation with independent immutable qualification,
+  including the failure and recovery paths used by active campaigns.
 
 **Gate R5:** measured net reduction in enabling infrastructure/test overhead, no silent loss of unique evidence or semantic coverage, no broken entry points, no indefinite duplicate implementation. Report comparable timing results and actual test composition. If proposed performance targets are missed, report reasons and remaining opportunities. Do not manufacture a smaller gate by excluding protected cases.
 
@@ -431,7 +455,7 @@ The phases below combine repository simplification with the enabling work in the
 3. **Continuation/recovery:** start a second session from the retained branch, receipts and knowledge, without reconstructing a custom campaign setup. Demonstrate recovery from an interrupted session and rejection of regressions. Verify that the second agent can recover the earlier negative result and does not repeat an equivalent experiment without a reason.
 4. Where evidence permits, demonstrate an independent GL-versus-Metal controlled experiment against a qualified GL scope. This is not a requirement to finish the full GL renderer or the game integration during the refactor.
 
-**Gate R6:** the workflow is demonstrably usable on the real host, independently verified changed rounds and recovery exist, no manual case/event selection or unauthorized live launch occurs, and evidence-based progress can survive across sessions. Seeded repair and continuation must actually succeed; an authentic run that encounters a legitimate blocker can establish lifecycle operation but cannot establish renderer equivalence. Clearly separate workflow acceptance from scientific progress. A demonstrated blocker must have a minimal actionable evidence request.
+**Gate R6:** the workflow is demonstrably usable on the real host, independently verified changed rounds and recovery exist, reference selection is automatic and live launches remain within the controlled execution boundary, and evidence-based progress can survive across sessions. Seeded repair and continuation must actually succeed; an authentic run that encounters a legitimate blocker can establish lifecycle operation but cannot establish renderer equivalence. Clearly separate workflow acceptance from scientific progress. A demonstrated blocker must have a minimal actionable evidence request.
 
 ### R7 — Final removal, integration and release of refactor
 

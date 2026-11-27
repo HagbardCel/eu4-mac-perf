@@ -35,6 +35,7 @@ Strictly offline: nothing launches, attaches to or reads the game.
 from __future__ import annotations
 
 import hashlib
+import functools
 import json
 import os
 import subprocess
@@ -169,7 +170,8 @@ def prestate_bytes(corpus: dict[str, Any]) -> bytes:
 
 
 def run_harness(harness: Path, slot: int, selector: int, buffer_dword: int | None,
-                prestate: bytes, env: dict[str, str] | None = None) -> dict[str, str]:
+                prestate: bytes, env: dict[str, str] | None = None, *,
+                runner=subprocess.run) -> dict[str, str]:
     """Run one reconstruction scenario with an explicit context pre-state.
 
     The caller owns the pre-state and the interpretation of the output. This only preserves the
@@ -179,7 +181,7 @@ def run_harness(harness: Path, slot: int, selector: int, buffer_dword: int | Non
     """
     argument = "absent" if buffer_dword is None else f"{buffer_dword:08x}"
     command = [str(harness), "scenario", str(slot), f"{selector:x}", argument]
-    result = subprocess.run(command, input=prestate.hex() + "\n",
+    result = runner(command, input=prestate.hex() + "\n",
                             capture_output=True, text=True, timeout=HARNESS_TIMEOUT,
                             env=sanitizer_env() if env is None else env)
     fields: dict[str, str] = {}
@@ -193,12 +195,13 @@ def run_harness(harness: Path, slot: int, selector: int, buffer_dword: int | Non
 
 
 def run_reconstruction(harness: Path, row: dict[str, Any], corpus: dict[str, Any],
-                       env: dict[str, str] | None = None) -> dict[str, str]:
+                       env: dict[str, str] | None = None, *,
+                       runner=subprocess.run) -> dict[str, str]:
     """One corpus row through the compiled reconstruction's `scenario` harness mode."""
     dword = row["buffer_first_dword"]
     return run_harness(harness, row["slot"], pilot.hexint(row["r9d"]),
                        None if dword is None else pilot.hexint(dword),
-                       prestate_bytes(corpus), env)
+                       prestate_bytes(corpus), env, runner=runner)
 
 
 def _store_set(oracle: dict[str, Any]) -> set[tuple[int, int]]:
@@ -334,7 +337,8 @@ def compare_row(row: dict[str, Any], oracle: dict[str, Any], recon: dict[str, st
 
 
 def compare_corpus(harness: Path, corpus: dict[str, Any] | None = None,
-                   reference: dict[str, Any] | None = None) -> list[str]:
+                   reference: dict[str, Any] | None = None, *,
+                   runner=subprocess.run) -> list[str]:
     """Reconcile every frozen corpus row; returns one message per disagreement.
 
     The reference is qualified first, and a reference that fails qualification is returned as the
@@ -357,7 +361,8 @@ def compare_corpus(harness: Path, corpus: dict[str, Any] | None = None,
         if oracle is None:
             failures.append(f"{row['id']}: the reference has no row for this corpus input")
             continue
-        failures += compare_row(row, oracle, run_reconstruction(harness, row, corpus), corpus)
+        candidate = run_reconstruction(harness, row, corpus, runner=runner)
+        failures += compare_row(row, oracle, candidate, corpus)
     return failures
 
 
@@ -653,6 +658,115 @@ def validate_reference(reference: dict[str, Any],
     for row, result in zip(corpus["scenarios"], results):
         _validate_row(check, row, result, corpus, reference_structure, inventory)
     return failures
+
+
+def qualify_candidate(repo: Path, commit: str, directory: Path, reference_identity: dict, *,
+                      previous: Path | None = None, public_key: bytes | None = None) -> dict:
+    from automation import candidate_snapshot, dsh_receipts, native_build, qualification_sandbox
+    from automation.gfx_artifacts import sha256_file
+
+    import platform
+
+    sources = ("renderer/engine/gfx_set_constant_buffer.cpp",
+               "renderer/engine/gfx_set_constant_buffer.hpp")
+    candidate = directory / "candidate"
+    closure = candidate_snapshot.materialize_commit(repo, commit, candidate, sources)
+    reference = load_reference()
+    corpus = load_corpus()
+    references = {
+        "corpus_sha256": corpus_sha256(),
+        "reference_sha256": sha256_file(REFERENCE_PATH),
+    }
+    if reference_identity != references:
+        return {"verdict": "invalid_provenance", "problems": ["function reference identity differs"]}
+    if problems := validate_reference(reference, corpus):
+        return {"verdict": "invalid_provenance", "problems": problems}
+
+    compiler, sdk = native_build.qualification_toolchain("clang++")
+    harness_sources = tuple((FUNCTION_DIR / "reconstruction" / name).relative_to(repo).as_posix()
+                            for name in ("harness.cpp", "arith_literals.cpp"))
+    candidate_snapshot.stage_trusted_sources(repo, candidate, harness_sources, closure)
+    flags = ("-std=c++20", "-O0", "-Wall", "-Wextra", "-Werror",
+             "-fsanitize=undefined", "-fno-sanitize-recover=all")
+    resource_dir = Path(subprocess.check_output(
+        [str(compiler), "-print-resource-dir"], text=True, timeout=30).strip())
+    runtime = (resource_dir / "lib/darwin/libclang_rt.ubsan_osx_dynamic.dylib").resolve(strict=True)
+    binding = {
+        "recipe": {**native_build.qualification_recipe(compiler, sdk, flags),
+                   "sanitizer_sha256": sha256_file(runtime)},
+        "environment": {"macos": platform.mac_ver()[0], "os_build": platform.version()},
+        "reference": references,
+        "validation_contract": {name: sha256_file(repo / name) for name in (
+            "automation/qualification_sandbox.py", "automation/native_build.py",
+            "automation/dsh_receipts.py", "automation/candidate_snapshot.py",
+            "reverse_engineering/reconstruction_diff.py",
+            "reverse_engineering/reconstruction_pilot.py",
+            "reverse_engineering/macho_rva.py", "reverse_engineering/paths.py",
+            "reverse_engineering/target.json")},
+    }
+    architecture = platform.machine()
+    if (previous is not None and public_key is not None
+            and (reused := dsh_receipts.applicable_execution(previous, binding, public_key)) is not None):
+        producer = reused.get("candidate") or {}
+        if (producer.get("source_digests") == closure and producer.get("architecture") == architecture
+                and any(item["file"] == "build/function-oracle"
+                        and item["sha256"] == producer.get("executable_sha256")
+                        for item in reused["outputs"])):
+            return {
+                **{key: reused[key] for key in ("verdict", "evidence_tier", "scope", "coverage",
+                                               "outputs", "candidate", "execution",
+                                               "independently_verified", "execution_revision", "problems")},
+                **binding, "reused_execution_receipt": str(previous),
+                "reused_receipt_digest": reused["receipt_digest"],
+            }
+
+    build = directory / "build"
+    build.mkdir()
+    executable = build / "function-oracle"
+    source_root = Path("..") / candidate.name
+    source_args = [source_root / name for name in (sources[0], *harness_sources)]
+    linked = native_build.qualification_compile(
+        compiler, sdk, [*flags, "-I", source_args[0].parent, *source_args, "-o", executable],
+        build=build, readable=(candidate,))
+    if linked.returncode:
+        return {"verdict": "execution_failure",
+                "problems": [f"function compiler exit {linked.returncode}: "
+                             + (linked.stderr or linked.stdout)[-2500:]]}
+
+    execution = directory / "worker"
+    execution.mkdir()
+    run = functools.partial(qualification_sandbox.run, writable=execution, readable=(runtime,))
+    observations = directory / "observations.jsonl"
+    actual = []
+
+    def observe(args, *, input, timeout, **_kwargs):
+        completed = run(args, input=input, timeout=timeout)
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr[-2500:] or "function worker exited nonzero")
+        if any(execution.iterdir()):
+            raise RuntimeError("function worker produced unexpected files")
+        actual.append(completed.stdout)
+        return completed
+
+    executable_digest = sha256_file(executable)
+    failures = compare_corpus(executable, corpus, reference, runner=observe)
+    observations.write_text("".join(json.dumps(row) + "\n" for row in actual))
+    if sha256_file(executable) != executable_digest:
+        raise RuntimeError("function executable changed during execution")
+    return {
+        "verdict": "different" if failures else "exact",
+        "evidence_tier": "emulated-original",
+        "execution": "completed",
+        "independently_verified": True,
+        "coverage": [row["id"] for row in corpus["scenarios"]],
+        "candidate": {"source_digests": closure, "executable_sha256": executable_digest,
+                      "architecture": architecture},
+        "outputs": dsh_receipts.artifact_records(directory, ("observations.jsonl", "build/function-oracle")),
+        "scope": {"function": "_GfxSetConstantBuffer", "cases": len(corpus["scenarios"]),
+                  "memory_window": common_window(corpus), "return_register": "RAX"},
+        **binding,
+        "problems": failures,
+    }
 
 
 def run_twice(work_dir: Path) -> dict[str, Any]:

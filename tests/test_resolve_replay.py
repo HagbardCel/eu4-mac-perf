@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import m6_frame  # noqa: E402
+from automation import gfx_frame  # noqa: E402
 
 WIDTH = HEIGHT = 4
 CLEAR_DEST = (0.0, 0.5, 0.0, 0.5)
@@ -193,7 +193,7 @@ class ResolveReplayTests(unittest.TestCase):
         (cls.shaders / "f_red.metal").write_text(FRAG_RED)
         (cls.shaders / "f_green.metal").write_text(FRAG_GREEN)
         (cls.shaders / "f_blue.metal").write_text(FRAG_BLUE)
-        cls.host = m6_frame.build_replay_host()
+        cls.host = gfx_frame.build_replay_host()
 
     @classmethod
     def tearDownClass(cls):

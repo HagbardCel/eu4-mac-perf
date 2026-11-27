@@ -209,7 +209,6 @@ def run(
     env_extra: dict | None = None,
     game_args: list[str] | None = None,
     background_plan: object | None = None,
-    campaign_reservation: str | None = None,
     terminal_result=None,
 ) -> dict:
     """Launch one startup-trace session.
@@ -222,10 +221,8 @@ def run(
         raise StartupError("Live launch requires the explicit --authorize-live flag")
     from automation import campaign_guard
 
-    guard = campaign_guard.from_env()
     try:
-        campaign_guard.require_launch_authorization(campaign_reservation,
-                                                  guard=guard)
+        guard = campaign_guard.require_live_campaign()
     except campaign_guard.CampaignRefusal as exc:
         raise StartupError(str(exc)) from exc
     evidence = preflight()
@@ -276,9 +273,7 @@ def run(
                 insertion.append(existing)
             env["DYLD_INSERT_LIBRARIES"] = ":".join(insertion)
         try:
-            campaign_guard.claim_launch_authorization(
-                campaign_reservation, guard=guard,
-                evidence={"output": str(run_dir)})
+            campaign_guard.require_live_campaign(guard)
         except campaign_guard.CampaignRefusal as exc:
             raise StartupError(str(exc)) from exc
         game = subprocess.Popen(
@@ -664,7 +659,6 @@ def run_ops(
     retention: str | None = None,
     game_args: list[str] | None = None,
     background_plan: object | None = None,
-    campaign_reservation: str | None = None,
     terminal_result=None,
 ) -> dict:
     """Launch one bounded original-process observation session.
@@ -674,7 +668,7 @@ def run_ops(
     lease is held, and the display settings are restored before it is released.
     """
     if not authorize_live:
-        raise StartupError("Live capture requires --authorize-live or a campaign")
+        raise StartupError("Live capture requires explicit live execution")
     if not 1 <= timeout_s <= 600:
         raise StartupError("--timeout must be between 1 and 600 seconds")
     if until_target_draw and target_caller_rva is None:
@@ -685,13 +679,8 @@ def run_ops(
     from automation import campaign_guard, test_profiles
 
     test_profiles.ensure_live_launch("eu4_gfx_startup_trace.run_ops")
-    # Every capture path funnels through this spawn site.  When a campaign
-    # budget is active, only an open launch reservation may proceed, so an
-    # alternative unguarded launcher cannot bypass the guard.
-    guard = campaign_guard.from_env()
     try:
-        campaign_guard.require_launch_authorization(campaign_reservation,
-                                                  guard=guard)
+        guard = campaign_guard.require_live_campaign()
     except campaign_guard.CampaignRefusal as exc:
         raise StartupError(str(exc)) from exc
     evidence = evidence or preflight_ops(
@@ -785,12 +774,9 @@ def run_ops(
             if existing:
                 insertion.append(existing)
             env["DYLD_INSERT_LIBRARIES"] = ":".join(insertion)
-        # The one-use entitlement is consumed after all read-only preflight and
-        # environment preparation, immediately before the process exists.
+        # Recheck the campaign after preparation and immediately before spawn.
         try:
-            campaign_guard.claim_launch_authorization(
-                campaign_reservation, guard=guard,
-                evidence={"output": str(run_dir)})
+            campaign_guard.require_live_campaign(guard)
         except campaign_guard.CampaignRefusal as exc:
             raise StartupError(str(exc)) from exc
         game = subprocess.Popen(

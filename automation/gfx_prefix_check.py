@@ -30,7 +30,7 @@ from pathlib import Path
 
 from automation import (
     campaign_guard, dsh_campaign, gfx_frame_graph, gfx_independent_replay,
-    gfx_observation, launch_lease, m6_frame, replay_host_dependencies, state,
+    gfx_observation, gfx_frame, replay_host_dependencies, state,
 )
 from automation.gfx_artifacts import sha256_file as _sha256
 
@@ -272,8 +272,8 @@ def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
         raise PrefixCheckError(
             "trusted evidence destination overlaps the source frame")
     if validate:
-        m6_frame.load_seal(frame_dir)
-        m6_frame.load_trace(frame_dir, verify_blobs=True)
+        gfx_frame.load_seal(frame_dir)
+        gfx_frame.load_trace(frame_dir, verify_blobs=True)
     replaced_to = None
     if destination.exists():
         if not replace:
@@ -347,20 +347,32 @@ def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
     return record
 
 
+def trusted_frame_path(trusted_root: Path | str, *, portable: bool = False) -> tuple[Path, dict]:
+    """Read the existing evidence descriptor and resolve its frame path."""
+    root = Path(trusted_root).expanduser().resolve()
+    record = _read_json(root / "trusted-evidence.json")
+    if record.get("schema") not in (
+            "gfx-trusted-evidence/v1", "m7-trusted-evidence/v1"):
+        raise PrefixCheckError("unexpected trusted-evidence schema")
+    relative = record.get("frame_relative")
+    if portable and (record.get("frame_path") or not isinstance(relative, str)
+                     or not relative or Path(relative).is_absolute()
+                     or ".." in Path(relative).parts):
+        raise PrefixCheckError("trusted reference has no portable frame path")
+    if record.get("frame_path"):
+        frame = Path(str(record["frame_path"])).expanduser().resolve()
+    else:
+        frame = (root / str(relative or "")).resolve()
+    if portable and (frame == root or not frame.is_relative_to(root)):
+        raise PrefixCheckError("trusted frame escapes its publication root")
+    return frame, record
+
+
 def verify_trusted_evidence(trusted_root: Path | str,
                             frame_dir: Path | str) -> dict:
     """Verify a digest-bound trusted root and return its record."""
     trusted_root = Path(trusted_root).expanduser().resolve()
-    record_path = trusted_root / "trusted-evidence.json"
-    record = _read_json(record_path)
-    if record.get("schema") not in (
-            "gfx-trusted-evidence/v1", "m7-trusted-evidence/v1"):
-        raise PrefixCheckError("unexpected trusted-evidence schema")
-    if record.get("frame_path"):
-        expected_frame = Path(str(record["frame_path"])).expanduser().resolve()
-    else:
-        expected_frame = (trusted_root /
-                          str(record.get("frame_relative") or "")).resolve()
+    expected_frame, record = trusted_frame_path(trusted_root)
     if Path(frame_dir).expanduser().resolve() != expected_frame:
         raise PrefixCheckError(
             "frame directory is not the trusted-evidence frame")
@@ -388,17 +400,6 @@ def verify_adjacent_trusted_evidence(frame_dir: Path) -> dict | None:
         return verify_trusted_evidence(root, frame_dir)
     except (OSError, ValueError, RuntimeError) as exc:
         raise PrefixCheckError(f"{path}: {exc}") from exc
-
-
-def _git(workspace: Path, *args: str) -> str:
-    completed = subprocess.run(
-        ["git", "-C", str(workspace), *args], capture_output=True, text=True,
-        check=False, timeout=60)
-    if completed.returncode != 0:
-        raise PrefixCheckError(
-            f"git {' '.join(args)} failed: "
-            f"{completed.stderr.strip() or completed.stdout.strip()}")
-    return completed.stdout
 
 
 def verify_execution_outputs(execution: dict, metal_dir: Path) -> list[str]:
@@ -437,9 +438,9 @@ def verify_candidate(workspace: Path | str,
             workspace, ROOT, sidecar.candidate_baseline_commit or "")
     except RuntimeError as exc:
         raise PrefixCheckError(f"candidate worktree is not authorized: {exc}") from exc
-    revision = _git(workspace, "rev-parse", "HEAD").strip()
+    revision = state.trusted_git(workspace, "rev-parse", "HEAD").strip()
     changed: set[str] = set()
-    status = _git(workspace, "status", "--porcelain=v1", "-z")
+    status = state.trusted_git(workspace, "status", "--porcelain=v1", "-z")
     for entry in status.split("\0"):
         if len(entry) < 4:
             continue
@@ -447,7 +448,7 @@ def verify_candidate(workspace: Path | str,
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
         changed.add(path)
-    committed = _git(
+    committed = state.trusted_git(
         workspace, "diff", "--name-only",
         sidecar.candidate_baseline_commit or "HEAD").splitlines()
     changed.update(path for path in committed if path)
@@ -541,13 +542,14 @@ def _cached_candidate_build(snapshot_root: Path, destination: Path,
     return destination, record
 
 
-def _run_trusted_replay(frame_dir: Path, request: dict,
+def _run_trusted_replay(frame_dir: Path, request: dict | None,
                         run_dir: Path | str | None = None, *,
                         trace: dict | None = None,
                         graph: dict | None = None,
                         candidate_workspace: Path | str | None = None,
                         candidate_sidecar: Path | str | None = None,
-                        diagnostics: dict | None = None) -> dict:
+                        diagnostics: dict | None = None,
+                        fenced_host: tuple[Path, dict] | None = None) -> dict:
     """Execute one Metal replay in a fresh, self-contained execution directory.
 
     ``run_dir`` is a campaign output root.  Every call creates a unique child
@@ -558,7 +560,7 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
     """
     frame_dir = Path(frame_dir).expanduser().resolve()
     if trace is None:
-        trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
+        trace = gfx_frame.load_trace(frame_dir, verify_blobs=True)
     if run_dir is None:
         run_root = Path(tempfile.mkdtemp(prefix="gfx-observation-check-"))
     else:
@@ -568,12 +570,24 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
     if diagnostics is not None:
         diagnostics["execution_dir"] = str(execution_dir)
     replay_input = execution_dir / "replay-input"
-    input_record = m6_frame.materialize_replay_input(
+    input_record = gfx_frame.materialize_replay_input(
         frame_dir, trace, replay_input, graph=graph)
-    request_path = execution_dir / "checkpoint-request.json"
-    request_path.write_text(json.dumps(request, indent=2) + "\n")
+    if fenced_host is not None and input_record["shared_input_outputs"]:
+        raise PrefixCheckError("fenced Metal input overlaps protected original outputs")
+    request_path = None
+    if request is not None:
+        request_path = execution_dir / "checkpoint-request.json"
+        native_request = request
+        if fenced_host is not None:
+            fields = ("event", "target", "file", "resource", "timing")
+            native_request = {
+                "schema": request["schema"],
+                "checkpoints": [{key: row[key] for key in fields if key in row}
+                                for row in request["checkpoints"]],
+            }
+        request_path.write_text(json.dumps(native_request, indent=2) + "\n")
     shaders = execution_dir / "shaders"
-    translated = m6_frame.translate_for_replay(
+    translated = gfx_frame.translate_for_replay(
         frame_dir, shaders, cache_dir=run_root / "cache" / "translation",
         timeout=300)
     if translated.returncode != 0:
@@ -611,63 +625,65 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
             after, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         candidate["snapshot_files"] = snapshot["files"]
         candidate["build"] = candidate_build
+    elif fenced_host is not None:
+        host, candidate = fenced_host
     else:
         try:
-            host = m6_frame.build_replay_host()
-        except (m6_frame.FrameError, OSError, RuntimeError) as exc:
+            host = gfx_frame.build_replay_host()
+        except (gfx_frame.FrameError, OSError, RuntimeError) as exc:
             raise PrefixCheckError(
                 f"trusted replay host build failed: {exc}") from exc
     replay_dir = execution_dir / "metal"
     replay_dir.mkdir()
-    replay_command = m6_frame.replay_host_command(
-        host, frame=replay_input, shaders=shaders, out=replay_dir,
-        checkpoints=request_path)
-    # Serialize the trusted GPU execution host-wide.  A stop or an expired
-    # operator deadline that happened while this execution waited for the lock
-    # must prevent the replay host from starting.
-    with launch_lease.gpu_execution():
-        # Propagate CampaignRefusal so the caller reports a stop/deadline as a
-        # refusal rather than a generic execution failure.
-        campaign_guard.require_active_from_env()
-        started = time.time()
-        completed = subprocess.run(
-            replay_command, cwd=str(execution_dir),
-            env=_execution_environment(execution_dir),
-            capture_output=True, text=True, timeout=600, check=False)
-        finished = time.time()
+    completed, replay, execution = gfx_frame.execute_frame(
+        host, frame=replay_input, shaders=shaders, out=replay_dir, checkpoints=request_path,
+        env=None if fenced_host else _execution_environment(execution_dir),
+        cwd=str(execution_dir), fenced=fenced_host is not None,
+        checkpoint_outputs=(row["file"] for row in (request or {}).get("checkpoints", [])),
+        restricted_inputs=input_record)
     if completed.returncode != 0:
         raise PrefixCheckError(
-            "trusted Metal replay failed: "
-            + (completed.stderr.strip() or completed.stdout.strip())[-400:])
-    if candidate is not None:
-        if _sha256(host) != candidate["build"]["host_sha256"]:
-            raise PrefixCheckError(
-                "candidate replay host changed after execution")
+            f"trusted Metal replay exited with {completed.returncode}: "
+            + (completed.stderr.strip() or completed.stdout.strip())[-2400:])
+    if candidate is not None and execution["replay_host_sha256"] != candidate["build"]["host_sha256"]:
+        raise PrefixCheckError("candidate replay host changed after execution")
+    if candidate is not None and fenced_host is None:
         post_execution = replay_host_dependencies.relative_dependencies(workspace, sources, strict=True)
         if post_execution != candidate["source_digests"]:
             raise PrefixCheckError(
                 "candidate renderer source changed after the trusted build")
-    replay_path = replay_dir / "replay.json"
-    replay = _read_json(replay_path)
-    if replay.get("status") != "ok" or replay.get("failed") != 0:
+    if candidate is not None and fenced_host is None and _sha256(host) != execution["replay_host_sha256"]:
+        raise PrefixCheckError("candidate replay host changed after execution")
+    if not replay or replay.get("status") != "ok" or replay.get("failed") != 0:
         raise PrefixCheckError("trusted Metal replay did not complete cleanly")
+    if fenced_host is not None:
+        from automation import gfx_independent_replay
+
+        try:
+            gfx_independent_replay.recorded_shader_compile_options(replay)
+        except gfx_independent_replay.ReplayError as exc:
+            raise PrefixCheckError(str(exc)) from exc
+        execution["candidate"] = candidate
+    if request is None:
+        return {"metal_dir": replay_dir, "result": replay, "execution": execution}
     (replay_dir / "checkpoint-request.json").write_text(
         json.dumps(request, indent=2) + "\n")
     seal_path = frame_dir / "frame-seal.json"
     seal = _read_json(seal_path) if seal_path.is_file() else {}
-    receipt = m6_frame.build_shader_receipt(
+    receipt = gfx_frame.build_shader_receipt(
         seal, replay_dir / "checkpoint-request.json", shaders)
     (replay_dir / "shader-receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\n")
-    outputs = []
-    for path in sorted(replay_dir.iterdir()):
-        if path.is_file() and path.name not in (
-                "replay.json", "shader-receipt.json",
-                "checkpoint-request.json", "trusted-execution.json"):
-            outputs.append({"file": path.name, "bytes": path.stat().st_size,
-                            "sha256": _sha256(path)})
+    if fenced_host is not None:
+        outputs = [row for row in execution["outputs"] if row["file"] != "replay.json"]
+    else:
+        outputs = [{"file": path.name, "bytes": path.stat().st_size, "sha256": _sha256(path)}
+                   for path in sorted(replay_dir.iterdir()) if path.is_file()
+                   and path.name not in ("replay.json", "shader-receipt.json", "checkpoint-request.json")]
     isolation = None
-    if candidate is not None:
+    if fenced_host is not None:
+        isolation = {"mechanism": "seatbelt", "reference_roots": [str(frame_dir)]}
+    elif candidate is not None:
         isolation = {
             "mechanism": "input-separation",
             "trust": (
@@ -676,32 +692,13 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
                 "performed by the checker after execution"),
             "reference_roots": [str(frame_dir)],
         }
-    execution = {
-        "schema": "gfx-trusted-execution/v1",
-        "mode": ("candidate-build-and-replay" if candidate is not None
-                 else "checker-native-replay"),
-        "reference_isolation": isolation,
-        "candidate": candidate,
-        "outputs": outputs,
-        "execution_dir": str(execution_dir),
-        "started_epoch": started,
-        "finished_epoch": finished,
-        "frame_dir": str(frame_dir),
-        "replay_input": input_record,
-        "request_sha256": _sha256(replay_dir / "checkpoint-request.json"),
-        "replay_host": str(host),
-        "replay_host_sha256": _sha256(host),
-        "shaders_json_sha256": _sha256(shaders / "shaders.json")
-        if (shaders / "shaders.json").is_file() else None,
-        "replay_json_sha256": _sha256(replay_path),
-        "receipt_sha256": _sha256(replay_dir / "shader-receipt.json"),
-        "status": replay.get("status"),
-        "events": replay.get("events"),
-        "encoded": replay.get("encoded"),
-        "failed": replay.get("failed"),
-        "command": replay_command,
-        "returncode": completed.returncode,
-    }
+    execution.update(
+        schema="gfx-trusted-execution/v1",
+        mode="candidate-build-and-replay" if candidate is not None else "checker-native-replay",
+        reference_isolation=isolation, candidate=candidate, outputs=outputs,
+        execution_dir=str(execution_dir), frame_dir=str(frame_dir),
+        request_sha256=_sha256(replay_dir / "checkpoint-request.json"),
+        receipt_sha256=_sha256(replay_dir / "shader-receipt.json"))
     record_path = execution_dir / "execution.json"
     record_path.write_text(json.dumps(execution, indent=2) + "\n")
     (replay_dir / "trusted-execution.json").write_text(
@@ -770,9 +767,9 @@ def preflight_fixture(frame_dir: Path | str, *, require_end: int,
             problems.append(f"trusted evidence is not usable: {exc}")
             return result
     try:
-        seal = m6_frame.load_seal(frame_dir, trusted_evidence=trusted_record)
-        trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
-    except (m6_frame.FrameError, OSError, ValueError) as exc:
+        seal = gfx_frame.load_seal(frame_dir, trusted_evidence=trusted_record)
+        trace = gfx_frame.load_trace(frame_dir, verify_blobs=True)
+    except (gfx_frame.FrameError, OSError, ValueError) as exc:
         problems.append(f"sealed frame is not usable: {exc}")
         return result
     result["authority"] = gfx_observation.authority(trace, seal)
@@ -791,7 +788,7 @@ def preflight_fixture(frame_dir: Path | str, *, require_end: int,
             f"observation scope ends at event {end}, not {require_end}")
         return result
     overlap = _scope_overlap(
-        m6_frame.replay_input_overlap(trace, frame_dir, graph=graph),
+        gfx_frame.replay_input_overlap(trace, frame_dir, graph=graph),
         set(range(int(require_end) + 1)))
     result["shared_input_outputs"] = overlap
     for item in overlap:
@@ -809,7 +806,8 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
              trusted_root: Path | str | None = None,
              trusted_run_dir: Path | str | None = None,
              candidate_workspace: Path | str | None = None,
-             candidate_sidecar: Path | str | None = None) -> dict:
+             candidate_sidecar: Path | str | None = None,
+             fenced_host: tuple[Path, dict] | None = None) -> dict:
     """Verify one sealed frame's exact prefix against its Metal replay.
 
     ``frame_dir`` contains the seal, event stream, blobs and observation file.
@@ -847,9 +845,9 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
             "file_count": len(trusted_record.get("files") or []),
         }
     try:
-        seal = m6_frame.load_seal(frame_dir, trusted_evidence=trusted_record)
-        trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
-    except (m6_frame.FrameError, OSError, ValueError) as exc:
+        seal = gfx_frame.load_seal(frame_dir, trusted_evidence=trusted_record)
+        trace = gfx_frame.load_trace(frame_dir, verify_blobs=True)
+    except (gfx_frame.FrameError, OSError, ValueError) as exc:
         problems.append(f"sealed frame is not usable: {exc}")
         return _invalid_result(result, problems, status="invalid")
     result["evidence_limitations"] = []
@@ -869,8 +867,8 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
         "event_stream_sha256": seal.get("event_stream_sha256"),
         "reference_sha256": seal.get("reference_sha256"),
     }
-    graph = gfx_frame_graph.build(frame_dir, trace=trace)
-    overlap = m6_frame.replay_input_overlap(trace, frame_dir, graph=graph)
+    graph = gfx_frame_graph.build(frame_dir, trace=trace, trusted_evidence=trusted_record)
+    overlap = gfx_frame.replay_input_overlap(trace, frame_dir, graph=graph)
     result["shared_input_outputs"] = overlap
     for item in overlap:
         roles = ", ".join(sorted({
@@ -939,7 +937,7 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                 trace=trace, graph=graph,
                 candidate_workspace=candidate_workspace,
                 candidate_sidecar=candidate_sidecar,
-                diagnostics=execution_diagnostics)
+                diagnostics=execution_diagnostics, fenced_host=fenced_host)
         except campaign_guard.CampaignRefusal as exc:
             problems.append(f"trusted replay refused: {exc}")
             result["failed_execution"] = execution_diagnostics
@@ -1027,8 +1025,10 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
              problems, "Metal replay event count does not match the frame")
     _require(replay.get("encoded") == replay.get("events"), problems,
              "Metal replay did not encode every event")
+    executed_request_sha = (execution.get("executed_request_sha256", request_sha)
+                            if fenced_host is not None and trusted_execution else request_sha)
     for field, value in (
-            ("checkpoint_request_sha256", request_sha),
+            ("checkpoint_request_sha256", executed_request_sha),
             ("checkpoint_request_file", request_file.name)):
         if replay.get(field) is not None:
             _require(replay.get(field) == value, problems,
@@ -1176,6 +1176,133 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
         result["exact"] and result["independent_equality"])
     result["problems_count"] = len(problems)
     return result
+
+
+def _build_fenced_candidate(repo: Path, trusted_revision: str, commit: str,
+                            directory: Path) -> tuple[Path, dict]:
+    """Build the Metal core from the candidate and the CLI from the trusted checkout."""
+    import platform
+
+    from automation import candidate_snapshot, native_build
+
+    host = replay_host_dependencies
+    sources = host.candidate_sources(repo, trusted_revision)
+    closure = host.dependency_paths(repo, sources, strict=True)
+    entry_point = sources[1]
+    snapshot = directory / "sources"
+    digests = candidate_snapshot.materialize_commit(
+        repo, commit, snapshot, tuple(path for path in closure if path != entry_point))
+    candidate_snapshot.stage_trusted_sources(repo, snapshot, (entry_point,), digests)
+
+    clang, sdk = native_build.qualification_toolchain("clang")
+    build = directory / "build"
+    build.mkdir()
+    executable = build / "metal-replay"
+    flags = host.BUILD_FLAGS
+    linked = native_build.qualification_compile(
+        clang, sdk, [*flags, "-o", executable, *(snapshot / path for path in sources)],
+        build=build, readable=(snapshot,))
+    if linked.returncode:
+        raise PrefixCheckError(f"Metal compiler exit {linked.returncode}: "
+                               + (linked.stderr or linked.stdout)[-2500:])
+    producer = {"revision": commit, "source_digests": digests,
+                "build": {"host_sha256": _sha256(executable)},
+                "recipe": native_build.qualification_recipe(clang, sdk, flags),
+                "environment": {"macos": platform.mac_ver()[0], "os_build": platform.version()},
+                "architecture": platform.machine()}
+    return executable, producer
+
+
+def qualify_candidate(repo: Path, trusted_revision: str, commit: str, directory: Path,
+                      frame: Path, trusted: dict, case: dict) -> dict:
+    from automation import dsh_receipts
+
+    directory = directory.resolve()
+    executable, producer = _build_fenced_candidate(repo, trusted_revision, commit, directory)
+    result = evaluate(
+        frame, trusted_root=trusted["_root"], trusted_execution=True,
+        require_end=case["require_end"], trusted_run_dir=directory,
+        fenced_host=(executable, producer))
+    observed = {row["event"]: row for row in result.get("events", [])
+                if row.get("status") in ("match", "divergent")
+                and row.get("independently_verified")}
+    exact_regressions = [event for event in case.get("preserve_exact", [])
+                         if observed.get(event, {}).get("status") != "match"]
+    if result.get("problems") or result.get("failed_execution"):
+        verdict = "execution_failure"
+    elif not result.get("independent_equality") or exact_regressions:
+        verdict = "regression"
+    elif result.get("qualified"):
+        verdict = "exact"
+    elif result.get("verdict") == "FIRST_DIVERGENCE":
+        verdict = "different"
+    else:
+        verdict = "unsupported"
+    event = result.get("first_divergence")
+    execution_dir = result.get("execution_dir")
+    evidence = (Path(execution_dir) / "metal" / "trusted-execution.json"
+                if execution_dir else None)
+    outputs = []
+    if evidence is not None:
+        execution_record = _read_json(evidence)
+        names = [item["file"] for item in execution_record["outputs"]]
+        outputs = dsh_receipts.artifact_records(directory, (
+            (evidence.parent / name).relative_to(directory).as_posix()
+            for name in [*names, evidence.name, "replay.json", "shader-receipt.json", "checkpoint-request.json"]))
+    return {
+        "verdict": verdict, "evidence_tier": "original-eu4", "outputs": outputs,
+        "execution": "completed" if result.get("independent_equality") else "failed",
+        "independently_verified": bool(result.get("independent_equality")),
+        "execution_receipt_sha256": _sha256(evidence) if evidence is not None else None,
+        "reference": case["reference"], "coverage": sorted(observed),
+        "candidate": producer, "scope": {"through": case["require_end"]},
+        "execution_identity": execution_record if evidence is not None else None,
+        "earliest_observed_divergence": observed.get(event),
+        "preserved_exact": [n for n in observed if observed[n]["status"] == "match"],
+        "execution_dir": (execution_dir
+                          or (result.get("failed_execution") or {}).get("execution_dir")),
+        "problems": result.get("problems", []) + [
+            f"previously exact event {required} is {observed.get(required, {}).get('status', 'unverified')}"
+            for required in exact_regressions],
+    }
+
+
+def qualify_full_frame(repo: Path, trusted_revision: str, commit: str, directory: Path,
+                       frame: Path, reference: dict, comparison_policy: dict) -> dict:
+    """Preserve the pre-seal M6 frame using its separately pinned file identities."""
+    from automation import gfx_frame_pixels
+
+    trace = gfx_frame.load_trace(frame, verify_blobs=True)
+    identities = {"manifest_sha256": _sha256(frame / "frame-trace.json"),
+                  "event_stream_sha256": _sha256(frame / "frame-events.jsonl"),
+                  "image_sha256": trace["frame"]["reference_sha256"]}
+    if any(reference.get(key) != value for key, value in identities.items()):
+        return {"verdict": "invalid_provenance", "problems": ["final-frame reference identity differs"]}
+    if len(trace["_events"]) != reference["event_count"]:
+        return {"verdict": "invalid_provenance", "problems": ["original final-frame event coverage differs"]}
+    executable, producer = _build_fenced_candidate(repo, trusted_revision, commit, directory)
+    graph = gfx_frame_graph.build(frame, trace=trace)
+    executed = _run_trusted_replay(frame, None, directory, trace=trace, graph=graph,
+                                   fenced_host=(executable, producer))
+    output = executed["metal_dir"]
+    output_record = executed["result"]
+    outputs = [{**item, "file": (output / item["file"]).relative_to(directory).as_posix()}
+               for item in executed["execution"]["outputs"]]
+    if (output_record.get("events") != reference["event_count"]
+            or output_record.get("encoded") != reference["event_count"]):
+        raise PrefixCheckError("final-frame replay did not encode the protected event set")
+    if (output_record.get("frame") or {}).get("raw_file") != "metal-frame.bgra":
+        raise PrefixCheckError("final-frame readback file identity differs")
+    report = gfx_frame_pixels.compare(frame, output, comparison_policy)
+    stats = report["statistics"]
+    exact = report["status"] == "pass" and stats["mismatched_pixels"] == 0
+    return {"verdict": "exact" if exact else "different", "evidence_tier": "original-eu4",
+            "execution": "completed", "independently_verified": True, "reference": identities,
+            "candidate": producer, "execution_identity": executed["execution"], "coverage": ["all-events-encoded", "exact-bgra"],
+            "scope": {"events": reference["event_count"], "channels": "BGRA"},
+            "outputs": outputs,
+            "earliest_observed_divergence": None if exact else {"phase": "final", "statistics": stats},
+            "problems": [] if exact else ["final attachment differs"]}
 
 
 def _main(argv: list[str]) -> int:

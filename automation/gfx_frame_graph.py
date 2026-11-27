@@ -581,15 +581,15 @@ def _graph_capture_identity(frame_dir: Path, trace: dict,
     internally consistent.  Missing fields stay ``None`` rather than being
     guessed from a neighbouring frame or a present index.
     """
-    from automation import m6_frame
+    from automation import gfx_frame
 
     seal = None
     seal_path = Path(frame_dir) / "frame-seal.json"
     try:
-        seal = m6_frame.load_seal(
+        seal = gfx_frame.load_seal(
             frame_dir, trace=trace, verify_counts=False, verify_blobs=False,
             trusted_evidence=trusted_evidence)
-    except m6_frame.FrameError as exc:
+    except gfx_frame.FrameError as exc:
         if seal_path.exists():
             # A present but invalid seal is not the same as an unsealed
             # fixture.  Never fall back to weaker records and call it valid.
@@ -694,21 +694,21 @@ def build(frame_dir: Path | str, trace: dict | None = None, *,
           trusted_evidence: dict | None = None) -> dict:
     """Derive the resource graph and coverage classification for one frame.
 
-    ``trace`` may be an already verified ``m6_frame.load_trace`` result.  The
+    ``trace`` may be an already verified ``gfx_frame.load_trace`` result.  The
     diagnostic path passes it so one capture is not hashed twice; callers that
     only have a directory keep the original signature.  ``trusted_evidence``
     is forwarded to the existing seal verifier for a relocated snapshot.
     """
-    from automation import m6_frame
+    from automation import gfx_frame
 
     frame_dir = Path(frame_dir)
     try:
         if trace is None:
-            trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
+            trace = gfx_frame.load_trace(frame_dir, verify_blobs=True)
         elif Path(str(trace.get("_frame_dir") or "")).resolve() != frame_dir.resolve():
-            raise m6_frame.FrameError(
+            raise gfx_frame.FrameError(
                 "supplied trace belongs to another frame directory")
-    except m6_frame.FrameError as exc:
+    except gfx_frame.FrameError as exc:
         return {
             "schema": SCHEMA,
             "frame_dir": str(frame_dir),
@@ -1152,7 +1152,7 @@ def build(frame_dir: Path | str, trace: dict | None = None, *,
     prefix = prefix_coverage(trace, events, resources)
     if prefix["status"] == "invalid":
         contract_problems.extend(prefix["problems"])
-    coverage = m6_frame.coverage_report(trace)
+    coverage = gfx_frame.coverage_report(trace)
     for problem in coverage.get("missing") or []:
         issue = problem.get("issue")
         if issue in ("missing_uniform_bytes", "draw_without_vertex_attributes",

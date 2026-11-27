@@ -23,7 +23,7 @@ BENCH = ROOT / "benchmark"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_frame_graph, gfx_replay_case, m6_frame, m7_continuous  # noqa: E402
+from automation import gfx_frame_graph, gfx_replay_case, gfx_frame, m7_continuous  # noqa: E402
 
 WIDTH = HEIGHT = 4
 SESSION = "synthetic-cross-frame"
@@ -540,7 +540,7 @@ class AuthenticCanonicalPrefixTests(unittest.TestCase):
         if cls.source is None:
             raise unittest.SkipTest("canonical frame fixture is not available")
         try:
-            cls.host = m6_frame.build_replay_host()
+            cls.host = gfx_frame.build_replay_host()
         except Exception as exc:  # noqa: BLE001 - explicit skip
             raise unittest.SkipTest(str(exc))
 
@@ -643,7 +643,7 @@ class PortableSequenceCaseTests(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.base = Path(cls.temporary.name)
         try:
-            cls.host = m6_frame.build_replay_host()
+            cls.host = gfx_frame.build_replay_host()
         except Exception as exc:  # noqa: BLE001 - explicit skip
             raise unittest.SkipTest(str(exc))
 
@@ -1363,7 +1363,7 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.base = Path(cls.temporary.name)
         try:
-            cls.host = m6_frame.build_replay_host()
+            cls.host = gfx_frame.build_replay_host()
         except Exception as exc:  # noqa: BLE001 - explicit skip
             raise unittest.SkipTest(str(exc))
 

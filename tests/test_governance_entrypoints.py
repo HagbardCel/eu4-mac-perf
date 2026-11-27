@@ -120,9 +120,7 @@ class LauncherPolicyTests(unittest.TestCase):
 
     def _environment(self):
         environment = dict(os.environ)
-        for name in ("EU4_CAMPAIGN_STATE", "EU4_CAMPAIGN_ADMIN_TOKEN",
-                     "EU4_CAMPAIGN_AUTHORIZATION"):
-            environment.pop(name, None)
+        environment.pop("EU4_CAMPAIGN_STATE", None)
         environment["EU4_DSH_HOME"] = str(Path(tempfile.mkdtemp()))
         return environment
 
@@ -261,7 +259,7 @@ class DeadlineEntrypointTests(unittest.TestCase):
             marker.start()
             try:
                 guard.init(mode=campaign_guard.MODE_AUTONOMOUS,
-                           admin_token="token", deadline_seconds=0.01)
+                           deadline_seconds=0.01)
                 with mock.patch.dict("os.environ",
                                      {"EU4_CAMPAIGN_STATE": str(state)}):
                     import time

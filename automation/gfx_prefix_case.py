@@ -14,8 +14,8 @@ import json
 import shutil
 from pathlib import Path
 
-from automation import gfx_frame_graph, m6_frame
-from automation.gfx_artifacts import sha256_file as _sha
+from automation import gfx_frame_graph, gfx_frame
+from automation.gfx_artifacts import is_leaf_name, sha256_file as _sha
 from automation.gfx_independent_replay import _path_overlap
 
 SCHEMA = "gfx-observation-case/v1"
@@ -38,8 +38,8 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
             "derived case destination already exists; choose a new path")
     if end < 0:
         raise PrefixCaseError("prefix end must be non-negative")
-    trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
-    seal = m6_frame.load_seal(frame_dir, trace=trace)
+    trace = gfx_frame.load_trace(frame_dir, verify_blobs=True)
+    seal = gfx_frame.load_seal(frame_dir, trace=trace)
     events = trace.get("_events") or []
     if end >= len(events):
         raise PrefixCaseError("prefix end is beyond the event stream")
@@ -56,10 +56,12 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     if len(post) != end + 1:
         raise PrefixCaseError("prefix observations are not contiguous")
     (destination / "blobs").mkdir(parents=True)
-    blob_names = m6_frame.event_blob_names(selected)
+    blob_names = gfx_frame.event_blob_names(selected)
     for record in [initial, *post]:
-        blob_names |= m6_frame.event_blob_names([record])
+        blob_names |= gfx_frame.event_blob_names([record])
     for name in sorted(blob_names):
+        if not is_leaf_name(name):
+            raise PrefixCaseError(f"invalid blob member: {name}")
         source = frame_dir / "blobs" / name
         if not source.is_file():
             raise PrefixCaseError(f"referenced blob is absent: {name}")
@@ -72,8 +74,10 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     observation_path = destination / "prefix-observations.jsonl"
     observation_path.write_text(observations_text)
     reference = trace.get("frame") or {}
-    shutil.copyfile(frame_dir / str(reference["reference"]),
-                    destination / str(reference["reference"]))
+    reference_name = reference.get("reference")
+    if not is_leaf_name(reference_name):
+        raise PrefixCaseError("invalid reference member")
+    shutil.copyfile(frame_dir / reference_name, destination / reference_name)
     prefix_block = dict(trace.get("prefix") or {})
     prefix_block.update({
         "end": end,
@@ -87,7 +91,7 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     })
     manifest = {key: value for key, value in trace.items() if not key.startswith("_")}
     manifest.update({
-        "schema": m6_frame.TRACE_SCHEMA,
+        "schema": gfx_frame.TRACE_SCHEMA,
         "complete": True,
         "reason": "derived_prefix",
         "truncated": False,
@@ -118,11 +122,11 @@ def build_prefix_frame(frame_dir: Path | str, end: int,
     copy_count = sum(1 for event in selected
                      if event.get("kind") in ("resolve", "copy"))
     derived_seal = {
-        "schema": m6_frame.SEAL_SCHEMA,
+        "schema": gfx_frame.SEAL_SCHEMA,
         "sealed": True,
         "complete": True,
         "struct_size": 2256,
-        "abi_version": m6_frame.SEAL_ABI_VERSION,
+        "abi_version": gfx_frame.SEAL_ABI_VERSION,
         "capture_frame_id": seal.get("capture_frame_id"),
         "session_id": seal.get("session_id"),
         "pid": seal.get("pid"),
