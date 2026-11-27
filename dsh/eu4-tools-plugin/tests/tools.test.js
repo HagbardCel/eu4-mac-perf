@@ -240,6 +240,13 @@ test('a missing interpreter rejects the bridge call', async () => {
   )
 })
 
+test('qualification renders its structured decision without adding whitespace', () => {
+  const replay = definitions(() => {}).find((tool) => tool.name === 'eu4_replay')
+  const args = { op: 'qualify' }
+  const decision = { result: { schema: 'eu4-revision-qualification/v1', required_cases: ['m7-metal'] } }
+  assert.equal(replay.output.render(args, decision)[0].text, JSON.stringify(decision))
+})
+
 test('qualification launches the trusted Python core for the session workspace', async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'eu4-qualification-candidate-'))
   try {

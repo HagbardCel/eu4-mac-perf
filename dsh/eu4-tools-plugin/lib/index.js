@@ -9,7 +9,8 @@ export const name = 'eu4-tools'
 export const inject = ['tools']
 
 function textContent(value) {
-  return [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+  const indent = value?.result?.schema === 'eu4-revision-qualification/v1' ? 0 : 2
+  return [{ type: 'text', text: JSON.stringify(value, null, indent) }]
 }
 
 function tool(name, description, properties, required, execute) {
