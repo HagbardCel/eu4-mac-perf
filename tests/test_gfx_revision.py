@@ -92,8 +92,7 @@ class ProtectedDiagnosticTests(unittest.TestCase):
                 path = Path(report["receipt"])
                 kwargs = {
                     "revision": "revision", "policy_sha256": "digest",
-                    "policy_contract_sha256": sha256_file(contract),
-                    "contract": json.loads(contract.read_text()), "run_root": root / "runs",
+                    "contract_path": contract, "run_root": root / "runs",
                 }
                 key = gfx_ed25519.derive_public_key(seed)
                 verified = dsh_receipts.verify_revision(path, key, **kwargs)

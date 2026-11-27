@@ -8,7 +8,7 @@ completion and payload digests before it reads a single pixel, and it never
 rescales or masks the images.
 
     python3 -m automation.gfx_frame_pixels --reference <frame dir> --candidate <replay dir> \
-        --policy analysis/m6/comparison-policy.json --out <dir>
+        --policy automation/frame-pixel-policy.json --out <dir>
 
 Region diagnostics attribute differences to viewport/scissor bands and to the
 draws recorded in the frame trace. A policy may declare the only accepted

@@ -11,6 +11,7 @@ project layer preserves only the qualification artifact.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,8 +83,6 @@ def paths(run_root: Path) -> RunPaths:
 def read_json(path: Path) -> dict | None:
     if not Path(path).is_file():
         return None
-    import json
-
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
@@ -215,16 +214,18 @@ def policy_decision(contract: dict, rows: list[dict], *, focused: bool) -> dict:
 
 
 def verify_revision(path: Path, public_key: bytes, *, revision: str, policy_sha256: str,
-                    policy_contract_sha256: str, contract: dict, run_root: Path) -> dict:
+                    contract_path: Path, run_root: Path) -> dict:
     """Verify a mandatory decision, every case binding, and the exact artifact bytes."""
     path = Path(path).absolute()
     run_root = Path(run_root).resolve(strict=True)
     _artifact(run_root, path.relative_to(run_root).as_posix())
     decision = _verified_receipt(path, public_key)
+    contract_bytes = contract_path.read_bytes()
+    contract = json.loads(contract_bytes)
     required_cases = list(contract["cases"])
     if any(decision.get(key) != value for key, value in {
         "mode": "mandatory", "revision": revision, "policy_sha256": policy_sha256,
-        "policy_contract_sha256": policy_contract_sha256, "required_cases": required_cases,
+        "policy_contract_sha256": digest_bytes(contract_bytes), "required_cases": required_cases,
     }.items()) or [row["case_id"] for row in decision["cases"]] != required_cases:
         raise ValueError("mandatory decision does not bind the requested policy and revision")
     for row in decision["cases"]:
@@ -240,6 +241,7 @@ def verify_revision(path: Path, public_key: bytes, *, revision: str, policy_sha2
                                      "requirement_satisfied", "execution_reused", "execution_revision"}}
         rule = contract["cases"][row["case_id"]]
         if (projection != {key: value for key, value in receipt.items() if key not in metadata}
+                or row.get("execution_revision") != receipt.get("execution_revision")
                 or row["category"] != rule["category"]
                 or row["requirement_satisfied"] is not case_satisfies(rule, row)
                 or any(receipt.get("reference", {}).get(key) != value

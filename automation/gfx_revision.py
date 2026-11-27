@@ -63,7 +63,8 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
     public_key = bytes.fromhex(policy["receipt_public_key"])
     if gfx_ed25519.derive_public_key(seed) != public_key:
         raise QualificationError("receipt signing key does not match the approved public key")
-    contract = json.loads(POLICY_CONTRACT.read_text())
+    contract_bytes = POLICY_CONTRACT.read_bytes()
+    contract = json.loads(contract_bytes)
     if contract["schema"] != POLICY_SCHEMA:
         raise QualificationError("operator policy contract version differs")
     required = list(contract["cases"])
@@ -147,6 +148,7 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
                 "validator_revision": policy["trusted_revision"], **row,
             }, seed=seed)
             receipt_digest = issued["receipt_digest"]
+            row["execution_revision"] = commit
         else:
             row["execution_reused"] = True
             receipt_digest = row.pop("reused_receipt_digest")
@@ -158,11 +160,10 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
         "schema": SCHEMA, "revision": commit, "tree": tree, "policy_sha256": policy_digest,
         "mode": "focused" if case_id is not None else "mandatory",
         "required_cases": required, "cases": results, **decision,
-        "policy_contract_sha256": sha256_bytes(POLICY_CONTRACT.read_bytes()),
+        "policy_contract_sha256": sha256_bytes(contract_bytes),
     }
     path, _ = dsh_receipts.write_receipt(directory, result, seed=seed)
     if case_id is None:
         dsh_receipts.verify_revision(path, public_key, revision=commit, policy_sha256=policy_digest,
-                                     policy_contract_sha256=result["policy_contract_sha256"],
-                                     contract=contract, run_root=run_root)
+                                     contract_path=POLICY_CONTRACT, run_root=run_root)
     return {**result, "receipt": str(path)}

@@ -18,6 +18,27 @@ modules. Historical capture schemas and the continuous capture and session
 coordinators keep their existing formats. R4 and later phases own migration
 of the lifecycle, continuation, and Git checkpoint entry points.
 
+## Measured consolidation
+
+The first consolidation commit `b5e00135` removed a net 122 enabling
+lines relative to the review base. The table counts the moved exactness
+helper once and excludes pure source moves.
+
+| Ownership | Added | Removed | Net |
+| --- | ---: | ---: | ---: |
+| Metal frame execution and independent replay | 158 | 225 | −67 |
+| OpenGL package and authority verification | 66 | 138 | −72 |
+| Packed pixel comparison | 85 | 118 | −33 |
+| Isolated sprite replay | 62 | 78 | −16 |
+| Policy, function reuse and receipt verification | 117 | 81 | +36 |
+| Caller migration and historical adapters | 104 | 74 | +30 |
+| **Enabling code** | **592** | **714** | **−122** |
+
+The protected policy data grew by 94 lines. The native original observer
+added 11 lines for executable and macOS build identity. The test migration
+and reuse coverage added 22 net lines. The earlier R2b baseline and the −200
+target remain recorded in the R0 disposition.
+
 ## November 14 retention disposition for operator review
 
 The committed complete-manifest digest remains

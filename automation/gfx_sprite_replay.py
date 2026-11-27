@@ -115,17 +115,17 @@ def run_replay(reference_dir: Path, output: Path, *, force_build: bool = False) 
     candidate_path = output / "metal-logical.json"
     if ran.returncode != 0 or not candidate_path.is_file():
         raise ReplayError(
-            (ran.stderr or ran.stdout or "M5 replay host failed").strip()
+            (ran.stderr or ran.stdout or "sprite replay host failed").strip()
         )
     candidate = json.loads(candidate_path.read_text())
     capture = candidate.get("capture") or {}
     raw = output / str(capture.get("raw_file") or "")
     if not raw.is_file():
-        raise ReplayError("M5 replay did not write its raw payload")
+        raise ReplayError("sprite replay did not write its raw payload")
     if raw.stat().st_size != capture.get("raw_bytes") or _sha(raw) != capture.get("raw_sha256"):
-        raise ReplayError("M5 replay raw payload does not match its declaration")
+        raise ReplayError("sprite replay raw payload does not match its declaration")
     if (candidate.get("gpu") or {}).get("completed") is not True:
-        raise ReplayError("M5 replay GPU command did not complete")
+        raise ReplayError("sprite replay GPU command did not complete")
     return {
         "candidate": candidate,
         "candidate_path": str(candidate_path),
