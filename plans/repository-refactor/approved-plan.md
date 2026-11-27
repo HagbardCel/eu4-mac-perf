@@ -434,6 +434,16 @@ Freeze the eligible authentic workload and its observation contract in operator-
 - Remove legacy milestone docs/paths that duplicate canonical knowledge. Remove superseded tests together with their mechanisms; ensure the replacement invariant is covered.
 - Inventory candidate orchestration deletions (`campaigns/`, DSH sidecars, custom plugin, bridge, OpenCode runner and related tests); delete only portions no longer required. Maintain CLI/skill interoperability if inexpensive, but not a second full orchestration stack by default.
 
+- The GL qualification owner retains signed-authority execution until its
+  active default-drawable, depth and receipt consumers migrate to the maintained
+  qualifier with equivalent coverage, or to an approved pinned historical
+  deployment. The validator and evidence owners coordinate any package-format
+  consolidation. Preserve published package and receipt identities.
+- The DSH lifecycle and prefix-check owners retain the mutable worktree
+  verifier and cached candidate build. Retire them after R4 implements and R6
+  verifies checkpointed continuation with independent immutable qualification,
+  including the failure and recovery paths used by active campaigns.
+
 **Gate R5:** measured net reduction in enabling infrastructure/test overhead, no silent loss of unique evidence or semantic coverage, no broken entry points, no indefinite duplicate implementation. Report comparable timing results and actual test composition. If proposed performance targets are missed, report reasons and remaining opportunities. Do not manufacture a smaller gate by excluding protected cases.
 
 ### R6 — Prove the autonomous operating model

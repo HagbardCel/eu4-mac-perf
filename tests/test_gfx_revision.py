@@ -117,6 +117,85 @@ class ProtectedDiagnosticTests(unittest.TestCase):
                     gfx_revision.qualify(workspace, "revision")
 
 
+    def test_protected_raw_pair_binds_scope_inputs_and_comparison_artifact(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "archive" / "pair"
+            archive.mkdir(parents=True)
+            reference = b"\x00" * 16
+            candidate = b"\x10" + reference[1:]
+            (archive / "ref.bgra").write_bytes(reference)
+            image = archive / "candidate.bgra"
+            image.write_bytes(candidate)
+            scope = {"width": 2, "height": 2, "origin": "lower_left", "pixel_format": "BGRA8"}
+            comparison = {"status": "fail", "pixel_verdict": "different",
+                          "mismatched_pixels": 1, "max_channel_error": 16}
+            rule = {
+                "kind": "raw-pair", "category": "diagnostic", "evidence_tier": "retained-original-pair",
+                "minimum_coverage": ["raw-pair-comparison"],
+                "required_scope": {**scope, "mismatched_pixels": 1, "max_channel_error": 16},
+                "reference": {"archive_path": "pair", "manifest_sha256": "a" * 64,
+                              "complete_manifest_unavailable": True,
+                              "reference_sha256": sha256_bytes(reference),
+                              "candidate_sha256": sha256_bytes(candidate)},
+                "configuration": {
+                    "raw_scope": scope, "frames": {"reference": "ref.bgra", "candidate": "candidate.bgra"},
+                    "comparison_policy": {"policy": "tolerant", "max_channel_error": 8,
+                                          "regions": {"top": {"rect": [0, 1, 0, 2]}}},
+                    "expected_comparison": {**comparison, "regions": {
+                        "top": {"mismatched_pixels": 0, "max_channel_error": 0}}},
+                },
+            }
+            document = {
+                "schema": gfx_revision.POLICY_SCHEMA, "authentic_case": "original-draw",
+                "cases": {"original-draw": {"kind": "gl", "category": "exact"}, "pair": rule},
+            }
+            contract = root / "contract.json"
+            contract.write_text(json.dumps(document))
+            workspace = root / "candidate"
+            workspace.mkdir()
+            seed = bytes(range(32))
+            key_file = root / "key"
+            key_file.write_text(seed.hex())
+            key_file.chmod(0o600)
+            key = gfx_ed25519.derive_public_key(seed)
+            policy = {
+                "trusted_revision": "trusted", "run_root": str(root / "runs"),
+                "evidence_roots": [str(root / "archive")],
+                "receipt_signing_key": str(key_file), "receipt_public_key": key.hex(),
+            }
+            kwargs = {"revision": "revision", "policy_sha256": "digest",
+                      "contract_path": contract, "run_root": root / "runs"}
+            with (mock.patch.object(gfx_revision, "_policy", return_value=(policy, "digest")),
+                  mock.patch.object(gfx_revision, "POLICY_CONTRACT", contract),
+                  mock.patch.object(state, "trusted_git", return_value="tree"),
+                  mock.patch.object(case_locator, "resolve_sealed_reference", return_value=(
+                      None, {"verdict": "missing_original_observation", "problems": ["capture unavailable"]}))):
+                aggregate = gfx_revision.qualify(workspace, "revision")
+                receipt = Path(aggregate["receipt"])
+                row = aggregate["cases"][1]
+                self.assertTrue(row["requirement_satisfied"])
+                self.assertEqual(row["evidence_locators"]["candidate"], "pair/candidate.bgra")
+                self.assertTrue(row["reference"]["complete_manifest_unavailable"])
+                artifact = Path(row["receipt"]).parent / row["outputs"][0]["file"]
+                self.assertEqual(json.loads(artifact.read_text())["comparison"]["statistics"]["tolerance"], 8)
+                self.assertFalse(dsh_receipts.verify_revision(receipt, key, **kwargs)["qualified"])
+
+                image.write_bytes(reference)
+                self.assertEqual(gfx_revision.qualify(workspace, "revision", "pair")["cases"][0]["verdict"],
+                                 "invalid_provenance")
+                # The receipt attests an earlier read. It does not recover or reverify the source bytes.
+                dsh_receipts.verify_revision(receipt, key, **kwargs)
+                image.write_bytes(candidate)
+                artifact.write_bytes(b"altered comparison")
+                with self.assertRaisesRegex(ValueError, "case output changed: pair"):
+                    dsh_receipts.verify_revision(receipt, key, **kwargs)
+
+                scope["origin"] = "top_left"
+                contract.write_text(json.dumps(document))
+                self.assertEqual(gfx_revision.qualify(workspace, "revision", "pair")["cases"][0]["verdict"],
+                                 "regression")
+
     def test_required_evidence_root_and_optional_archive_are_distinguished(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

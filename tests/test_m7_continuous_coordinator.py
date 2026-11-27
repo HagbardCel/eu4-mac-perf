@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from automation import gfx_independent_replay, gfx_frame  # noqa: E402
-from tests.test_m7_frame_seal import _write_frame  # noqa: E402
+from tests.test_gfx_frame_seal import _write_frame  # noqa: E402
 
 
 def _sha(path: Path) -> str:

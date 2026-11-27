@@ -121,7 +121,7 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
                     frame, _, _, trusted = source
                     row = gfx_prefix_check.qualify_candidate(
                         ROOT, policy["trusted_revision"], commit, job, frame, trusted, case)
-            elif case["kind"] in ("isolated-sprite", "metal-final-frame", "dual-run-reference"):
+            elif case["kind"] in ("isolated-sprite", "metal-final-frame", "raw-pair"):
                 reference = case["reference"]
                 original = case_locator.resolve_legacy_reference(
                     policy.get("evidence_roots"), reference, workspace)
@@ -132,8 +132,8 @@ def qualify(workspace: Path | str, commit: str, case_id: str | None = None) -> d
                         ROOT, policy["trusted_revision"], commit, job, original, reference,
                         case["configuration"]["comparison_policy"])
                 else:
-                    row = gfx_frame_compare.verify_dual_run_reference(
-                        original, reference, case["configuration"])
+                    row = gfx_frame_compare.qualify_raw_pair(
+                        original, job, reference, case["configuration"])
             else:
                 row = {"verdict": "unsupported", "problems": ["case executor is unavailable"]}
         except case_locator.CaseLocatorError as exc:

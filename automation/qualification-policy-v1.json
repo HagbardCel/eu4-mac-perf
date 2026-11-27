@@ -191,16 +191,17 @@
       }
     },
     "nov14-dual-run": {
-      "kind": "dual-run-reference",
+      "kind": "raw-pair",
       "category": "diagnostic",
       "reference": {
         "manifest_sha256": "5a361b47f66113b14aab7d6d9ce3bd9014cc6c02a162f02efb4755e8938e72f2",
         "reference_sha256": "a500e41692191451e1b1d33ac6eab07d672d433892fd11a25f78050ec5122444",
         "candidate_sha256": "90f0f9bd684a792c87ba59ce4f02226a678d185f631f615eada4a7a30f1ddccc",
-        "archive_path": "m7/session-20261114T181230Z-d28f6fee/case"
+        "archive_path": "m7/session-20261114T181230Z-d28f6fee/case",
+        "complete_manifest_unavailable": true
       },
       "minimum_coverage": [
-        "nov14-raw-comparison"
+        "raw-pair-comparison"
       ],
       "configuration": {
         "comparison_policy": {
@@ -237,15 +238,38 @@
           "reference": "frames/reference-frame-74.bgra",
           "candidate": "frames/candidate-frame-74.bgra"
         },
-        "recorded_comparison": "difference/statistics.json",
         "raw_scope": {
           "width": 1728,
           "height": 1117,
           "origin": "lower_left",
           "pixel_format": "BGRA8"
+        },
+        "expected_comparison": {
+          "status": "fail",
+          "pixel_verdict": "different",
+          "mismatched_pixels": 26042,
+          "max_channel_error": 228,
+          "regions": {
+            "ui": {
+              "mismatched_pixels": 7174,
+              "max_channel_error": 228
+            },
+            "map": {
+              "mismatched_pixels": 18868,
+              "max_channel_error": 115
+            }
+          }
         }
       },
-      "evidence_tier": "retained-original-pair"
+      "evidence_tier": "retained-original-pair",
+      "required_scope": {
+        "width": 1728,
+        "height": 1117,
+        "origin": "lower_left",
+        "pixel_format": "BGRA8",
+        "mismatched_pixels": 26042,
+        "max_channel_error": 228
+      }
     }
   }
 }

@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from automation import gfx_frame_pixels
-from automation.gfx_artifacts import sha256_file as _sha256
+from automation.gfx_artifacts import sha256_bytes, sha256_file as _sha256
 
 try:
     import numpy as np
@@ -62,7 +62,7 @@ def load_frame(path: Path, width: int, height: int, *, origin: str,
         payload = path.read_bytes()
     except OSError as exc:
         raise CompareError("unreadable", str(exc)) from exc
-    if expected_sha256 and _sha256(path) != expected_sha256:
+    if expected_sha256 and sha256_bytes(payload) != expected_sha256:
         raise CompareError("digest", "frame digest does not match its declaration")
     return decode_frame(payload, width, height, origin=origin,
                         pixel_format=pixel_format)
@@ -444,39 +444,67 @@ def compare_payloads(
     return result
 
 
-def verify_dual_run_reference(case: Path, reference: dict, configuration: dict) -> dict:
-    """Recompare the historic original pair under its protected case identity."""
+def qualify_raw_pair(case: Path, output: Path, reference: dict, configuration: dict) -> dict:
+    """Reproduce a retained raw diagnostic from protected metadata and actual bytes."""
     import json
-    from automation.gfx_artifacts import sha256_file
+    import os
+    import stat
 
-    manifest = case / "manifest.json"
-    if sha256_file(manifest) != reference["manifest_sha256"]:
-        return {"verdict": "invalid_provenance",
-                "problems": ["restored November 14 case manifest differs from its protected identity"]}
-    originals = json.loads((case / configuration["recorded_comparison"]).read_text())["comparison"]
-    comparison_policy = configuration["comparison_policy"]
-    payloads = []
-    for role in ("reference", "candidate"):
-        raw = case / configuration["frames"][role]
-        if sha256_file(raw) != reference[f"{role}_sha256"]:
-            return {"verdict": "invalid_provenance", "problems": [f"November 14 {role} digest differs"]}
-        payloads.append(raw.read_bytes())
+    from automation import dsh_receipts
+
     scope = configuration["raw_scope"]
-    if any(
-        any(originals[role].get(key, "BGRA8" if key == "pixel_format" else None) != value
-            for key, value in scope.items())
-        for role in ("reference", "candidate")
-    ):
-        return {"verdict": "invalid_provenance", "problems": ["historical raw-pair scope differs"]}
-    result = compare_payloads(
-        payloads[0], originals["reference"], payloads[1], originals["candidate"],
-        policy={**comparison_policy, "pixel_tolerance": comparison_policy["max_channel_error"]},
-        regions=comparison_policy["regions"])
-    if any(result[key] != originals[key] for key in ("regions", "statistics", "status", "pixel_verdict")):
-        return {"verdict": "regression", "problems": ["November 14 diagnostic comparison changed"]}
-    return {"verdict": "different", "execution": "completed", "independently_verified": True,
-            "coverage": ["nov14-raw-comparison"], "evidence_tier": "retained-original-pair",
-            "reference": reference, "scope": result["statistics"], "problems": []}
+    extent = scope["width"] * scope["height"] * 4
+    policy = configuration["comparison_policy"]
+    payloads, metadata = [], []
+    for role in ("reference", "candidate"):
+        relative = Path(configuration["frames"][role])
+        digest = reference[f"{role}_sha256"]
+        try:
+            if (not relative.parts or relative.is_absolute() or ".." in relative.parts
+                    or any((case / member).is_symlink() for member in relative.parents)):
+                raise ValueError("unsafe evidence member")
+            with open(case / relative, "rb",
+                      opener=lambda path, flags: os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK)) as source:
+                info = os.fstat(source.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size != extent:
+                    raise ValueError("raw extent or file type differs")
+                payload = source.read(extent + 1)
+            if len(payload) != extent or sha256_bytes(payload) != digest:
+                raise ValueError("raw size or digest differs")
+        except (OSError, ValueError) as exc:
+            return {"verdict": "invalid_provenance", "problems": [f"{role}: {exc}"]}
+        payloads.append(payload)
+        metadata.append({**scope, "sha256": digest})
+    result = compare_payloads(payloads[0], metadata[0], payloads[1], metadata[1],
+                              policy=policy, regions=policy["regions"])
+    statistics = result["statistics"]
+    observed = {
+        "status": result["status"],
+        "pixel_verdict": result["pixel_verdict"],
+        "mismatched_pixels": statistics["mismatched_pixels"],
+        "max_channel_error": statistics["max_channel_error"],
+        "regions": {name: {key: row[key] for key in ("mismatched_pixels", "max_channel_error")}
+                    for name, row in result["regions"].items()},
+    }
+    if observed != configuration["expected_comparison"]:
+        return {"verdict": "regression", "problems": ["protected raw-pair comparison changed"]}
+    locators = {role: (Path(reference["archive_path"]) / path).as_posix()
+                for role, path in configuration["frames"].items()}
+    report = output / "raw-pair-comparison.json"
+    report.write_text(json.dumps({
+        "reference": reference, "evidence_locators": locators,
+        "scope": scope, "comparison_policy": policy, "comparison": result,
+    }, indent=2) + "\n")
+    return {
+        "verdict": observed["pixel_verdict"], "execution": "completed",
+        "independently_verified": True, "coverage": ["raw-pair-comparison"],
+        "evidence_tier": "retained-original-pair", "reference": reference,
+        "evidence_locators": locators, "scope": {
+            **scope, "mismatched_pixels": observed["mismatched_pixels"],
+            "max_channel_error": observed["max_channel_error"],
+        },
+        "outputs": dsh_receipts.artifact_records(output, [report.name]), "problems": [],
+    }
 
 
 # ---------------------------------------------------------------------------

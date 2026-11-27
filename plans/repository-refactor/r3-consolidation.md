@@ -89,7 +89,7 @@ build record with cooperative input separation. Protected revision
 qualification uses the immutable fenced build. Migrate the remaining live
 campaign protections and cached mutable build with R4/R6 replacement proof.
 
-## November 14 retention disposition for operator review
+## November 14 approved retention disposition
 
 The committed complete-manifest digest remains
 `5a361b47f66113b14aab7d6d9ce3bd9014cc6c02a162f02efb4755e8938e72f2`.
@@ -98,13 +98,52 @@ The only recovered manifest hashes to
 The original bytes are unavailable in the checked archive and historical
 worktree locations. Exact field differences require those bytes.
 
-Both retained raw images match the committed identities in the protected
-policy. Its proposed raw scope pins tightly packed 1728×1117 BGRA8 images
-with lower-left origin and the historical comparison configuration. Recomparison
-reproduced the recorded regions and statistics, including 26,042 differing
-pixels and maximum channel error 228. The complete case remains
-`invalid_provenance` in mandatory qualification. The proposed disposition
-would explicitly admit a separately scoped raw-pair diagnostic by pinning
-both raw artifacts, their format/extent and comparison configuration, while
-retaining `complete_manifest_unavailable` and the original commitment.
-Operator approval is required before adopting that disposition.
+The approved raw-pair diagnostic uses tightly packed 1728×1117 BGRA8
+inputs with lower-left origin. Protected policy pins both raw hashes, their
+archive locators, comparison policy, region definitions and measured result.
+The verified 26,042 pixels exceed channel tolerance 8. Maximum channel
+error is 228. The original complete-manifest commitment is preserved with
+`complete_manifest_unavailable`.
+
+The qualifier reads and verifies the raw bytes on each current execution.
+It regenerates the comparison using protected metadata and writes
+`raw-pair-comparison.json` as a signed case artifact. Aggregate verification
+checks that artifact and the signed decision. A new scientific execution
+checks availability and integrity of the archived raw inputs. The recovered
+manifest and report provide no authentication inputs to this route.
+
+## Test discovery reconciliation
+
+The 4,448-to-4,439 change is fully accounted for. Thirteen standalone
+classifier tests became one canonical test with 15 subcases, a reduction of
+12 discovered methods. The new compact value and locator check runs in
+`ToolTests` and its two derived suites, adding three. The diagnosis and
+pixel test module moves preserve discovery and add zero.
+
+| Removed classifier tests | Surviving canonical checks |
+| --- | --- |
+| `test_invalid_checkpoint_blocks_qualified_match`, `test_complete_exact_match_is_qualified` | Invalid checkpoint provenance refuses; complete exact diagnosis exits zero. |
+| `test_invalid_coverage_is_invalid`, `test_invalid_pixel_evidence_is_invalid`, `test_invalid_state_coverage_is_invalid`, `test_unknown_verdict_is_invalid` | Unknown operations, invalid or unknown pixels and invalid state cannot qualify and yield the unusable-evidence exit code. |
+| `test_partial_state_coverage_is_nonqualifying`, `test_unverified_identity_can_never_qualify` | Partial state and unverified session identity remain incomplete, including when pixels differ. |
+| `test_successful_fault_experiment_keeps_exit_three`, `test_fault_without_divergence_is_never_qualified`, `test_fault_with_invalid_evidence_is_invalid` | Faults with and without pixel differences exit three; invalid evidence still exits one. |
+| `test_authoritative_divergence_is_not_qualified`, `test_diagnostic_only_difference_can_qualify` | Intermediate authoritative divergence blocks equivalence; diagnostic-only differences can coexist with exact qualified scope. |
+
+## Final-gate implementation slice
+
+Raw-pair qualification replaces the complete-package comparison in
+`gfx_frame_compare`. `gfx_revision` dispatches the functional case kind.
+Net enabling change is **+28**. Protected policy adds **24** net lines.
+Test code adds **79** lines for actual mandatory-path scope, input and
+artifact checks. The frame seal and Metal ABI test moves count zero.
+Scientific renderer source is unchanged. The measured enabling total is
+**+969 relative to R2b**, or **1,169 above the R3 target**. The deviation
+carries forward in cumulative phase accounting. Operator review of the
+phase-specific exception follows the authentic qualification.
+
+The verified offscreen adapter stays in place. Changing the historical
+package builder would change its pinned authority digest and requires
+separate compatibility review. The adapter excludes the original reference
+digest and its BGRA conversion before candidate execution. The legacy
+replay outcome remains a projection for verified standalone and portable
+case CLI consumers. Frame loading now verifies the digest of the exact
+bytes it decodes. [Remaining ownership](approved-plan.md#r5--test-optimization-and-legacy-reduction)

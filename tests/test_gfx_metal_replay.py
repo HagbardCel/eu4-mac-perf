@@ -468,7 +468,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
             self.assertFalse(report["result_json"])
 
     def test_coordinator_rejects_missing_seal_and_stale_artifacts(self):
-        from tests.test_m7_frame_seal import _write_frame
+        from tests.test_gfx_frame_seal import _write_frame
 
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary) / "run"
@@ -823,7 +823,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
         self.assertEqual(exception["failure"]["timed_out"], False)
 
     def test_shadow_and_coordinator_preserve_native_failure(self):
-        from tests.test_m7_frame_seal import _write_frame
+        from tests.test_gfx_frame_seal import _write_frame
 
         native_error = (
             "event_encode (operation 1): program 999999 has no translated stages"
@@ -1183,7 +1183,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
             self.assertNotEqual(report["failure"]["command_status"], 0)
 
     def test_coordinator_preserves_an_early_fallback_failure(self):
-        from tests.test_m7_frame_seal import _write_frame
+        from tests.test_gfx_frame_seal import _write_frame
 
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary) / "run"
@@ -1220,7 +1220,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
             self.assertNotIn("checkpoint request", coordinator["error"])
 
     def test_native_blob_verification_uses_structured_references(self):
-        from tests.test_m7_frame_seal import _write_frame
+        from tests.test_gfx_frame_seal import _write_frame
 
         def run_verify(frame: Path):
             event_data = (frame / "frame-events.jsonl").read_bytes()
